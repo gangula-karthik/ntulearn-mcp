@@ -13,17 +13,26 @@ from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 from .client import NTULearnClient, BbRouterExpiredError, BlackboardAPIError
+from .cookie import read_bbrouter_cookie
 from .parsers import extract_all_files
 
-load_dotenv(override=True)
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 BASE_URL = os.getenv("NTULEARN_BASE_URL", "https://ntulearn.ntu.edu.sg")
-COOKIE = os.getenv("NTULEARN_COOKIE", "")
 DOWNLOAD_DIR = Path(os.getenv("NTULEARN_DOWNLOAD_DIR", "./downloads"))
+
+_NO_COOKIE_MESSAGE = (
+    "No NTULearn cookie found. Two options:\n"
+    "  1. Log into https://ntulearn.ntu.edu.sg in a supported browser "
+    "(Firefox works best on Windows; Chrome/Edge auto-read often needs "
+    "admin), then restart your MCP host (e.g. Claude Desktop).\n"
+    "  2. Set the NTULEARN_COOKIE env var manually — see README for "
+    "the DevTools cookie-copy steps. This always works."
+)
 
 # ---------------------------------------------------------------------------
 # Server + client setup
@@ -33,14 +42,35 @@ app = Server("ntulearn-mcp")
 _client: NTULearnClient | None = None
 
 
+def _resolve_cookie() -> str:
+    """Resolve the BbRouter cookie. Explicit env var wins over browser auto-read."""
+    explicit = os.getenv("NTULEARN_COOKIE", "").strip()
+    if explicit:
+        return explicit
+    auto = read_bbrouter_cookie()
+    if auto:
+        return auto
+    raise RuntimeError(_NO_COOKIE_MESSAGE)
+
+
 def get_client() -> NTULearnClient:
     global _client
     if _client is None:
-        if not COOKIE:
-            raise RuntimeError(
-                "NTULEARN_COOKIE is not set. Add it to your .env file and restart."
-            )
-        _client = NTULearnClient(BASE_URL, COOKIE)
+        _client = NTULearnClient(BASE_URL, _resolve_cookie())
+    return _client
+
+
+async def _refresh_client() -> NTULearnClient:
+    """Discard the current client, re-read the cookie, build a fresh client.
+
+    Called after a 401 so that an expired cookie can be transparently swapped
+    for the fresh value the user's browser already has.
+    """
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
+    _client = NTULearnClient(BASE_URL, _resolve_cookie())
     return _client
 
 
@@ -141,6 +171,12 @@ async def list_tools() -> list[Tool]:
                         "description": "Maximum recursion depth (default 5)",
                         "default": 5,
                     },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of matching items to return (default 50)",
+                        "default": 50,
+                        "minimum": 1,
+                    },
                 },
                 "required": ["course_id", "query"],
             },
@@ -212,35 +248,43 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    import json
-
-    client = get_client()
-
     try:
-        if name == "list_courses":
-            return await _list_courses(client, arguments)
-        elif name == "get_course_contents":
-            return await _get_course_contents(client, arguments)
-        elif name == "get_folder_children":
-            return await _get_folder_children(client, arguments)
-        elif name == "search_course_content":
-            return await _search_course_content(client, arguments)
-        elif name == "get_file_download_url":
-            return await _get_file_download_url(client, arguments)
-        elif name == "download_file":
-            return await _download_file(client, arguments)
-        elif name == "get_announcements":
-            return await _get_announcements(client, arguments)
-        elif name == "get_gradebook":
-            return await _get_gradebook(client, arguments)
-        else:
-            return _err(ValueError(f"Unknown tool: {name}"))
-    except BbRouterExpiredError as e:
-        return _err(e)
-    except BlackboardAPIError as e:
-        return _err(e)
+        return await _dispatch(name, arguments)
+    except BbRouterExpiredError:
+        # Cookie expired mid-session: try once to swap in a fresh one from the
+        # user's browser, then retry. If either refresh or retry fails, surface.
+        try:
+            await _refresh_client()
+        except Exception as e:
+            return _err(e)
+        try:
+            return await _dispatch(name, arguments)
+        except Exception as e:
+            return _err(e)
     except Exception as e:
         return _err(e)
+
+
+async def _dispatch(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    client = get_client()
+    if name == "list_courses":
+        return await _list_courses(client, arguments)
+    elif name == "get_course_contents":
+        return await _get_course_contents(client, arguments)
+    elif name == "get_folder_children":
+        return await _get_folder_children(client, arguments)
+    elif name == "search_course_content":
+        return await _search_course_content(client, arguments)
+    elif name == "get_file_download_url":
+        return await _get_file_download_url(client, arguments)
+    elif name == "download_file":
+        return await _download_file(client, arguments)
+    elif name == "get_announcements":
+        return await _get_announcements(client, arguments)
+    elif name == "get_gradebook":
+        return await _get_gradebook(client, arguments)
+    else:
+        return _err(ValueError(f"Unknown tool: {name}"))
 
 
 # ---------------------------------------------------------------------------
@@ -311,18 +355,32 @@ async def _search_course_content(client: NTULearnClient, args: dict[str, Any]) -
     import json
 
     course_id = args["course_id"]
-    query = args["query"].lower()
+    query = str(args["query"]).strip().lower()
+    if not query:
+        return _err(ValueError("search_course_content query cannot be blank."))
+
     max_depth = int(args.get("max_depth", 5))
+    max_results = max(1, int(args.get("max_results", 50)))
 
     matches: list[dict[str, Any]] = []
+    visited: set[str] = set()
     semaphore = asyncio.Semaphore(5)
 
     async def walk(items: list[dict[str, Any]], path: list[str], depth: int) -> None:
-        if depth > max_depth:
+        if depth > max_depth or len(matches) >= max_results:
             return
 
         child_tasks = []
         for item in items:
+            if len(matches) >= max_results:
+                break
+
+            item_id = item.get("id")
+            if item_id:
+                if item_id in visited:
+                    continue
+                visited.add(item_id)
+
             title = item.get("title") or ""
             desc_raw = item.get("description") or {}
             desc = (desc_raw.get("rawText") if isinstance(desc_raw, dict) else desc_raw) or ""
@@ -334,7 +392,7 @@ async def _search_course_content(client: NTULearnClient, args: dict[str, Any]) -
                 stripped["breadcrumb"] = current_path
                 matches.append(stripped)
 
-            if item.get("hasChildren"):
+            if item.get("hasChildren") and len(matches) < max_results:
                 async def fetch_children(i=item, p=current_path):
                     async with semaphore:
                         children = await client.get_content_children(course_id, i["id"])
@@ -444,6 +502,17 @@ async def _download_file(client: NTULearnClient, args: dict[str, Any]) -> list[T
     def _sanitize(name: str) -> str:
         return re.sub(r'[\\/*?:"<>|]', "_", name)
 
+    def _deduplicate(name: str) -> str:
+        candidate = name
+        stem, dot, ext = name.rpartition(".")
+        base = stem if dot else name
+        suffix = ext if dot else ""
+        n = 2
+        while candidate in used_names or (DOWNLOAD_DIR / candidate).exists():
+            candidate = f"{base} ({n}).{suffix}" if suffix else f"{base} ({n})"
+            n += 1
+        return candidate
+
     used_names: set[str] = set()
     saved: list[dict[str, Any]] = []
 
@@ -454,18 +523,8 @@ async def _download_file(client: NTULearnClient, args: dict[str, Any]) -> list[T
             filename = unquote(url_path.split("/")[-1]) or "download"
         filename = _sanitize(filename)
 
-        # Disambiguate collisions within this item: "foo.pdf" → "foo (2).pdf".
-        if filename in used_names:
-            stem, dot, ext = filename.rpartition(".")
-            base = stem if dot else filename
-            suffix = ext if dot else ""
-            n = 2
-            while True:
-                candidate = f"{base} ({n}).{suffix}" if suffix else f"{base} ({n})"
-                if candidate not in used_names:
-                    filename = candidate
-                    break
-                n += 1
+        # Disambiguate against this batch and files already on disk.
+        filename = _deduplicate(filename)
         used_names.add(filename)
 
         dest = DOWNLOAD_DIR / filename
@@ -511,29 +570,32 @@ async def _get_gradebook(client: NTULearnClient, args: dict[str, Any]) -> list[T
     import json
 
     course_id = args["course_id"]
+    columns = await client.get_gradebook_columns(course_id)
+    grades_available = True
+    grade_fetch_error: str | None = None
 
-    # Fetch columns and try to get grades concurrently
     try:
         user_id = await client.get_my_user_id()
-        columns, grades_raw = await asyncio.gather(
-            client.get_gradebook_columns(course_id),
-            client.get_user_grades(course_id, user_id),
-        )
-        # Build a map from columnId → grade entry
+        grades_raw = await client.get_user_grades(course_id, user_id)
+    except BbRouterExpiredError:
+        raise
+    except Exception as e:
+        grades_available = False
+        grade_fetch_error = str(e)
+        grades_raw = []
+    if grades_available:
         grade_map: dict[str, dict[str, Any]] = {
             g["columnId"]: g for g in grades_raw if "columnId" in g
         }
-    except Exception:
-        # Grades endpoint may not be available; fall back to columns only
-        columns = await client.get_gradebook_columns(course_id)
+    else:
         grade_map = {}
 
-    result = []
+    columns_result = []
     for col in columns:
         col_id = col.get("id")
         score = col.get("score") or {}
         grade_entry = grade_map.get(col_id, {})
-        result.append({
+        columns_result.append({
             "id": col_id,
             "name": col.get("name"),
             "displayName": col.get("displayName"),
@@ -545,6 +607,11 @@ async def _get_gradebook(client: NTULearnClient, args: dict[str, Any]) -> list[T
             "status": grade_entry.get("status"),
         })
 
+    result = {
+        "columns": columns_result,
+        "gradesAvailable": grades_available,
+        "gradeFetchError": grade_fetch_error,
+    }
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 

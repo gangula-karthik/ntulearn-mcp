@@ -1,91 +1,137 @@
 # ntulearn-mcp
 
-An MCP server that wraps the Blackboard Learn REST API for NTULearn (NTU Singapore's LMS), letting Claude Desktop interact with your courses, content, announcements, and grades.
+MCP server for **NTULearn** (NTU Singapore's Blackboard Learn instance). Lets Claude Desktop, Claude Code, Cursor, Cline, and other MCP hosts read your courses, content, announcements, and grades.
 
-## Setup
+Built for tech-inclined NTU students. Requires Python 3.12+ and `uv`.
 
-### 1. Install `uv` (if not already installed)
+---
 
-```powershell
+## Quick start
+
+### 1. Install `uv`
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # Windows (PowerShell)
 irm https://astral.sh/uv/install.ps1 | iex
 ```
 
-### 2. Install dependencies
+### 2. Log into NTULearn in your browser
 
-```bash
-cd ntulearn-mcp
-uv sync
-```
+Open https://ntulearn.ntu.edu.sg in **Chrome, Edge, Firefox, or Brave** and log in. The server reads your `BbRouter` cookie automatically from whichever browser has a fresh session — no copy-paste required on most setups.
 
-### 3. Get your BbRouter cookie
+### 3. Add the server to your MCP host
 
-The server authenticates using your browser session cookie. Here's how to get it:
+**Claude Desktop** — edit `claude_desktop_config.json`:
 
-1. Open **https://ntulearn.ntu.edu.sg** in Chrome or Firefox and log in
-2. Open DevTools (`F12`) → **Application** tab → **Cookies** → `https://ntulearn.ntu.edu.sg`
-3. Find the cookie named **`BbRouter`**
-4. Copy the **Value** field (it looks like `expires:1234567890,...`)
-5. Paste it into your `.env` file (see below)
-
-The cookie is valid for your browser session. If you see "BbRouter cookie has expired" errors, repeat these steps.
-
-### 4. Configure `.env`
-
-Copy the example and fill in your cookie:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```env
-NTULEARN_BASE_URL=https://ntulearn.ntu.edu.sg
-NTULEARN_COOKIE=expires:1234567890,...   # paste your BbRouter value here
-NTULEARN_DOWNLOAD_DIR=./downloads
-```
-
-### 5. Test it
-
-```bash
-uv run ntulearn-mcp
-```
-
-The server starts and listens on stdio. You won't see output unless it errors — that's expected.
-
-## Register with Claude Desktop
-
-Add this to your `claude_desktop_config.json` (found at `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "ntulearn": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "C:\\Users\\YourName\\path\\to\\ntulearn-mcp",
-        "run",
-        "ntulearn-mcp"
-      ],
-      "env": {
-        "NTULEARN_COOKIE": "expires:1234567890,..."
-      }
+      "command": "uvx",
+      "args": ["ntulearn-mcp"]
     }
   }
 }
 ```
 
-Alternatively, keep `NTULEARN_COOKIE` in your `.env` file and omit the `env` block — the server loads `.env` automatically from the project directory.
+**Claude Code:**
 
-Restart Claude Desktop after editing the config.
+```bash
+claude mcp add ntulearn -- uvx ntulearn-mcp
+```
 
-## Available Tools
+**Cursor** — edit `~/.cursor/mcp.json` with the same shape as Claude Desktop above.
+
+**OpenClaw:**
+
+```bash
+openclaw mcp set ntulearn '{"command":"uvx","args":["ntulearn-mcp"]}'
+```
+
+### 4. Restart your MCP host, then try it
+
+Ask Claude: *"List my NTULearn courses."*
+
+That's the whole flow for most users. Read [Authentication](#authentication) if you're on Windows with Chrome/Edge, or if step 4 doesn't return anything.
+
+---
+
+## Authentication
+
+The server resolves your `BbRouter` cookie in this order:
+
+1. **`NTULEARN_COOKIE` env var** — explicit override; always wins.
+2. **Browser auto-read** — walks Edge → Chrome → Firefox → Brave via [`browser-cookie3`](https://pypi.org/project/browser-cookie3/), returns the first valid `BbRouter`.
+
+When your session expires mid-conversation, the server catches the 401, re-reads from your browser, and retries the call once. If your browser still has a fresh session, this is invisible.
+
+### Platform support for auto-read
+
+| Platform | Browser | Auto-read | Notes |
+|---|---|---|---|
+| macOS | any | ✅ | One-time Keychain prompt — see [macOS first-time setup](#macos-first-time-setup) |
+| Linux | any | ✅ | May prompt for keyring unlock on Chromium |
+| Windows | Firefox | ✅ | |
+| Windows | Chrome / Edge | ❌ | Blocked by [App-Bound Encryption](https://security.googleblog.com/2024/07/improving-security-of-chrome-cookies-on.html) — use [manual fallback](#manual-cookie-fallback) |
+
+**Windows + Chrome/Edge users:** Chrome's ABE (rolled out 2024) prevents non-admin processes from reading cookies. Don't elevate Claude Desktop to admin to work around this — it elevates everything else too. Use the manual cookie fallback below, or switch to Firefox for NTULearn.
+
+### macOS first-time setup
+
+The first time the server reads cookies from a Chromium browser on macOS, you'll see:
+
+> *"uv wants to access key 'Chrome' in your keychain"*
+
+Click **Always Allow** and enter your macOS login password. You won't see the prompt again.
+
+**If the prompt doesn't appear** (it can be suppressed when the MCP server runs as a child of Claude Desktop), bootstrap the approval from your own Terminal:
+
+```bash
+uvx --from ntulearn-mcp python -c "from ntulearn_mcp.cookie import read_bbrouter_cookie; print(read_bbrouter_cookie() or 'no cookie found')"
+```
+
+The Keychain dialog will appear in front of Terminal. Approve it, then your MCP host will work afterwards.
+
+### Manual cookie fallback
+
+If auto-read doesn't work for you:
+
+1. Open https://ntulearn.ntu.edu.sg in your browser and log in.
+2. Open DevTools (`F12`) → **Application** → **Cookies** → `ntulearn.ntu.edu.sg`.
+3. Copy the **Value** of the `BbRouter` cookie (starts with `expires:`).
+4. Add it to your MCP config:
+
+   ```json
+   {
+     "mcpServers": {
+       "ntulearn": {
+         "command": "uvx",
+         "args": ["ntulearn-mcp"],
+         "env": {
+           "NTULEARN_COOKIE": "expires:1234567890,id:..."
+         }
+       }
+     }
+   }
+   ```
+
+5. Restart your MCP host.
+
+The cookie expires with your NTULearn session (days–weeks). When it does, repeat from step 1. **This will not auto-refresh** — manual override disables the browser auto-read fallback.
+
+---
+
+## Available tools
 
 | Tool | Description |
-|------|-------------|
-| `list_courses` | List enrolled courses (active by default) |
+|---|---|
+| `list_courses` | List enrolled courses |
 | `get_course_contents` | Top-level content tree for a course |
 | `get_folder_children` | Children of a folder/lesson |
 | `search_course_content` | Recursively search a course's content tree |
@@ -94,43 +140,85 @@ Restart Claude Desktop after editing the config.
 | `get_announcements` | Course announcements |
 | `get_gradebook` | Gradebook columns and your scores |
 
-## Manual testing with `mcp dev`
+## Example prompts
+
+- *"List all my NTULearn courses."*
+- *"Show me the content tree for course `_12345_1`."*
+- *"Search for 'assignment' in course `_12345_1`."*
+- *"Download the lecture slides from content item `_67890_1` in course `_12345_1`."*
+- *"What are the latest announcements in my courses?"*
+- *"Show me my grades for course `_12345_1`."*
+
+---
+
+## Optional configuration
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `NTULEARN_COOKIE` | (auto-read) | Override the cookie source |
+| `NTULEARN_BASE_URL` | `https://ntulearn.ntu.edu.sg` | Change for a different Blackboard instance |
+| `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Where `download_file` saves files |
+
+Set these in your MCP host's `env` block (same place as `NTULEARN_COOKIE` above).
+
+---
+
+## Troubleshooting
+
+**"No NTULearn cookie found" / tools fail with 401.**
+- Make sure you're logged into NTULearn in a supported browser.
+- Check that no stale `NTULEARN_COOKIE` value is set anywhere — env vars and `.env` files **always** override browser auto-read. If you previously set it manually and want to switch to auto-read, delete the line.
+
+**MCP host lists "ntulearn" but the tool calls hang or return nothing.**
+On macOS, the first call may be blocked on a hidden Keychain prompt. See [macOS first-time setup](#macos-first-time-setup).
+
+**The server crashes on startup.**
+Run it directly to see the error:
 
 ```bash
-# Interactive tool inspector in the browser
-uv run mcp dev src/ntulearn_mcp/server.py
+uvx ntulearn-mcp
 ```
 
-This opens a web UI where you can call each tool and inspect the responses.
+Most common cause: no cookie resolvable. The error message will guide you.
 
-## Example prompts for Claude
+**Auto-read worked yesterday, doesn't work today.**
+Your browser session probably expired. Open NTULearn in your browser, complete SSO + MFA, then retry — auto-refresh handles the rest.
 
-- "List all my NTULearn courses"
-- "Show me the content tree for course _12345_1"
-- "Search for 'assignment' in course _12345_1"
-- "Download the lecture slides from content item _67890_1 in course _12345_1"
-- "What are the latest announcements in my courses?"
-- "Show me my grades for course _12345_1"
+---
 
-## Project structure
+## Contributing
 
-```
-ntulearn-mcp/
-├── pyproject.toml
-├── .env.example
-├── .gitignore
-├── README.md
-└── src/
-    └── ntulearn_mcp/
-        ├── __init__.py
-        ├── server.py      # MCP server entrypoint & tool handlers
-        ├── client.py      # Blackboard REST API async HTTP client
-        ├── parsers.py     # HTML body → download URL extraction
-        └── models.py      # Pydantic models (for reference/validation)
+```bash
+git clone https://github.com/kingdonkatsu/ntulearn-mcp.git
+cd ntulearn-mcp
+uv sync                                          # install deps incl. dev
+uv run python -m unittest discover -s tests      # run tests (24)
+uv run ntulearn-mcp                              # run the server (stdio)
+uv run mcp dev src/ntulearn_mcp/server.py        # interactive tool inspector
 ```
 
-## Roadmap
+Project layout:
 
-- **Phase 2**: Playwright-based auto-authentication (auto-refresh the BbRouter cookie)
-- Caching layer (avoid re-fetching unchanged content trees)
-- Test suite
+```
+src/ntulearn_mcp/
+├── server.py     # MCP entrypoint, tool handlers, cookie resolution
+├── client.py     # async httpx-based Blackboard REST client
+├── cookie.py     # browser cookie auto-read
+├── parsers.py    # HTML body → download URL extraction
+└── models.py     # Pydantic models (validation / reference)
+```
+
+Tests use `unittest` (not pytest); HTTP is mocked via `httpx.MockTransport`. See [CLAUDE.md](CLAUDE.md) for design decisions and known limitations.
+
+---
+
+## Disclaimer & responsible use
+
+**Use at your own risk.** This is an unofficial, personal-use tool. It is **not** affiliated with, endorsed by, or sponsored by NTU Singapore, Anthology Inc., or Blackboard Learn. NTULearn, Blackboard, and related marks belong to their respective owners.
+
+- **Your account, your responsibility.** Driving the LMS via your session cookie may be inconsistent with NTU's IT acceptable use policy or terms of service. You alone bear the consequences of how you use this tool — including potential account suspension. Consult NTU policy if you're unsure.
+- **No credentials are exfiltrated.** The `BbRouter` cookie is read locally on your machine and sent only to `ntulearn.ntu.edu.sg`. No third party (not the author, not Anthropic, not Anthology) sees your cookie or session data.
+- **Don't share cookie values.** Anyone with your `BbRouter` can act as you on NTULearn until it expires.
+- **Don't run this on someone else's behalf.** Each user should run their own instance against their own account.
+
+The MIT license disclaims all warranties — see [LICENSE](LICENSE).

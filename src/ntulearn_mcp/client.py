@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -31,7 +32,14 @@ class BlackboardAPIError(Exception):
 class NTULearnClient:
     """Async HTTP client for the Blackboard Learn public REST API."""
 
-    def __init__(self, base_url: str, cookie_value: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        cookie_value: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        external_transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         # Strip the "BbRouter=" prefix if the user included it
         if cookie_value.startswith("BbRouter="):
             cookie_value = cookie_value[len("BbRouter="):]
@@ -46,10 +54,17 @@ class NTULearnClient:
             },
             timeout=30.0,
             follow_redirects=True,
+            transport=transport,
+        )
+        self._external_client = httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            transport=external_transport,
         )
 
     async def close(self) -> None:
         await self._client.aclose()
+        await self._external_client.aclose()
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         response = await self._client.get(path, params=params)
@@ -190,16 +205,10 @@ class NTULearnClient:
     async def download_bytes(self, url: str) -> tuple[bytes, str | None]:
         """Download a file URL, returning (content_bytes, content_type).
 
-        Handles both same-host bbcswebdav paths and CDN redirect URLs
-        (alt-*.blackboard.com) that Blackboard issues for x-bb-file items.
-        The shared client sends BbRouter on the initial request; the CDN
-        redirect URL is pre-signed so it needs no cookie.
+        Same-origin URLs use the authenticated NTULearn client. Allowed
+        Blackboard CDN URLs use a separate cookie-free client.
         """
-        if url.startswith(self._base_url):
-            path = url[len(self._base_url):]
-            response = await self._client.get(path)
-        else:
-            response = await self._client.get(url)
+        response = await self._download_response(url)
 
         if response.status_code == 401:
             raise BbRouterExpiredError()
@@ -208,3 +217,35 @@ class NTULearnClient:
 
         content_type = response.headers.get("content-type")
         return response.content, content_type
+
+    async def _download_response(self, url: str) -> httpx.Response:
+        parsed = urlsplit(url)
+        if not parsed.scheme and not parsed.netloc:
+            return await self._client.get(url)
+
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Unsafe download URL scheme: {parsed.scheme}")
+
+        base = urlsplit(self._base_url)
+        if (
+            parsed.scheme == base.scheme
+            and parsed.hostname == base.hostname
+            and (parsed.port or _default_port(parsed.scheme))
+            == (base.port or _default_port(base.scheme))
+        ):
+            path = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+            return await self._client.get(path)
+
+        host = parsed.hostname or ""
+        if host.endswith(".blackboard.com"):
+            return await self._external_client.get(url)
+
+        raise ValueError(f"Unsafe download URL host: {host}")
+
+
+def _default_port(scheme: str) -> int | None:
+    if scheme == "http":
+        return 80
+    if scheme == "https":
+        return 443
+    return None
