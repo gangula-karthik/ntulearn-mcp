@@ -217,7 +217,8 @@ Tests use `unittest` (not pytest); HTTP is mocked via `httpx.MockTransport`. See
 **Use at your own risk.** This is an unofficial, personal-use tool. It is **not** affiliated with, endorsed by, or sponsored by NTU Singapore, Anthology Inc., or Blackboard Learn. NTULearn, Blackboard, and related marks belong to their respective owners.
 
 - **Your account, your responsibility.** Driving the LMS via your session cookie may be inconsistent with NTU's IT acceptable use policy or terms of service. You alone bear the consequences of how you use this tool — including potential account suspension. Consult NTU policy if you're unsure.
-- **No credentials are exfiltrated.** The `BbRouter` cookie is read locally on your machine and sent only to `ntulearn.ntu.edu.sg`. No third party (not the author, not Anthropic, not Anthology) sees your cookie or session data.
+- **Your cookie stays local.** The `BbRouter` cookie is read locally on your machine and sent only to `ntulearn.ntu.edu.sg`. The author never sees it.
+- **LMS data follows your MCP host's privacy settings.** The data this server returns to the MCP host (course content, announcements, grades, file metadata) is handled by that host like any other tool result. In hosted clients (e.g. Claude Desktop, Cursor), tool results are typically sent to the model provider as part of the conversation. Review your host's data-handling policy if that matters to you.
 - **Don't share cookie values.** Anyone with your `BbRouter` can act as you on NTULearn until it expires.
 - **Don't run this on someone else's behalf.** Each user should run their own instance against their own account.
 

@@ -528,7 +528,13 @@ async def _download_file(client: NTULearnClient, args: dict[str, Any]) -> list[T
         used_names.add(filename)
 
         dest = DOWNLOAD_DIR / filename
-        content_bytes, _ = await client.download_bytes(url)
+        # Refresh the cookie inline so already-saved files in this batch
+        # aren't re-downloaded under a deduped name on a top-level retry.
+        try:
+            content_bytes, _ = await client.download_bytes(url)
+        except BbRouterExpiredError:
+            client = await _refresh_client()
+            content_bytes, _ = await client.download_bytes(url)
         dest.write_bytes(content_bytes)
 
         saved.append({
