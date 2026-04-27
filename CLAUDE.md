@@ -73,15 +73,40 @@ All 24 tests pass: `uv run python -m unittest discover -s tests`.
 
 Changes are **uncommitted** in this worktree on branch `claude/pedantic-taussig-9c8400`. To resume on another machine, see "Resuming on another machine" below.
 
+## Architecture gap: downloaded files are unreachable from Claude
+
+Discovered while live-testing on Mac with Claude Desktop. The MCP server runs locally and `download_file` writes to the user's filesystem (e.g. `~/Downloads/ntulearn/lecture.pdf`). But Claude Desktop's built-in tools (`bash`, code execution) run in a sandboxed Linux container on Anthropic's servers — they cannot see the user's local filesystem. So the file lands somewhere Claude can't read.
+
+`localAgentModeTrustedFolders` in `claude_desktop_config.json` does **not** bridge this — that's for a different feature (Cowork / local agent mode), not standard chat tools.
+
+Authenticated-URL fetch is also blocked: `web_fetch` refuses URLs that didn't come from user input or prior search results, so Claude can't bypass the local-file gap by hitting the bbcswebdav URL directly.
+
+**Workarounds today:**
+- User drags the file from their Downloads folder into the chat (one-click, but manual).
+- For PDFs only: user could open the file locally and paste text — defeats the point.
+
+**Permanent fix to build (next session):** add a `read_file_content` MCP tool that:
+1. Resolves the same URL(s) `download_file` does (reuse `_download_file` resolution logic in [server.py](src/ntulearn_mcp/server.py)).
+2. Fetches bytes via the authenticated `NTULearnClient.download_bytes`.
+3. For PDFs, extracts text via `pypdf` (new dep).
+4. For text-like files, decodes directly.
+5. For other binaries, returns base64 in an `EmbeddedResource` (or refuses with a clear error).
+6. Returns content inline as `TextContent` through MCP — no filesystem hop, no sandbox barrier.
+
+Tests should mirror the existing `_download_file` test pattern: mock `client.download_bytes`, assert on the extracted text. Add a small fixture PDF under `tests/fixtures/` for the PDF-extraction path.
+
+Open question: keep `download_file` (still useful for users who actually want the file on disk) or replace it? Keep both — they serve different jobs.
+
 ## Open decisions / next steps
 
 In rough priority order:
 
-1. **Decide on browser-cookie3 as primary vs. demoting to nice-to-have.** Depends on user's appetite for the Windows-Chrome/Edge fallback friction. Either ship as-is and document, or escalate to browser-extension primary.
-2. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly.
-3. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
-4. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
-5. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user).
+1. **Build `read_file_content` tool** (see "Architecture gap" above). Highest priority — this is what blocks the actual end-user workflow of "ask Claude about my lecture slides."
+2. **Decide on browser-cookie3 as primary vs. demoting to nice-to-have.** Depends on user's appetite for the Windows-Chrome/Edge fallback friction. Either ship as-is and document, or escalate to browser-extension primary.
+3. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly.
+4. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
+5. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
+6. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user).
 
 ## Project conventions worth knowing
 
