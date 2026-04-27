@@ -12,9 +12,9 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
-from .client import NTULearnClient, BbRouterExpiredError, BlackboardAPIError
-from .cookie import read_bbrouter_cookie
-from .parsers import extract_all_files
+from ntulearn_mcp.client import NTULearnClient, BbRouterExpiredError, BlackboardAPIError
+from ntulearn_mcp.cookie import read_bbrouter_cookie
+from ntulearn_mcp.parsers import extract_all_files
 
 load_dotenv()
 
