@@ -30,6 +30,9 @@ DOWNLOAD_DIR = Path(os.getenv("NTULEARN_DOWNLOAD_DIR", "./downloads"))
 # process and floods Claude's context with useless content.
 _MAX_FILE_BYTES = 25 * 1024 * 1024
 _MAX_TOTAL_BYTES = 40 * 1024 * 1024
+# Per-sheet row cap for .xlsx extraction. Grade dumps and analytics exports
+# can run to millions of rows; rendering all of them blows up the response.
+_MAX_XLSX_ROWS_PER_SHEET = 1000
 
 _TEXT_MIMETYPES = frozenset({
     "application/json",
@@ -175,7 +178,7 @@ def _parse_content_type(content_type: str | None) -> tuple[str, str | None]:
 
 
 def _classify_kind(filename: str, content_type: str | None) -> str:
-    """Return 'pdf', 'text', or 'binary'.
+    """Return 'pdf', 'docx', 'pptx', 'xlsx', 'text', or 'binary'.
 
     Filename extension wins over content-type. Blackboard's bbcswebdav often
     serves files as application/octet-stream regardless of actual format, so
@@ -184,12 +187,27 @@ def _classify_kind(filename: str, content_type: str | None) -> str:
     ext = _file_extension(filename)
     if ext == "pdf":
         return "pdf"
+    if ext == "docx":
+        return "docx"
+    if ext == "pptx":
+        return "pptx"
+    if ext == "xlsx":
+        return "xlsx"
     if ext in _TEXT_EXTENSIONS:
         return "text"
 
     mime, _ = _parse_content_type(content_type)
     if mime == "application/pdf":
         return "pdf"
+    # OOXML MIMEs are unwieldy
+    # (e.g. application/vnd.openxmlformats-officedocument.wordprocessingml.document);
+    # substring match is robust against minor spelling variants from servers.
+    if "wordprocessingml" in mime:
+        return "docx"
+    if "presentationml" in mime:
+        return "pptx"
+    if "spreadsheetml" in mime:
+        return "xlsx"
     if mime.startswith("text/"):
         return "text"
     if mime in _TEXT_MIMETYPES:
@@ -261,6 +279,15 @@ def _extract_content(
             )
         return out
 
+    if kind == "docx":
+        return _extract_docx(filename, content_type, content_bytes, size)
+
+    if kind == "pptx":
+        return _extract_pptx(filename, content_type, content_bytes, size)
+
+    if kind == "xlsx":
+        return _extract_xlsx(filename, content_type, content_bytes, size)
+
     if kind == "text":
         _, charset = _parse_content_type(content_type)
         text: str | None = None
@@ -301,6 +328,210 @@ def _extract_content(
         "sizeBytes": size,
         "contentType": content_type,
     }
+
+
+def _extract_docx(
+    filename: str, content_type: str | None, content_bytes: bytes, size: int
+) -> dict[str, Any]:
+    """Extract paragraph + table text from a .docx (OOXML) file."""
+    from io import BytesIO
+
+    try:
+        from docx import Document
+        from docx.opc.exceptions import PackageNotFoundError
+    except ImportError as e:  # pragma: no cover — dep declared in pyproject
+        return {
+            "filename": filename,
+            "kind": "docx",
+            "error": f"python-docx not available: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    try:
+        doc = Document(BytesIO(content_bytes))
+    except PackageNotFoundError as e:
+        return {
+            "filename": filename,
+            "kind": "docx",
+            "error": f"Not a valid .docx file: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+    except Exception as e:
+        return {
+            "filename": filename,
+            "kind": "docx",
+            "error": f"DOCX extraction failed: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    paragraphs = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+    tables_text: list[str] = []
+    for table in doc.tables:
+        rows: list[str] = []
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                rows.append("\t".join(cells))
+        if rows:
+            tables_text.append("\n".join(rows))
+
+    parts = ["\n\n".join(paragraphs)] if paragraphs else []
+    if tables_text:
+        parts.append("## Tables\n\n" + "\n\n".join(tables_text))
+    text = "\n\n".join(parts)
+
+    return {
+        "filename": filename,
+        "kind": "docx",
+        "text": text,
+        "paragraphCount": len(paragraphs),
+        "tableCount": len(doc.tables),
+        "sizeBytes": size,
+        "contentType": content_type,
+    }
+
+
+def _extract_pptx(
+    filename: str, content_type: str | None, content_bytes: bytes, size: int
+) -> dict[str, Any]:
+    """Extract slide text + speaker notes from a .pptx (OOXML) file."""
+    from io import BytesIO
+
+    try:
+        from pptx import Presentation
+    except ImportError as e:  # pragma: no cover — dep declared in pyproject
+        return {
+            "filename": filename,
+            "kind": "pptx",
+            "error": f"python-pptx not available: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    try:
+        prs = Presentation(BytesIO(content_bytes))
+    except Exception as e:
+        return {
+            "filename": filename,
+            "kind": "pptx",
+            "error": f"PPTX extraction failed: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    slide_blocks: list[str] = []
+    for idx, slide in enumerate(prs.slides, start=1):
+        shape_texts: list[str] = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                t = shape.text_frame.text
+                if t and t.strip():
+                    shape_texts.append(t)
+            elif shape.has_table:
+                rows: list[str] = []
+                for row in shape.table.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if any(cells):
+                        rows.append("\t".join(cells))
+                if rows:
+                    shape_texts.append("\n".join(rows))
+
+        block = f"## Slide {idx}"
+        if shape_texts:
+            block += "\n\n" + "\n\n".join(shape_texts)
+
+        if slide.has_notes_slide:
+            notes_tf = slide.notes_slide.notes_text_frame
+            notes = notes_tf.text if notes_tf else ""
+            if notes and notes.strip():
+                block += f"\n\nSpeaker notes:\n{notes}"
+
+        slide_blocks.append(block)
+
+    text = "\n\n".join(slide_blocks)
+    return {
+        "filename": filename,
+        "kind": "pptx",
+        "text": text,
+        "slideCount": len(prs.slides),
+        "sizeBytes": size,
+        "contentType": content_type,
+    }
+
+
+def _extract_xlsx(
+    filename: str, content_type: str | None, content_bytes: bytes, size: int
+) -> dict[str, Any]:
+    """Extract row data from all sheets of an .xlsx (OOXML) workbook."""
+    from io import BytesIO
+
+    try:
+        from openpyxl import load_workbook
+    except ImportError as e:  # pragma: no cover — dep declared in pyproject
+        return {
+            "filename": filename,
+            "kind": "xlsx",
+            "error": f"openpyxl not available: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    try:
+        wb = load_workbook(BytesIO(content_bytes), data_only=True, read_only=True)
+    except Exception as e:
+        return {
+            "filename": filename,
+            "kind": "xlsx",
+            "error": f"XLSX extraction failed: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    truncated = False
+    sheet_blocks: list[str] = []
+    try:
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows_text: list[str] = []
+            row_count = 0
+            for row in ws.iter_rows(values_only=True):
+                if all(c is None or (isinstance(c, str) and not c.strip()) for c in row):
+                    continue
+                if row_count >= _MAX_XLSX_ROWS_PER_SHEET:
+                    truncated = True
+                    rows_text.append(
+                        f"... (additional rows truncated; cap is "
+                        f"{_MAX_XLSX_ROWS_PER_SHEET} rows per sheet)"
+                    )
+                    break
+                cells = ["" if c is None else str(c) for c in row]
+                rows_text.append("\t".join(cells))
+                row_count += 1
+            block = f"## Sheet: {sheet_name}"
+            if rows_text:
+                block += "\n\n" + "\n".join(rows_text)
+            sheet_blocks.append(block)
+    finally:
+        wb.close()
+
+    text = "\n\n".join(sheet_blocks)
+    out: dict[str, Any] = {
+        "filename": filename,
+        "kind": "xlsx",
+        "text": text,
+        "sheetCount": len(sheet_blocks),
+        "sizeBytes": size,
+        "contentType": content_type,
+    }
+    if truncated:
+        out["warning"] = (
+            f"One or more sheets exceeded {_MAX_XLSX_ROWS_PER_SHEET} rows "
+            "and were truncated. Use download_file for the full data."
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -428,10 +659,11 @@ async def list_tools() -> list[Tool]:
                 "returned inline (no local-filesystem hop). Use this to ask questions "
                 "about lecture material — download_file is for users who actually want "
                 "the bytes on disk. "
-                "Supports PDFs (text extraction via pypdf) and text-like files "
-                "(txt, md, csv, json, xml, html with tags stripped, code files). "
-                "Other binaries (images, video, .docx, .pptx) are listed under `skipped` "
-                "with a clear message — fall back to download_file for those. "
+                "Supports PDFs (via pypdf), Microsoft Office formats (.docx, .pptx with "
+                "speaker notes, .xlsx with all sheets), and text-like files (txt, md, "
+                "csv, json, xml, html with tags stripped, code files). "
+                "Other binaries (images, video, audio, archives, legacy .doc/.ppt/.xls) "
+                "are listed under `skipped` — fall back to download_file for those. "
                 "Per-file cap 25 MB, batch cap 40 MB; oversized files are skipped."
             ),
             inputSchema={

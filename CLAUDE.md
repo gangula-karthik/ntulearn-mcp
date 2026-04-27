@@ -77,14 +77,20 @@ Changes are **uncommitted** in this worktree on branch `claude/pedantic-taussig-
 
 Original problem: `download_file` writes to the user's local filesystem, but Claude Desktop's built-in tools (`bash`, code execution) run in a sandboxed container on Anthropic's servers and can't see local files. `localAgentModeTrustedFolders` does **not** bridge this (it's for Cowork / local agent mode, not standard chat tools), and `web_fetch` refuses URLs that didn't come from user input or prior search results — so Claude can't bypass the gap by hitting the bbcswebdav URL directly either.
 
-**Resolved by `read_file_content` tool.** Added in [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) — fetches bytes via the authenticated client, extracts text inline (PDFs via `pypdf`, text-like files decoded directly with charset/HTML handling), returns the content as `TextContent`. No filesystem hop. Per-file cap 25 MB, batch cap 40 MB. Binaries (and `.docx`/`.pptx` for now) are listed under a `skipped` array with a "use download_file" message.
+**Resolved by `read_file_content` tool.** Added in [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) — fetches bytes via the authenticated client, extracts text inline, returns the content as `TextContent`. No filesystem hop. Per-file cap 25 MB, batch cap 40 MB. Supported formats:
+- PDFs (`pypdf`)
+- Microsoft Office: `.docx` (paragraphs + tables), `.pptx` (per-slide shapes + speaker notes), `.xlsx` (all sheets, row-by-row, capped at 1000 rows/sheet to keep grade dumps from blowing up the response)
+- Text-likes (txt, md, csv, json, xml, code, html with tags stripped — charset-aware decode)
+
+True binaries (images, video, audio, archives, legacy `.doc`/`.ppt`/`.xls`) are listed under a `skipped` array with a "use download_file" message.
 
 URL resolution is shared with `download_file` via `_resolve_content_files`. `download_file` is kept — different job (users who actually want bytes on disk).
 
 **Out of scope (future tickets):**
-- Office formats (`.docx`, `.pptx`, `.xlsx`) — extremely common on NTULearn but require new deps (`python-docx`, `python-pptx`, `openpyxl`).
-- Image files via `ImageContent` — would let Claude see lecture diagrams directly.
-- Streaming for very large PDFs (current implementation buffers the full file in memory; 25 MB cap mitigates worst case).
+- Image files via `ImageContent` — would let Claude see lecture diagrams uploaded as standalone `.jpg`/`.png`.
+- Image extraction from inside `.pptx` slides (would catch the most common diagram case but requires mixed-content response).
+- Legacy `.doc`/`.ppt`/`.xls` — generally rare on NTULearn; users can convert or use `download_file`.
+- Streaming for very large PDFs / Office files (current implementation buffers the full file in memory; 25 MB cap mitigates worst case).
 
 ## Open decisions / next steps
 
@@ -94,8 +100,8 @@ In rough priority order:
 2. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly. Should also mention `read_file_content` as the primary tool for asking questions about content (vs `download_file` for "save to disk").
 3. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
 4. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
-5. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user). Also exercise `read_file_content` against a real PDF.
-6. **Office-format support** — add `python-docx` / `python-pptx` extraction to `read_file_content` once usage shows it's worth the dep cost.
+5. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user). Also exercise `read_file_content` against real PDF / Office files.
+6. **Image-content support** — add an `image` kind that returns `ImageContent` for standalone `.jpg`/`.png`, and consider extracting embedded images from `.pptx` slides so Claude can see lecture diagrams.
 
 ## Project conventions worth knowing
 
