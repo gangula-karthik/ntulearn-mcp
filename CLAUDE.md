@@ -73,40 +73,29 @@ All 24 tests pass: `uv run python -m unittest discover -s tests`.
 
 Changes are **uncommitted** in this worktree on branch `claude/pedantic-taussig-9c8400`. To resume on another machine, see "Resuming on another machine" below.
 
-## Architecture gap: downloaded files are unreachable from Claude
+## Architecture gap: downloaded files are unreachable from Claude — RESOLVED
 
-Discovered while live-testing on Mac with Claude Desktop. The MCP server runs locally and `download_file` writes to the user's filesystem (e.g. `~/Downloads/ntulearn/lecture.pdf`). But Claude Desktop's built-in tools (`bash`, code execution) run in a sandboxed Linux container on Anthropic's servers — they cannot see the user's local filesystem. So the file lands somewhere Claude can't read.
+Original problem: `download_file` writes to the user's local filesystem, but Claude Desktop's built-in tools (`bash`, code execution) run in a sandboxed container on Anthropic's servers and can't see local files. `localAgentModeTrustedFolders` does **not** bridge this (it's for Cowork / local agent mode, not standard chat tools), and `web_fetch` refuses URLs that didn't come from user input or prior search results — so Claude can't bypass the gap by hitting the bbcswebdav URL directly either.
 
-`localAgentModeTrustedFolders` in `claude_desktop_config.json` does **not** bridge this — that's for a different feature (Cowork / local agent mode), not standard chat tools.
+**Resolved by `read_file_content` tool.** Added in [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) — fetches bytes via the authenticated client, extracts text inline (PDFs via `pypdf`, text-like files decoded directly with charset/HTML handling), returns the content as `TextContent`. No filesystem hop. Per-file cap 25 MB, batch cap 40 MB. Binaries (and `.docx`/`.pptx` for now) are listed under a `skipped` array with a "use download_file" message.
 
-Authenticated-URL fetch is also blocked: `web_fetch` refuses URLs that didn't come from user input or prior search results, so Claude can't bypass the local-file gap by hitting the bbcswebdav URL directly.
+URL resolution is shared with `download_file` via `_resolve_content_files`. `download_file` is kept — different job (users who actually want bytes on disk).
 
-**Workarounds today:**
-- User drags the file from their Downloads folder into the chat (one-click, but manual).
-- For PDFs only: user could open the file locally and paste text — defeats the point.
-
-**Permanent fix to build (next session):** add a `read_file_content` MCP tool that:
-1. Resolves the same URL(s) `download_file` does (reuse `_download_file` resolution logic in [server.py](src/ntulearn_mcp/server.py)).
-2. Fetches bytes via the authenticated `NTULearnClient.download_bytes`.
-3. For PDFs, extracts text via `pypdf` (new dep).
-4. For text-like files, decodes directly.
-5. For other binaries, returns base64 in an `EmbeddedResource` (or refuses with a clear error).
-6. Returns content inline as `TextContent` through MCP — no filesystem hop, no sandbox barrier.
-
-Tests should mirror the existing `_download_file` test pattern: mock `client.download_bytes`, assert on the extracted text. Add a small fixture PDF under `tests/fixtures/` for the PDF-extraction path.
-
-Open question: keep `download_file` (still useful for users who actually want the file on disk) or replace it? Keep both — they serve different jobs.
+**Out of scope (future tickets):**
+- Office formats (`.docx`, `.pptx`, `.xlsx`) — extremely common on NTULearn but require new deps (`python-docx`, `python-pptx`, `openpyxl`).
+- Image files via `ImageContent` — would let Claude see lecture diagrams directly.
+- Streaming for very large PDFs (current implementation buffers the full file in memory; 25 MB cap mitigates worst case).
 
 ## Open decisions / next steps
 
 In rough priority order:
 
-1. **Build `read_file_content` tool** (see "Architecture gap" above). Highest priority — this is what blocks the actual end-user workflow of "ask Claude about my lecture slides."
-2. **Decide on browser-cookie3 as primary vs. demoting to nice-to-have.** Depends on user's appetite for the Windows-Chrome/Edge fallback friction. Either ship as-is and document, or escalate to browser-extension primary.
-3. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly.
-4. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
-5. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
-6. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user).
+1. **Decide on browser-cookie3 as primary vs. demoting to nice-to-have.** Depends on user's appetite for the Windows-Chrome/Edge fallback friction. Either ship as-is and document, or escalate to browser-extension primary.
+2. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly. Should also mention `read_file_content` as the primary tool for asking questions about content (vs `download_file` for "save to disk").
+3. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
+4. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
+5. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user). Also exercise `read_file_content` against a real PDF.
+6. **Office-format support** — add `python-docx` / `python-pptx` extraction to `read_file_content` once usage shows it's worth the dep cost.
 
 ## Project conventions worth knowing
 

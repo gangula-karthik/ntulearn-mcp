@@ -25,6 +25,30 @@ load_dotenv()
 BASE_URL = os.getenv("NTULEARN_BASE_URL", "https://ntulearn.ntu.edu.sg")
 DOWNLOAD_DIR = Path(os.getenv("NTULEARN_DOWNLOAD_DIR", "./downloads"))
 
+# Per-file and per-batch caps for read_file_content. download_bytes buffers the
+# full response in memory, so without these a 200 MB attachment crashes the
+# process and floods Claude's context with useless content.
+_MAX_FILE_BYTES = 25 * 1024 * 1024
+_MAX_TOTAL_BYTES = 40 * 1024 * 1024
+
+_TEXT_MIMETYPES = frozenset({
+    "application/json",
+    "application/xml",
+    "application/javascript",
+    "application/x-javascript",
+    "application/x-yaml",
+    "application/yaml",
+    "application/ld+json",
+    "application/x-sh",
+})
+
+_TEXT_EXTENSIONS = frozenset({
+    "txt", "md", "markdown", "csv", "tsv", "json", "xml", "yaml", "yml",
+    "html", "htm", "log", "py", "js", "ts", "rs", "go", "java", "c", "cpp",
+    "h", "hpp", "sh", "bash", "zsh", "rb", "swift", "kt", "scala", "r",
+    "ini", "toml", "cfg", "conf", "env",
+})
+
 _NO_COOKIE_MESSAGE = (
     "No NTULearn cookie found. Two options:\n"
     "  1. Log into https://ntulearn.ntu.edu.sg in a supported browser "
@@ -94,6 +118,189 @@ def _strip_content(item: dict[str, Any]) -> dict[str, Any]:
 
 def _err(e: Exception) -> list[TextContent]:
     return [TextContent(type="text", text=f"Error: {e}")]
+
+
+async def _resolve_content_files(
+    client: NTULearnClient, course_id: str, content_id: str
+) -> tuple[dict[str, Any], str | None, list[tuple[str, str | None]]]:
+    """Return (item, handler_id, pairs) for a content item.
+
+    `pairs` is a list of (url, filename) tuples for every file attached to the
+    item. Filename may be None when the parser couldn't determine one.
+    Empty pairs means no resolvable file (caller decides how to surface that).
+    """
+    item = await client.get_content_item(course_id, content_id)
+    handler_id = (item.get("contentHandler") or {}).get("id")
+
+    pairs: list[tuple[str, str | None]] = []
+
+    if handler_id == "resource/x-bb-file":
+        attachments = await client.get_attachments(course_id, content_id)
+        for att in attachments:
+            url = await client.get_attachment_download_url(course_id, content_id, att["id"])
+            if url:
+                pairs.append((url, att.get("fileName")))
+    else:
+        body = item.get("body") or ""
+        files = extract_all_files(body)
+        if not files:
+            desc = item.get("description") or {}
+            body2 = (desc.get("rawText") if isinstance(desc, dict) else desc) or ""
+            files = extract_all_files(body2)
+        for f in files:
+            url = f.get("url")
+            if url:
+                pairs.append((url, f.get("filename")))
+
+    return item, handler_id, pairs
+
+
+def _file_extension(filename: str) -> str:
+    if "." not in filename:
+        return ""
+    return filename.rpartition(".")[2].lower()
+
+
+def _parse_content_type(content_type: str | None) -> tuple[str, str | None]:
+    """Return (mime, charset) from a Content-Type header value."""
+    if not content_type:
+        return "", None
+    parts = [p.strip() for p in content_type.split(";")]
+    mime = parts[0].lower()
+    charset = None
+    for p in parts[1:]:
+        if p.lower().startswith("charset="):
+            charset = p.split("=", 1)[1].strip().strip('"').strip("'")
+    return mime, charset
+
+
+def _classify_kind(filename: str, content_type: str | None) -> str:
+    """Return 'pdf', 'text', or 'binary'.
+
+    Filename extension wins over content-type. Blackboard's bbcswebdav often
+    serves files as application/octet-stream regardless of actual format, so
+    trusting the header alone misclassifies most attachments.
+    """
+    ext = _file_extension(filename)
+    if ext == "pdf":
+        return "pdf"
+    if ext in _TEXT_EXTENSIONS:
+        return "text"
+
+    mime, _ = _parse_content_type(content_type)
+    if mime == "application/pdf":
+        return "pdf"
+    if mime.startswith("text/"):
+        return "text"
+    if mime in _TEXT_MIMETYPES:
+        return "text"
+    return "binary"
+
+
+def _format_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+def _extract_content(
+    filename: str, content_type: str | None, content_bytes: bytes
+) -> dict[str, Any]:
+    """Detect file kind and extract text. Returns one entry for the response payload.
+
+    Pure function — no I/O. Caller handles download retries and size caps.
+    """
+    size = len(content_bytes)
+    kind = _classify_kind(filename, content_type)
+
+    if kind == "pdf":
+        from io import BytesIO
+
+        from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
+
+        try:
+            reader = PdfReader(BytesIO(content_bytes))
+            if reader.is_encrypted:
+                # Many "encrypted" Blackboard PDFs unlock with an empty password.
+                try:
+                    reader.decrypt("")
+                except Exception:
+                    return {
+                        "filename": filename,
+                        "kind": "pdf",
+                        "error": "PDF is password-protected. Cannot extract text.",
+                        "sizeBytes": size,
+                        "contentType": content_type,
+                    }
+            page_count = len(reader.pages)
+            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        except (PyPdfError, Exception) as e:
+            return {
+                "filename": filename,
+                "kind": "pdf",
+                "error": f"PDF extraction failed: {e}",
+                "sizeBytes": size,
+                "contentType": content_type,
+            }
+
+        out: dict[str, Any] = {
+            "filename": filename,
+            "kind": "pdf",
+            "text": text,
+            "pageCount": page_count,
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+        if not text.strip():
+            out["warning"] = (
+                "PDF appears to contain no extractable text "
+                "(likely scanned images)."
+            )
+        return out
+
+    if kind == "text":
+        _, charset = _parse_content_type(content_type)
+        text: str | None = None
+        for enc in (charset, "utf-8", "latin-1"):
+            if not enc:
+                continue
+            try:
+                text = content_bytes.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        if text is None:
+            text = content_bytes.decode("utf-8", errors="replace")
+
+        ext = _file_extension(filename)
+        mime, _ = _parse_content_type(content_type)
+        if ext in {"html", "htm"} or mime == "text/html":
+            from bs4 import BeautifulSoup
+
+            text = BeautifulSoup(text, "html.parser").get_text(separator="\n")
+            text = "\n".join(line for line in (l.strip() for l in text.splitlines()) if line)
+
+        return {
+            "filename": filename,
+            "kind": "text",
+            "text": text,
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    return {
+        "filename": filename,
+        "kind": "binary",
+        "error": (
+            f"Binary file ({content_type or 'unknown type'}, {_format_bytes(size)}). "
+            "Cannot extract text. Use download_file to save it locally."
+        ),
+        "sizeBytes": size,
+        "contentType": content_type,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +422,28 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="read_file_content",
+            description=(
+                "Read the text content of files attached to a Blackboard content item, "
+                "returned inline (no local-filesystem hop). Use this to ask questions "
+                "about lecture material — download_file is for users who actually want "
+                "the bytes on disk. "
+                "Supports PDFs (text extraction via pypdf) and text-like files "
+                "(txt, md, csv, json, xml, html with tags stripped, code files). "
+                "Other binaries (images, video, .docx, .pptx) are listed under `skipped` "
+                "with a clear message — fall back to download_file for those. "
+                "Per-file cap 25 MB, batch cap 40 MB; oversized files are skipped."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": {"type": "string", "description": "Blackboard course ID"},
+                    "content_id": {"type": "string", "description": "Content item ID"},
+                },
+                "required": ["course_id", "content_id"],
+            },
+        ),
+        Tool(
             name="get_announcements",
             description="Get announcements for a course, newest first.",
             inputSchema={
@@ -279,6 +508,8 @@ async def _dispatch(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _get_file_download_url(client, arguments)
     elif name == "download_file":
         return await _download_file(client, arguments)
+    elif name == "read_file_content":
+        return await _read_file_content(client, arguments)
     elif name == "get_announcements":
         return await _get_announcements(client, arguments)
     elif name == "get_gradebook":
@@ -466,29 +697,7 @@ async def _download_file(client: NTULearnClient, args: dict[str, Any]) -> list[T
     course_id = args["course_id"]
     content_id = args["content_id"]
 
-    item = await client.get_content_item(course_id, content_id)
-    handler_id = (item.get("contentHandler") or {}).get("id")
-
-    # Collect (url, filename) pairs for every file attached to this item.
-    pairs: list[tuple[str, str | None]] = []
-
-    if handler_id == "resource/x-bb-file":
-        attachments = await client.get_attachments(course_id, content_id)
-        for att in attachments:
-            url = await client.get_attachment_download_url(course_id, content_id, att["id"])
-            if url:
-                pairs.append((url, att.get("fileName")))
-    else:
-        body = item.get("body") or ""
-        files = extract_all_files(body)
-        if not files:
-            desc = item.get("description") or {}
-            body2 = (desc.get("rawText") if isinstance(desc, dict) else desc) or ""
-            files = extract_all_files(body2)
-        for f in files:
-            url = f.get("url")
-            if url:
-                pairs.append((url, f.get("filename")))
+    item, handler_id, pairs = await _resolve_content_files(client, course_id, content_id)
 
     if not pairs:
         return [TextContent(type="text", text=json.dumps({
@@ -547,6 +756,102 @@ async def _download_file(client: NTULearnClient, args: dict[str, Any]) -> list[T
         "contentId": content_id,
         "title": item.get("title"),
         "files": saved,
+    }
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def _read_file_content(
+    client: NTULearnClient, args: dict[str, Any]
+) -> list[TextContent]:
+    """Resolve files attached to a content item, fetch bytes, return text inline.
+
+    Bypasses the local-filesystem hop that breaks Claude Desktop's sandbox:
+    rather than writing to ./downloads, the bytes are extracted (PDFs via
+    pypdf, text-likes decoded directly) and returned as TextContent.
+    """
+    import json
+    from urllib.parse import unquote
+
+    course_id = args["course_id"]
+    content_id = args["content_id"]
+
+    item, handler_id, pairs = await _resolve_content_files(client, course_id, content_id)
+
+    if not pairs:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "No download URL found. Content handler type may not be supported.",
+            "contentHandlerId": handler_id,
+            "title": item.get("title"),
+        }, indent=2))]
+
+    files_out: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    total_bytes = 0
+
+    for url, detected_filename in pairs:
+        filename = detected_filename
+        if not filename:
+            url_path = url.split("?")[0]
+            filename = unquote(url_path.split("/")[-1]) or "download"
+
+        if total_bytes >= _MAX_TOTAL_BYTES:
+            skipped.append({
+                "filename": filename,
+                "reason": (
+                    f"Skipped: cumulative batch size already exceeds "
+                    f"{_format_bytes(_MAX_TOTAL_BYTES)} cap. Use download_file."
+                ),
+            })
+            continue
+
+        try:
+            content_bytes, content_type = await client.download_bytes(url)
+        except BbRouterExpiredError:
+            client = await _refresh_client()
+            content_bytes, content_type = await client.download_bytes(url)
+
+        size = len(content_bytes)
+        if size > _MAX_FILE_BYTES:
+            skipped.append({
+                "filename": filename,
+                "reason": (
+                    f"File too large ({_format_bytes(size)} > "
+                    f"{_format_bytes(_MAX_FILE_BYTES)} cap). Use download_file."
+                ),
+                "sizeBytes": size,
+                "contentType": content_type,
+            })
+            continue
+
+        if total_bytes + size > _MAX_TOTAL_BYTES:
+            skipped.append({
+                "filename": filename,
+                "reason": (
+                    f"Skipped: would exceed batch cap of "
+                    f"{_format_bytes(_MAX_TOTAL_BYTES)}. Use download_file."
+                ),
+                "sizeBytes": size,
+                "contentType": content_type,
+            })
+            continue
+
+        total_bytes += size
+        entry = _extract_content(filename, content_type, content_bytes)
+        if entry.get("kind") == "binary":
+            skipped.append({
+                "filename": filename,
+                "reason": entry["error"],
+                "sizeBytes": size,
+                "contentType": content_type,
+            })
+        else:
+            files_out.append(entry)
+
+    result = {
+        "contentId": content_id,
+        "title": item.get("title"),
+        "files": files_out,
+        "skipped": skipped,
     }
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

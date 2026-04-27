@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib
 import json
 import os
@@ -17,6 +18,24 @@ from mcp.types import TextContent
 
 from ntulearn_mcp import server
 from ntulearn_mcp.client import BbRouterExpiredError, NTULearnClient
+
+# Minimal hand-crafted PDF v1.4 with the visible text "Hello PDF Fixture".
+# 598 bytes raw — kept as a base64 constant to avoid a fixture file and the
+# chicken-and-egg of generating a fixture with the library under test.
+_TINY_PDF_B64 = (
+    "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4K"
+    "ZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4K"
+    "ZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAg"
+    "MCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAw"
+    "IFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0OSA+PgpzdHJlYW0KQlQKL0Yx"
+    "IDI0IFRmCjcyIDcyMCBUZAooSGVsbG8gUERGIEZpeHR1cmUpIFRqCkVUCmVuZHN0cmVhbQplbmRv"
+    "YmoKNSAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2"
+    "ZXRpY2EgPj4KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAw"
+    "MDAwMCBuIAowMDAwMDAwMDY0IDAwMDAwIG4gCjAwMDAwMDAxMjEgMDAwMDAgbiAKMDAwMDAwMDI0"
+    "NyAwMDAwMCBuIAowMDAwMDAwMzQ1IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAx"
+    "IDAgUiA+PgpzdGFydHhyZWYKNDE1CiUlRU9GCg=="
+)
+_TINY_PDF_BYTES = base64.b64decode(_TINY_PDF_B64)
 
 
 class _CookieEnvIsolation:
@@ -253,6 +272,363 @@ class ToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(payload), 2)
         self.assertEqual([item["id"] for item in payload], ["1", "2"])
+
+
+class ContentClassificationTests(unittest.TestCase):
+    """Pure-function tests for _classify_kind — extension wins over content-type."""
+
+    def test_pdf_extension_classified_as_pdf(self) -> None:
+        self.assertEqual(server._classify_kind("slides.pdf", None), "pdf")
+
+    def test_pdf_mime_classified_as_pdf(self) -> None:
+        self.assertEqual(server._classify_kind("file", "application/pdf"), "pdf")
+
+    def test_pdf_extension_wins_over_octet_stream(self) -> None:
+        # The bbcswebdav case: server says octet-stream but extension is .pdf.
+        self.assertEqual(
+            server._classify_kind("lecture.pdf", "application/octet-stream"),
+            "pdf",
+        )
+
+    def test_text_mime_classified_as_text(self) -> None:
+        self.assertEqual(server._classify_kind("a", "text/plain"), "text")
+        self.assertEqual(server._classify_kind("a", "text/html; charset=utf-8"), "text")
+        self.assertEqual(server._classify_kind("a", "application/json"), "text")
+
+    def test_text_extension_classified_as_text(self) -> None:
+        for fname in ("notes.md", "data.csv", "config.yaml", "main.py", "readme.txt"):
+            self.assertEqual(server._classify_kind(fname, None), "text", fname)
+
+    def test_image_classified_as_binary(self) -> None:
+        self.assertEqual(server._classify_kind("logo.png", "image/png"), "binary")
+
+    def test_unknown_classified_as_binary(self) -> None:
+        self.assertEqual(server._classify_kind("blob", None), "binary")
+        self.assertEqual(
+            server._classify_kind("video.mp4", "video/mp4"), "binary"
+        )
+
+
+class ContentExtractionTests(unittest.TestCase):
+    """Pure-function tests for _extract_content."""
+
+    def test_extracts_pdf_text(self) -> None:
+        result = server._extract_content("hello.pdf", "application/pdf", _TINY_PDF_BYTES)
+        self.assertEqual(result["kind"], "pdf")
+        self.assertIn("Hello PDF Fixture", result["text"])
+        self.assertEqual(result["pageCount"], 1)
+        self.assertEqual(result["filename"], "hello.pdf")
+        self.assertNotIn("warning", result)
+
+    def test_decodes_utf8_text(self) -> None:
+        result = server._extract_content("note.txt", "text/plain", "héllo".encode("utf-8"))
+        self.assertEqual(result["kind"], "text")
+        self.assertEqual(result["text"], "héllo")
+
+    def test_decodes_with_charset_from_content_type(self) -> None:
+        result = server._extract_content(
+            "note.txt", "text/plain; charset=latin-1", "café".encode("latin-1")
+        )
+        self.assertEqual(result["text"], "café")
+
+    def test_strips_html_tags(self) -> None:
+        html = b"<html><body><h1>Hi</h1><p>Para <b>bold</b></p><script>x</script></body></html>"
+        result = server._extract_content("page.html", "text/html", html)
+        self.assertEqual(result["kind"], "text")
+        self.assertNotIn("<h1>", result["text"])
+        self.assertNotIn("<p>", result["text"])
+        self.assertIn("Hi", result["text"])
+        self.assertIn("bold", result["text"])
+
+    def test_binary_returns_error_payload(self) -> None:
+        png_magic = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        result = server._extract_content("logo.png", "image/png", png_magic)
+        self.assertEqual(result["kind"], "binary")
+        self.assertIn("download_file", result["error"])
+        self.assertIn("image/png", result["error"])
+
+    def test_pdf_extension_wins_over_octet_stream(self) -> None:
+        result = server._extract_content(
+            "lecture.pdf", "application/octet-stream", _TINY_PDF_BYTES
+        )
+        self.assertEqual(result["kind"], "pdf")
+        self.assertIn("Hello PDF Fixture", result["text"])
+
+    def test_corrupted_pdf_returns_error(self) -> None:
+        result = server._extract_content("bad.pdf", "application/pdf", b"not really a pdf")
+        self.assertEqual(result["kind"], "pdf")
+        self.assertIn("error", result)
+
+
+class _StubResolveClient:
+    """Implements only get_content_item — for handlers that hit _resolve_content_files
+    and short-circuit on no-pairs. Avoids needing get_attachments etc."""
+
+    def __init__(self, item: dict[str, Any]) -> None:
+        self._item = item
+
+    async def get_content_item(self, course_id: str, content_id: str) -> dict[str, Any]:
+        return self._item
+
+
+class FakeReadClient:
+    """Mock for _read_file_content that maps URLs to (bytes, content_type)."""
+
+    def __init__(
+        self,
+        url_to_payload: dict[str, tuple[bytes, str | None]],
+        item: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        attachment_urls: dict[str, str] | None = None,
+    ) -> None:
+        self._url_to_payload = url_to_payload
+        self._item = item or {
+            "title": "Lecture 1",
+            "contentHandler": {"id": "resource/x-bb-file"},
+        }
+        self._attachments = attachments or []
+        self._attachment_urls = attachment_urls or {}
+
+    async def get_content_item(self, course_id: str, content_id: str) -> dict[str, Any]:
+        return self._item
+
+    async def get_attachments(self, course_id: str, content_id: str) -> list[dict[str, Any]]:
+        return self._attachments
+
+    async def get_attachment_download_url(
+        self, course_id: str, content_id: str, attachment_id: str
+    ) -> str:
+        return self._attachment_urls[attachment_id]
+
+    async def download_bytes(self, url: str) -> tuple[bytes, str | None]:
+        if url not in self._url_to_payload:
+            raise AssertionError(f"unexpected download URL: {url}")
+        return self._url_to_payload[url]
+
+
+class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
+    """End-to-end tests for the _read_file_content handler."""
+
+    async def test_extracts_pdf_text(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/url/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "att-1", "fileName": "slides.pdf"}],
+            attachment_urls={"att-1": "/url/slides.pdf"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        self.assertEqual(len(payload["files"]), 1)
+        self.assertEqual(len(payload["skipped"]), 0)
+        f = payload["files"][0]
+        self.assertEqual(f["kind"], "pdf")
+        self.assertEqual(f["filename"], "slides.pdf")
+        self.assertIn("Hello PDF Fixture", f["text"])
+        self.assertEqual(f["pageCount"], 1)
+
+    async def test_decodes_text_file(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/notes.txt": (b"hello world", "text/plain")},
+            attachments=[{"id": "a", "fileName": "notes.txt"}],
+            attachment_urls={"a": "/u/notes.txt"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        self.assertEqual(payload["files"][0]["kind"], "text")
+        self.assertEqual(payload["files"][0]["text"], "hello world")
+
+    async def test_strips_html(self) -> None:
+        html = b"<html><body><h1>Title</h1><p>Body text</p></body></html>"
+        client = FakeReadClient(
+            url_to_payload={"/u/page.html": (html, "text/html; charset=utf-8")},
+            attachments=[{"id": "a", "fileName": "page.html"}],
+            attachment_urls={"a": "/u/page.html"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        text = payload["files"][0]["text"]
+        self.assertNotIn("<h1>", text)
+        self.assertNotIn("<body>", text)
+        self.assertIn("Title", text)
+        self.assertIn("Body text", text)
+
+    async def test_refuses_binary(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/img.png": (b"\x89PNG\r\n\x1a\n" + b"\x00" * 50, "image/png")},
+            attachments=[{"id": "a", "fileName": "img.png"}],
+            attachment_urls={"a": "/u/img.png"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        self.assertEqual(payload["files"], [])
+        self.assertEqual(len(payload["skipped"]), 1)
+        skipped = payload["skipped"][0]
+        self.assertEqual(skipped["filename"], "img.png")
+        self.assertIn("download_file", skipped["reason"])
+
+    async def test_size_cap_per_file(self) -> None:
+        oversized = b"\x00" * (server._MAX_FILE_BYTES + 1)
+        client = FakeReadClient(
+            url_to_payload={"/u/huge.pdf": (oversized, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "huge.pdf"}],
+            attachment_urls={"a": "/u/huge.pdf"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        self.assertEqual(payload["files"], [])
+        self.assertEqual(len(payload["skipped"]), 1)
+        self.assertIn("too large", payload["skipped"][0]["reason"].lower())
+
+    async def test_octet_stream_with_pdf_extension(self) -> None:
+        # Common bbcswebdav case — server says octet-stream, extension says PDF.
+        client = FakeReadClient(
+            url_to_payload={
+                "/u/lecture.pdf": (_TINY_PDF_BYTES, "application/octet-stream")
+            },
+            attachments=[{"id": "a", "fileName": "lecture.pdf"}],
+            attachment_urls={"a": "/u/lecture.pdf"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        self.assertEqual(payload["files"][0]["kind"], "pdf")
+        self.assertIn("Hello PDF Fixture", payload["files"][0]["text"])
+
+    async def test_no_files_returns_error_payload(self) -> None:
+        # resource/x-bb-document with no extractable URLs in body.
+        client = FakeReadClient(
+            url_to_payload={},
+            item={
+                "title": "Empty Item",
+                "contentHandler": {"id": "resource/x-bb-document"},
+                "body": "<p>just some text, no links</p>",
+            },
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        self.assertIn("error", payload)
+        self.assertEqual(payload["title"], "Empty Item")
+        self.assertEqual(payload["contentHandlerId"], "resource/x-bb-document")
+
+    async def test_per_url_401_retry(self) -> None:
+        # First download raises BbRouterExpiredError; the inline retry path
+        # calls _refresh_client (patched to return a fresh stub) and re-downloads.
+        expired_once = {"done": False}
+
+        class FlakyClient(FakeReadClient):
+            async def download_bytes(
+                self, url: str
+            ) -> tuple[bytes, str | None]:
+                if not expired_once["done"]:
+                    expired_once["done"] = True
+                    raise BbRouterExpiredError()
+                return await super().download_bytes(url)
+
+        flaky = FlakyClient(
+            url_to_payload={"/u/notes.txt": (b"after retry", "text/plain")},
+            attachments=[{"id": "a", "fileName": "notes.txt"}],
+            attachment_urls={"a": "/u/notes.txt"},
+        )
+
+        refreshed = FakeReadClient(
+            url_to_payload={"/u/notes.txt": (b"after retry", "text/plain")},
+        )
+
+        async def fake_refresh() -> Any:
+            return refreshed
+
+        with mock.patch.object(server, "_refresh_client", fake_refresh):
+            result = await server._read_file_content(
+                flaky, {"course_id": "c", "content_id": "i"}
+            )
+
+        payload = json.loads(result[0].text)
+        self.assertTrue(expired_once["done"])
+        self.assertEqual(payload["files"][0]["text"], "after retry")
+
+    async def test_handles_multiple_files(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={
+                "/u/a.txt": (b"alpha", "text/plain"),
+                "/u/b.png": (b"\x89PNG\r\n\x1a\n", "image/png"),
+                "/u/c.pdf": (_TINY_PDF_BYTES, "application/pdf"),
+            },
+            attachments=[
+                {"id": "1", "fileName": "a.txt"},
+                {"id": "2", "fileName": "b.png"},
+                {"id": "3", "fileName": "c.pdf"},
+            ],
+            attachment_urls={"1": "/u/a.txt", "2": "/u/b.png", "3": "/u/c.pdf"},
+        )
+        result = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        payload = json.loads(result[0].text)
+        kinds = sorted(f["kind"] for f in payload["files"])
+        self.assertEqual(kinds, ["pdf", "text"])
+        self.assertEqual(len(payload["skipped"]), 1)
+        self.assertEqual(payload["skipped"][0]["filename"], "b.png")
+
+
+class ResolveContentFilesTests(unittest.IsolatedAsyncioTestCase):
+    """Direct tests of the _resolve_content_files helper."""
+
+    async def test_resolves_attachment_handler(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={},
+            attachments=[
+                {"id": "a", "fileName": "x.pdf"},
+                {"id": "b", "fileName": "y.docx"},
+            ],
+            attachment_urls={"a": "/u/x.pdf", "b": "/u/y.docx"},
+        )
+        item, handler_id, pairs = await server._resolve_content_files(client, "c", "i")
+        self.assertEqual(handler_id, "resource/x-bb-file")
+        self.assertEqual(pairs, [("/u/x.pdf", "x.pdf"), ("/u/y.docx", "y.docx")])
+        self.assertEqual(item["title"], "Lecture 1")
+
+    async def test_resolves_html_body_handler(self) -> None:
+        # Use the real extract_all_files path via a body containing bbcswebdav links.
+        body = (
+            '<a href="https://ntulearn.ntu.edu.sg/bbcswebdav/'
+            'pid-1/notes.pdf">Notes</a>'
+        )
+        client = FakeReadClient(
+            url_to_payload={},
+            item={
+                "title": "Doc",
+                "contentHandler": {"id": "resource/x-bb-document"},
+                "body": body,
+            },
+        )
+        _, handler_id, pairs = await server._resolve_content_files(client, "c", "i")
+        self.assertEqual(handler_id, "resource/x-bb-document")
+        self.assertEqual(len(pairs), 1)
+        self.assertIn("bbcswebdav", pairs[0][0])
+
+    async def test_no_files_returns_empty_pairs(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={},
+            item={
+                "title": "Empty",
+                "contentHandler": {"id": "resource/x-bb-document"},
+                "body": "<p>nothing useful</p>",
+            },
+        )
+        _, _, pairs = await server._resolve_content_files(client, "c", "i")
+        self.assertEqual(pairs, [])
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.27.0",
     "pydantic>=2.13.3",
+    "pypdf>=5.0",
     "python-dotenv>=1.2.2",
 ]
 
