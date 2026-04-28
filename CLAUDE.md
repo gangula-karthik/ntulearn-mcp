@@ -104,8 +104,8 @@ Changes are **uncommitted** in this worktree on branch `claude/pedantic-taussig-
 
 Original problem: `download_file` writes to the user's local filesystem, but Claude Desktop's built-in tools (`bash`, code execution) run in a sandboxed container on Anthropic's servers and can't see local files. `localAgentModeTrustedFolders` does **not** bridge this (it's for Cowork / local agent mode, not standard chat tools), and `web_fetch` refuses URLs that didn't come from user input or prior search results — so Claude can't bypass the gap by hitting the bbcswebdav URL directly either.
 
-**Resolved by `read_file_content` tool.** Added in [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) — fetches bytes via the authenticated client, extracts text inline, returns the content as `TextContent`. No filesystem hop. Per-file cap 25 MB, batch cap 40 MB. Supported formats:
-- PDFs (`pypdf`)
+**Resolved by `read_file_content` tool.** Added in [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) — fetches bytes via the authenticated client, extracts text inline, returns the content as `TextContent` (plus `ImageContent` blocks for PDFs in the default mode). No filesystem hop. Per-file cap 25 MB, batch cap 40 MB. Supported formats:
+- **PDFs — vision mode by default** (`pymupdf`): each page is rendered as a PNG and text-extracted, so Claude sees diagrams, equations, and scanned content at the same depth as a drag-and-drop into Claude.ai. Costs ~3K vision tokens per rendered page; capped at `_MAX_PDF_PAGES_VISION = 50` pages per call. Pass `mode='text'` to skip rendering and use the cheaper `pypdf`-only path for pure-prose PDFs, or `pages='1-10'` / `pages='1,3,5'` to restrict the page range.
 - Microsoft Office: `.docx` (paragraphs + tables), `.pptx` (per-slide shapes + speaker notes), `.xlsx` (all sheets, row-by-row, capped at 1000 rows/sheet to keep grade dumps from blowing up the response)
 - Text-likes (txt, md, csv, json, xml, code, html with tags stripped — charset-aware decode)
 
@@ -129,7 +129,6 @@ In rough priority order:
 4. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
 5. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user). Also exercise `read_file_content` against real PDF / Office files.
 6. **Image-content support** — add an `image` kind that returns `ImageContent` for standalone `.jpg`/`.png`, and consider extracting embedded images from `.pptx` slides so Claude can see lecture diagrams.
-7. **PDF image / OCR support** — `pypdf` is text-only; scanned-page PDFs return empty text with a "likely scanned images" warning. Adding `pymupdf` (~4 MB) page rendering + `ImageContent` would let Claude see the pages. No branch has it yet; pick this up when the warning starts firing on real lecture material.
 
 ## Project conventions worth knowing
 

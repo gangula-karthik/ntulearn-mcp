@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -15,7 +16,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import ImageContent, TextContent, Tool
 
 from ntulearn_mcp.client import BbRouterExpiredError, NTULearnClient
 from ntulearn_mcp.cookie import read_bbrouter_cookie
@@ -40,6 +41,12 @@ _MAX_TOTAL_BYTES = 40 * 1024 * 1024
 # Per-sheet row cap for .xlsx extraction. Grade dumps and analytics exports
 # can run to millions of rows; rendering all of them blows up the response.
 _MAX_XLSX_ROWS_PER_SHEET = 1000
+
+# Cap pages rendered as ImageContent in PDF vision mode. Each rendered page is
+# ~2-3K vision tokens, so 50 pages ≈ 125K tokens — about the largest single
+# attachment a user would realistically read in one tool call. Use the `pages`
+# arg to step through bigger PDFs.
+_MAX_PDF_PAGES_VISION = 50
 
 # Pagination defaults / caps for list-returning tools.
 _DEFAULT_LIMIT = 50
@@ -353,6 +360,112 @@ def _extract_content(
     }
 
 
+def _extract_pdf_vision(
+    filename: str,
+    content_type: str | None,
+    content_bytes: bytes,
+    size: int,
+    pages_filter: set[int] | None,
+) -> dict[str, Any]:
+    """Render PDF pages to PNG + extract text per page via PyMuPDF.
+
+    Mirrors what Claude.ai does when a user attaches a PDF: per-page text
+    AND a rendered image, so the model can see diagrams / equations /
+    scanned content that pure-text extractors miss. Each rendered page
+    costs roughly 2-2.5K vision tokens, so we cap at _MAX_PDF_PAGES_VISION.
+
+    Returns a dict with the structured-content fields and a private
+    ``_images`` list of ``(label, png_bytes)`` tuples for the caller to
+    emit as ``ImageContent`` blocks. The structured payload itself does
+    not include image bytes.
+    """
+    try:
+        import fitz  # pymupdf
+    except ImportError as e:  # pragma: no cover — dep declared in pyproject
+        return {
+            "filename": filename,
+            "kind": "pdf",
+            "error": f"pymupdf not available: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    try:
+        doc = fitz.open(stream=content_bytes, filetype="pdf")
+    except Exception as e:
+        return {
+            "filename": filename,
+            "kind": "pdf",
+            "error": f"PDF could not be opened: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+
+    try:
+        if doc.is_encrypted and not doc.authenticate(""):
+            return {
+                "filename": filename,
+                "kind": "pdf",
+                "error": "PDF is password-protected. Cannot extract text.",
+                "sizeBytes": size,
+                "contentType": content_type,
+            }
+
+        total_pages = doc.page_count
+        if pages_filter is None:
+            page_indices = list(range(total_pages))
+        else:
+            # 1-indexed in the API, 0-indexed for PyMuPDF.
+            page_indices = sorted(p - 1 for p in pages_filter if 1 <= p <= total_pages)
+
+        truncated = False
+        if len(page_indices) > _MAX_PDF_PAGES_VISION:
+            page_indices = page_indices[:_MAX_PDF_PAGES_VISION]
+            truncated = True
+
+        text_parts: list[str] = []
+        images: list[tuple[str, bytes]] = []
+        # 2x zoom ≈ 144 DPI — comfortably within Claude's vision sweet spot
+        # without bloating the response. Higher DPI doesn't help once the
+        # API resizes back to its 1568px cap.
+        zoom = fitz.Matrix(2.0, 2.0)
+        for idx in page_indices:
+            page = doc[idx]
+            text_parts.append(f"## Page {idx + 1}\n\n{page.get_text()}")
+            pix = page.get_pixmap(matrix=zoom, alpha=False)
+            png_bytes = pix.tobytes("png")
+            images.append((f"{filename} · page {idx + 1}", png_bytes))
+
+        text = "\n\n".join(text_parts)
+        out: dict[str, Any] = {
+            "filename": filename,
+            "kind": "pdf",
+            "text": text,
+            "pageCount": total_pages,
+            "pagesRendered": [i + 1 for i in page_indices],
+            "_images": images,
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+        if truncated:
+            out["warning"] = (
+                f"PDF has more than {_MAX_PDF_PAGES_VISION} pages; only the first "
+                f"{_MAX_PDF_PAGES_VISION} pages of the requested range were rendered. "
+                "Use the `pages` arg to read other ranges."
+            )
+        return out
+    except Exception as e:
+        return {
+            "filename": filename,
+            "kind": "pdf",
+            "error": f"PDF vision extraction failed: {e}",
+            "sizeBytes": size,
+            "contentType": content_type,
+        }
+    finally:
+        doc.close()
+
+
 def _extract_docx(
     filename: str, content_type: str | None, content_bytes: bytes, size: int
 ) -> dict[str, Any]:
@@ -605,6 +718,51 @@ def _resolve_response_format(args: dict[str, Any]) -> str:
     return fmt
 
 
+def _resolve_pdf_mode(args: dict[str, Any]) -> str:
+    """Return 'auto' or 'text'. Default: 'auto' (matches Claude.ai's PDF flow)."""
+    mode = str(args.get("mode", "auto")).lower()
+    if mode not in ("auto", "text"):
+        raise ValueError("mode must be 'auto' or 'text'")
+    return mode
+
+
+def _parse_page_range(spec: Any) -> set[int] | None:
+    """Parse a page-range spec into a set of 1-indexed page numbers, or None for all.
+
+    Accepts strings like "1-10", "1,3,5", "1-5,8,10-12". Whitespace is
+    ignored. Returns None when spec is missing or empty so the caller can
+    treat "no filter" as "render every page".
+    """
+    if spec is None:
+        return None
+    s = str(spec).strip()
+    if not s:
+        return None
+    pages: set[int] = set()
+    for token in s.split(","):
+        t = token.strip()
+        if not t:
+            continue
+        if "-" in t:
+            lo_s, _, hi_s = t.partition("-")
+            try:
+                lo, hi = int(lo_s.strip()), int(hi_s.strip())
+            except ValueError:
+                raise ValueError(f"Invalid page range token: {t!r}")
+            if lo < 1 or hi < lo:
+                raise ValueError(f"Invalid page range: {t!r} (need 1 <= lo <= hi)")
+            pages.update(range(lo, hi + 1))
+        else:
+            try:
+                n = int(t)
+            except ValueError:
+                raise ValueError(f"Invalid page number: {t!r}")
+            if n < 1:
+                raise ValueError(f"Page numbers are 1-indexed; got {n}")
+            pages.add(n)
+    return pages or None
+
+
 def _emit(
     payload: dict[str, Any], text: str | None = None
 ) -> tuple[list[TextContent], dict[str, Any]]:
@@ -743,6 +901,7 @@ _FILE_INFO_SCHEMA = {
         "kind": {"type": "string"},
         "text": {"type": "string"},
         "pageCount": {"type": "integer"},
+        "pagesRendered": {"type": "array", "items": {"type": "integer"}},
         "paragraphCount": {"type": "integer"},
         "tableCount": {"type": "integer"},
         "slideCount": {"type": "integer"},
@@ -1017,16 +1176,22 @@ async def list_tools() -> list[Tool]:
         Tool(
             name=f"{_TOOL_PREFIX}_read_file_content",
             description=(
-                "Read the text content of files attached to a Blackboard content item, "
+                "Read the content of files attached to a Blackboard content item, "
                 "returned inline (no local-filesystem hop). Use this to ask questions "
                 "about lecture material — ntulearn_download_file is for users who "
                 "actually want the bytes on disk. "
-                "Supports PDFs (via pypdf), Microsoft Office formats (.docx, .pptx with "
-                "speaker notes, .xlsx with all sheets), and text-like files (txt, md, "
-                "csv, json, xml, html with tags stripped, code files). "
+                "PDFs default to vision mode (each page rendered to an image AND "
+                "text-extracted via PyMuPDF — same depth Claude.ai gets when a user "
+                "drag-and-drops a PDF; ~3K vision tokens per page). Pass mode='text' "
+                "to skip rendering for pure-prose PDFs, or pages='1-10' / pages='1,3,5' "
+                "to restrict the page range. "
+                "Also supports Microsoft Office formats (.docx, .pptx with speaker "
+                "notes, .xlsx with all sheets) and text-like files (txt, md, csv, "
+                "json, xml, html with tags stripped, code files). "
                 "Other binaries (images, video, audio, archives, legacy .doc/.ppt/.xls) "
                 "are listed under `skipped` — fall back to ntulearn_download_file for those. "
-                "Per-file cap 25 MB, batch cap 40 MB; oversized files are skipped."
+                f"Per-file cap 25 MB, batch cap 40 MB, vision cap "
+                f"{_MAX_PDF_PAGES_VISION} rendered pages; oversized files are skipped."
             ),
             annotations={
                 "title": "Read file content inline",
@@ -1040,6 +1205,27 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "course_id": _COURSE_ID_SCHEMA,
                     "content_id": _CONTENT_ID_SCHEMA,
+                    "mode": {
+                        "type": "string",
+                        "description": (
+                            "PDF handling. 'auto' (default) renders each page as an "
+                            "image and extracts text — matches Claude.ai's native PDF "
+                            "flow. 'text' skips rendering and returns text only via "
+                            "pypdf (cheaper; use when you know the PDF has no diagrams "
+                            "or scanned content). Ignored for non-PDF files."
+                        ),
+                        "enum": ["auto", "text"],
+                        "default": "auto",
+                    },
+                    "pages": {
+                        "type": "string",
+                        "description": (
+                            "Optional page range for PDFs (1-indexed, inclusive). "
+                            "Examples: '1-10', '3', '1,3,5', '1-5,8,10-12'. Omit to "
+                            f"render all pages (capped at {_MAX_PDF_PAGES_VISION}). "
+                            "Ignored for non-PDF files and when mode='text'."
+                        ),
+                    },
                     "response_format": _RESPONSE_FORMAT_SCHEMA,
                 },
                 "required": ["course_id", "content_id"],
@@ -1137,7 +1323,7 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(
     name: str, arguments: dict[str, Any]
-) -> tuple[list[TextContent], dict[str, Any]]:
+) -> tuple[list[TextContent | ImageContent], dict[str, Any]]:
     """Dispatch a tool call. Errors are raised so MCP wraps them with isError=True.
 
     On 401, swap in a fresh cookie once and retry. If retry still fails, the
@@ -1157,7 +1343,7 @@ async def call_tool(
 
 async def _dispatch(
     name: str, arguments: dict[str, Any]
-) -> tuple[list[TextContent], dict[str, Any]]:
+) -> tuple[list[TextContent | ImageContent], dict[str, Any]]:
     client = get_client()
     handlers = {
         f"{_TOOL_PREFIX}_list_courses": _list_courses,
@@ -1581,16 +1767,21 @@ async def _download_file(
 
 async def _read_file_content(
     client: NTULearnClient, args: dict[str, Any]
-) -> tuple[list[TextContent], dict[str, Any]]:
-    """Resolve files attached to a content item, fetch bytes, return text inline.
+) -> tuple[list[TextContent | ImageContent], dict[str, Any]]:
+    """Resolve files attached to a content item, fetch bytes, return content inline.
 
     Bypasses the local-filesystem hop that breaks Claude Desktop's sandbox:
-    rather than writing to ./downloads, the bytes are extracted (PDFs via
-    pypdf, text-likes decoded directly) and returned as TextContent.
+    rather than writing to ./downloads, the bytes are extracted in-process and
+    returned as MCP content blocks. PDFs default to vision mode (text + page
+    images via PyMuPDF, matching Claude.ai's native PDF flow); pass mode='text'
+    for the cheaper pypdf-only path. Office formats and text-likes are always
+    text-only.
     """
     course_id = args["course_id"]
     content_id = args["content_id"]
     fmt = _resolve_response_format(args)
+    pdf_mode = _resolve_pdf_mode(args)
+    pages_filter = _parse_page_range(args.get("pages"))
 
     item, handler_id, pairs = await _resolve_content_files(client, course_id, content_id)
 
@@ -1611,6 +1802,7 @@ async def _read_file_content(
 
     files_out: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    image_blocks: list[ImageContent] = []
     total_bytes = 0
 
     for url, detected_filename in pairs:
@@ -1661,7 +1853,12 @@ async def _read_file_content(
             continue
 
         total_bytes += size
-        entry = _extract_content(filename, content_type, content_bytes)
+        if _classify_kind(filename, content_type) == "pdf" and pdf_mode == "auto":
+            entry = _extract_pdf_vision(
+                filename, content_type, content_bytes, size, pages_filter
+            )
+        else:
+            entry = _extract_content(filename, content_type, content_bytes)
         if entry.get("kind") == "binary":
             skipped.append({
                 "filename": filename,
@@ -1669,8 +1866,20 @@ async def _read_file_content(
                 "sizeBytes": size,
                 "contentType": content_type,
             })
-        else:
-            files_out.append(entry)
+            continue
+
+        # Pull rendered images (if any) out of the structured payload and
+        # convert to ImageContent blocks. The bytes are too large to round-trip
+        # through structured content, and clients want them as their own blocks
+        # anyway so the model receives them as vision input.
+        for label, png_bytes in entry.pop("_images", []):
+            image_blocks.append(ImageContent(
+                type="image",
+                data=base64.b64encode(png_bytes).decode("ascii"),
+                mimeType="image/png",
+                annotations=None,
+            ))
+        files_out.append(entry)
 
     payload = {
         "contentId": content_id,
@@ -1679,7 +1888,8 @@ async def _read_file_content(
         "skipped": skipped,
     }
     text = _md_files(payload, "File contents") if fmt == "markdown" else None
-    return _emit(payload, text)
+    text_blocks, structured = _emit(payload, text)
+    return [*text_blocks, *image_blocks], structured
 
 
 async def _get_announcements(
