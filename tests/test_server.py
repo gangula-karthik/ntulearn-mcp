@@ -38,6 +38,72 @@ _TINY_PDF_B64 = (
 _TINY_PDF_BYTES = base64.b64decode(_TINY_PDF_B64)
 
 
+# --- Office-format fixture builders ----------------------------------------
+# These generate fixtures at test time using the same library under test.
+# Unlike PDF (where pypdf is the consumer), here the value is testing OUR
+# extraction wrapper — round-tripping through the library is fine.
+
+def _make_docx_bytes(
+    paragraphs: list[str], table_rows: list[list[str]] | None = None
+) -> bytes:
+    from io import BytesIO
+
+    from docx import Document
+
+    doc = Document()
+    for p in paragraphs:
+        doc.add_paragraph(p)
+    if table_rows:
+        table = doc.add_table(rows=len(table_rows), cols=len(table_rows[0]))
+        for i, row in enumerate(table_rows):
+            for j, val in enumerate(row):
+                table.rows[i].cells[j].text = val
+    buf = BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _make_pptx_bytes(slides: list[dict[str, Any]]) -> bytes:
+    """Build a deck. Each slide dict supports keys: title, body, notes."""
+    from io import BytesIO
+
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    blank = prs.slide_layouts[6]  # Blank layout — gives us full control
+    for s in slides:
+        slide = prs.slides.add_slide(blank)
+        if "title" in s:
+            tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+            tb.text_frame.text = s["title"]
+        if "body" in s:
+            tb = slide.shapes.add_textbox(Inches(1), Inches(2.5), Inches(5), Inches(2))
+            tb.text_frame.text = s["body"]
+        if s.get("notes"):
+            slide.notes_slide.notes_text_frame.text = s["notes"]
+    buf = BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def _make_xlsx_bytes(sheets: dict[str, list[list[Any]]]) -> bytes:
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    # Remove the auto-created default sheet so test sheet names are exact.
+    wb.remove(wb.active)
+    for name, rows in sheets.items():
+        ws = wb.create_sheet(name)
+        for row in rows:
+            ws.append(row)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 class _CookieEnvIsolation:
     """Mixin that snapshots NTULEARN_COOKIE + server._client and restores them."""
 
@@ -54,14 +120,15 @@ class _CookieEnvIsolation:
 
 
 class MissingCookieTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
-    async def test_missing_cookie_returns_mcp_error(self) -> None:
+    async def test_missing_cookie_raises(self) -> None:
+        # call_tool now raises on errors so the MCP framework can wrap them
+        # into CallToolResult(isError=True). Verify the message is preserved.
         os.environ.pop("NTULEARN_COOKIE", None)
         server._client = None
         with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
-            result = await server.call_tool("list_courses", {})
-
-        self.assertEqual(len(result), 1)
-        self.assertIn("No NTULearn cookie found", result[0].text)
+            with self.assertRaises(RuntimeError) as ctx:
+                await server.call_tool("ntulearn_list_courses", {})
+        self.assertIn("No NTULearn cookie found", str(ctx.exception))
 
 
 class DotenvPrecedenceTests(unittest.TestCase):
@@ -135,7 +202,7 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
 
         try:
             server._list_courses = flaky  # type: ignore[assignment]
-            result = await server.call_tool("list_courses", {})
+            result = await server.call_tool("ntulearn_list_courses", {})
         finally:
             server._list_courses = original  # type: ignore[assignment]
 
@@ -156,11 +223,12 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
             # Refresh will look for a cookie and find none.
             os.environ.pop("NTULEARN_COOKIE", None)
             with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
-                result = await server.call_tool("list_courses", {})
+                with self.assertRaises(RuntimeError) as ctx:
+                    await server.call_tool("ntulearn_list_courses", {})
         finally:
             server._list_courses = original  # type: ignore[assignment]
 
-        self.assertIn("No NTULearn cookie found", result[0].text)
+        self.assertIn("No NTULearn cookie found", str(ctx.exception))
 
     async def test_call_tool_retries_only_once(self) -> None:
         os.environ["NTULEARN_COOKIE"] = "test-cookie"
@@ -176,12 +244,13 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
 
         try:
             server._list_courses = always_expired  # type: ignore[assignment]
-            result = await server.call_tool("list_courses", {})
+            with self.assertRaises(BbRouterExpiredError):
+                await server.call_tool("ntulearn_list_courses", {})
         finally:
             server._list_courses = original  # type: ignore[assignment]
 
-        self.assertEqual(call_count, 2)  # initial + one retry, no third attempt
-        self.assertIn("expired", result[0].text.lower())
+        # initial call + one retry, no third attempt before the error propagates
+        self.assertEqual(call_count, 2)
 
 
 class FakeGradebookClient:
@@ -230,8 +299,7 @@ class FakeSearchClient:
 
 class ToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
     async def test_gradebook_partial_failure_is_reported(self) -> None:
-        result = await server._get_gradebook(FakeGradebookClient(), {"course_id": "course-1"})
-        payload = json.loads(result[0].text)
+        _, payload = await server._get_gradebook(FakeGradebookClient(), {"course_id": "course-1"})
 
         self.assertFalse(payload["gradesAvailable"])
         self.assertIn("grades endpoint unavailable", payload["gradeFetchError"])
@@ -244,34 +312,32 @@ class ToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
             server.DOWNLOAD_DIR = Path(tmp)
             (server.DOWNLOAD_DIR / "slides.pdf").write_bytes(b"old slides")
             try:
-                result = await server._download_file(
+                _, payload = await server._download_file(
                     FakeDownloadClient(), {"course_id": "course-1", "content_id": "content-1"}
                 )
             finally:
                 server.DOWNLOAD_DIR = old_download_dir
 
-            payload = json.loads(result[0].text)
             saved = payload["files"][0]
             self.assertEqual(saved["filename"], "slides (2).pdf")
             self.assertEqual((Path(tmp) / "slides.pdf").read_bytes(), b"old slides")
             self.assertEqual((Path(tmp) / "slides (2).pdf").read_bytes(), b"new slides")
 
     async def test_blank_search_query_errors(self) -> None:
-        result = await server._search_course_content(
-            FakeSearchClient(), {"course_id": "course-1", "query": "   "}
-        )
-
-        self.assertIn("query cannot be blank", result[0].text)
+        with self.assertRaises(ValueError) as ctx:
+            await server._search_course_content(
+                FakeSearchClient(), {"course_id": "course-1", "query": "   "}
+            )
+        self.assertIn("query cannot be blank", str(ctx.exception))
 
     async def test_search_max_results_caps_output(self) -> None:
-        result = await server._search_course_content(
+        _, payload = await server._search_course_content(
             FakeSearchClient(),
             {"course_id": "course-1", "query": "match", "max_results": 2},
         )
-        payload = json.loads(result[0].text)
 
-        self.assertEqual(len(payload), 2)
-        self.assertEqual([item["id"] for item in payload], ["1", "2"])
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual([item["id"] for item in payload["matches"]], ["1", "2"])
 
 
 class ContentClassificationTests(unittest.TestCase):
@@ -306,6 +372,44 @@ class ContentClassificationTests(unittest.TestCase):
         self.assertEqual(server._classify_kind("blob", None), "binary")
         self.assertEqual(
             server._classify_kind("video.mp4", "video/mp4"), "binary"
+        )
+
+    def test_docx_extension_classified(self) -> None:
+        self.assertEqual(server._classify_kind("brief.docx", None), "docx")
+
+    def test_pptx_extension_classified(self) -> None:
+        self.assertEqual(server._classify_kind("slides.pptx", None), "pptx")
+
+    def test_xlsx_extension_classified(self) -> None:
+        self.assertEqual(server._classify_kind("data.xlsx", None), "xlsx")
+
+    def test_office_mime_classified(self) -> None:
+        cases = [
+            (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document",
+                "docx",
+            ),
+            (
+                "application/vnd.openxmlformats-officedocument."
+                "presentationml.presentation",
+                "pptx",
+            ),
+            (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet",
+                "xlsx",
+            ),
+        ]
+        for mime, expected in cases:
+            with self.subTest(mime=mime):
+                self.assertEqual(server._classify_kind("file", mime), expected)
+
+    def test_docx_extension_wins_over_octet_stream(self) -> None:
+        # bbcswebdav case for Office files — same logic as the PDF test.
+        self.assertEqual(
+            server._classify_kind("brief.docx", "application/octet-stream"),
+            "docx",
         )
 
 
@@ -358,6 +462,79 @@ class ContentExtractionTests(unittest.TestCase):
         result = server._extract_content("bad.pdf", "application/pdf", b"not really a pdf")
         self.assertEqual(result["kind"], "pdf")
         self.assertIn("error", result)
+
+    def test_extracts_docx_paragraphs(self) -> None:
+        bytes_ = _make_docx_bytes(["First paragraph.", "Second paragraph."])
+        result = server._extract_content("brief.docx", None, bytes_)
+        self.assertEqual(result["kind"], "docx")
+        self.assertIn("First paragraph", result["text"])
+        self.assertIn("Second paragraph", result["text"])
+        self.assertGreaterEqual(result["paragraphCount"], 2)
+        self.assertEqual(result["tableCount"], 0)
+
+    def test_extracts_docx_table(self) -> None:
+        bytes_ = _make_docx_bytes(
+            ["Header paragraph"],
+            table_rows=[["A1", "B1"], ["A2", "B2"]],
+        )
+        result = server._extract_content("data.docx", None, bytes_)
+        self.assertEqual(result["kind"], "docx")
+        for cell in ("A1", "B1", "A2", "B2"):
+            self.assertIn(cell, result["text"])
+        self.assertEqual(result["tableCount"], 1)
+
+    def test_extracts_pptx_slides(self) -> None:
+        bytes_ = _make_pptx_bytes([
+            {"title": "Slide One", "body": "Content one"},
+            {"title": "Slide Two", "body": "Content two"},
+            {"title": "Slide Three", "body": "Content three"},
+        ])
+        result = server._extract_content("deck.pptx", None, bytes_)
+        self.assertEqual(result["kind"], "pptx")
+        self.assertEqual(result["slideCount"], 3)
+        self.assertIn("## Slide 1", result["text"])
+        self.assertIn("## Slide 3", result["text"])
+        self.assertIn("Slide One", result["text"])
+        self.assertIn("Content three", result["text"])
+
+    def test_extracts_pptx_speaker_notes(self) -> None:
+        bytes_ = _make_pptx_bytes([
+            {"title": "Title", "body": "Body", "notes": "Remember to mention X."},
+        ])
+        result = server._extract_content("deck.pptx", None, bytes_)
+        self.assertEqual(result["kind"], "pptx")
+        self.assertIn("Speaker notes", result["text"])
+        self.assertIn("Remember to mention X", result["text"])
+
+    def test_extracts_xlsx_sheets(self) -> None:
+        bytes_ = _make_xlsx_bytes({
+            "Grades": [["Student", "Score"], ["Alice", 85], ["Bob", 92]],
+            "Summary": [["Mean", 88.5]],
+        })
+        result = server._extract_content("grades.xlsx", None, bytes_)
+        self.assertEqual(result["kind"], "xlsx")
+        self.assertEqual(result["sheetCount"], 2)
+        self.assertIn("## Sheet: Grades", result["text"])
+        self.assertIn("## Sheet: Summary", result["text"])
+        self.assertIn("Alice", result["text"])
+        self.assertIn("85", result["text"])
+        self.assertIn("88.5", result["text"])
+        self.assertNotIn("warning", result)
+
+    def test_xlsx_truncates_above_row_cap(self) -> None:
+        # One sheet exceeds the cap; assert the warning + truncation marker.
+        rows = [[f"r{i}", i] for i in range(server._MAX_XLSX_ROWS_PER_SHEET + 50)]
+        bytes_ = _make_xlsx_bytes({"Big": rows})
+        result = server._extract_content("big.xlsx", None, bytes_)
+        self.assertEqual(result["kind"], "xlsx")
+        self.assertIn("warning", result)
+        self.assertIn("truncated", result["text"])
+
+    def test_corrupted_docx_returns_error(self) -> None:
+        result = server._extract_content("bad.docx", None, b"not a docx file at all")
+        self.assertEqual(result["kind"], "docx")
+        self.assertIn("error", result)
+        self.assertNotIn("text", result)
 
 
 class _StubResolveClient:
@@ -415,10 +592,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "att-1", "fileName": "slides.pdf"}],
             attachment_urls={"att-1": "/url/slides.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(len(payload["files"]), 1)
         self.assertEqual(len(payload["skipped"]), 0)
         f = payload["files"][0]
@@ -433,10 +609,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "notes.txt"}],
             attachment_urls={"a": "/u/notes.txt"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"][0]["kind"], "text")
         self.assertEqual(payload["files"][0]["text"], "hello world")
 
@@ -447,10 +622,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "page.html"}],
             attachment_urls={"a": "/u/page.html"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         text = payload["files"][0]["text"]
         self.assertNotIn("<h1>", text)
         self.assertNotIn("<body>", text)
@@ -463,10 +637,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "img.png"}],
             attachment_urls={"a": "/u/img.png"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"], [])
         self.assertEqual(len(payload["skipped"]), 1)
         skipped = payload["skipped"][0]
@@ -480,10 +653,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "huge.pdf"}],
             attachment_urls={"a": "/u/huge.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"], [])
         self.assertEqual(len(payload["skipped"]), 1)
         self.assertIn("too large", payload["skipped"][0]["reason"].lower())
@@ -497,10 +669,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "lecture.pdf"}],
             attachment_urls={"a": "/u/lecture.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"][0]["kind"], "pdf")
         self.assertIn("Hello PDF Fixture", payload["files"][0]["text"])
 
@@ -514,10 +685,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
                 "body": "<p>just some text, no links</p>",
             },
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertIn("error", payload)
         self.assertEqual(payload["title"], "Empty Item")
         self.assertEqual(payload["contentHandlerId"], "resource/x-bb-document")
@@ -550,11 +720,10 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             return refreshed
 
         with mock.patch.object(server, "_refresh_client", fake_refresh):
-            result = await server._read_file_content(
+            _, payload = await server._read_file_content(
                 flaky, {"course_id": "c", "content_id": "i"}
             )
 
-        payload = json.loads(result[0].text)
         self.assertTrue(expired_once["done"])
         self.assertEqual(payload["files"][0]["text"], "after retry")
 
@@ -572,14 +741,35 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             ],
             attachment_urls={"1": "/u/a.txt", "2": "/u/b.png", "3": "/u/c.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         kinds = sorted(f["kind"] for f in payload["files"])
         self.assertEqual(kinds, ["pdf", "text"])
         self.assertEqual(len(payload["skipped"]), 1)
         self.assertEqual(payload["skipped"][0]["filename"], "b.png")
+
+    async def test_reads_docx_attachment(self) -> None:
+        # End-to-end happy path for one Office format. The per-format unit
+        # tests in ContentExtractionTests cover pptx/xlsx parsing details;
+        # here we just verify the handler routes Office files into `files`
+        # (not `skipped`) and threads through the content_type override.
+        docx_bytes = _make_docx_bytes(["Assignment brief content."])
+        client = FakeReadClient(
+            url_to_payload={
+                "/u/brief.docx": (docx_bytes, "application/octet-stream")
+            },
+            attachments=[{"id": "a", "fileName": "brief.docx"}],
+            attachment_urls={"a": "/u/brief.docx"},
+        )
+        _, payload = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        self.assertEqual(len(payload["files"]), 1)
+        self.assertEqual(payload["skipped"], [])
+        f = payload["files"][0]
+        self.assertEqual(f["kind"], "docx")
+        self.assertIn("Assignment brief content", f["text"])
 
 
 class ResolveContentFilesTests(unittest.IsolatedAsyncioTestCase):

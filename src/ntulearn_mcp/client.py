@@ -21,12 +21,45 @@ class BbRouterExpiredError(Exception):
 
 
 class BlackboardAPIError(Exception):
-    """Raised for non-2xx responses other than 401."""
+    """Raised for non-2xx responses other than 401.
 
-    def __init__(self, status_code: int, body: str) -> None:
+    The message is tuned to be actionable for an LLM caller: it names the
+    HTTP class (not_found / forbidden / rate_limited / server_error / other)
+    and suggests a next step where one is obvious.
+    """
+
+    def __init__(self, status_code: int, body: str, *, path: str | None = None) -> None:
         self.status_code = status_code
         self.body = body
-        super().__init__(f"Blackboard API error {status_code}: {body[:500]}")
+        self.path = path
+        super().__init__(_format_api_error(status_code, body, path))
+
+
+def _format_api_error(status_code: int, body: str, path: str | None) -> str:
+    where = f" at {path}" if path else ""
+    snippet = body[:300].replace("\n", " ")
+    if status_code == 403:
+        return (
+            f"Blackboard API 403 forbidden{where}. The current user lacks "
+            f"access to this resource (course not enrolled, instructor-only "
+            f"data, or unavailable). Body: {snippet}"
+        )
+    if status_code == 404:
+        return (
+            f"Blackboard API 404 not found{where}. Check the course_id / "
+            f"content_id is correct. Body: {snippet}"
+        )
+    if status_code == 429:
+        return (
+            f"Blackboard API 429 rate limited{where}. Slow down and retry "
+            f"later. Body: {snippet}"
+        )
+    if 500 <= status_code < 600:
+        return (
+            f"Blackboard API {status_code} server error{where}. NTULearn "
+            f"may be having issues; try again shortly. Body: {snippet}"
+        )
+    return f"Blackboard API error {status_code}{where}: {snippet}"
 
 
 class NTULearnClient:
@@ -71,7 +104,7 @@ class NTULearnClient:
         if response.status_code == 401:
             raise BbRouterExpiredError()
         if not response.is_success:
-            raise BlackboardAPIError(response.status_code, response.text)
+            raise BlackboardAPIError(response.status_code, response.text, path=path)
         return response.json()
 
     async def _get_paginated(self, path: str, params: dict[str, Any] | None = None) -> list[Any]:
@@ -175,7 +208,7 @@ class NTULearnClient:
         if response.is_success:
             # Some versions return the file directly
             return path  # caller will download via _client
-        raise BlackboardAPIError(response.status_code, response.text)
+        raise BlackboardAPIError(response.status_code, response.text, path=path)
 
     # -------------------------------------------------------------------------
     # Announcements
@@ -213,7 +246,7 @@ class NTULearnClient:
         if response.status_code == 401:
             raise BbRouterExpiredError()
         if not response.is_success:
-            raise BlackboardAPIError(response.status_code, response.text)
+            raise BlackboardAPIError(response.status_code, response.text, path=url)
 
         content_type = response.headers.get("content-type")
         return response.content, content_type
