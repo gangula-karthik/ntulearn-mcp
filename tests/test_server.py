@@ -14,7 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mcp.types import TextContent
+from mcp.types import ImageContent, TextContent
 
 from ntulearn_mcp import server
 from ntulearn_mcp.client import BbRouterExpiredError, NTULearnClient
@@ -819,6 +819,226 @@ class ResolveContentFilesTests(unittest.IsolatedAsyncioTestCase):
         )
         _, _, pairs = await server._resolve_content_files(client, "c", "i")
         self.assertEqual(pairs, [])
+
+
+class PdfModeAndPageRangeParsingTests(unittest.TestCase):
+    """Pure-function tests for the PDF mode/pages arg parsers."""
+
+    def test_resolve_pdf_mode_default_is_auto(self) -> None:
+        self.assertEqual(server._resolve_pdf_mode({}), "auto")
+
+    def test_resolve_pdf_mode_explicit_text(self) -> None:
+        self.assertEqual(server._resolve_pdf_mode({"mode": "text"}), "text")
+
+    def test_resolve_pdf_mode_case_insensitive(self) -> None:
+        self.assertEqual(server._resolve_pdf_mode({"mode": "AUTO"}), "auto")
+
+    def test_resolve_pdf_mode_invalid_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            server._resolve_pdf_mode({"mode": "vision"})
+
+    def test_parse_page_range_none(self) -> None:
+        self.assertIsNone(server._parse_page_range(None))
+
+    def test_parse_page_range_empty(self) -> None:
+        self.assertIsNone(server._parse_page_range(""))
+        self.assertIsNone(server._parse_page_range("   "))
+
+    def test_parse_page_range_single_page(self) -> None:
+        self.assertEqual(server._parse_page_range("5"), {5})
+
+    def test_parse_page_range_simple_range(self) -> None:
+        self.assertEqual(server._parse_page_range("1-3"), {1, 2, 3})
+
+    def test_parse_page_range_mixed(self) -> None:
+        self.assertEqual(
+            server._parse_page_range("1-3,5,8-9"), {1, 2, 3, 5, 8, 9}
+        )
+
+    def test_parse_page_range_whitespace_tolerated(self) -> None:
+        self.assertEqual(server._parse_page_range(" 1 - 3 , 5 "), {1, 2, 3, 5})
+
+    def test_parse_page_range_invalid_token_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            server._parse_page_range("abc")
+
+    def test_parse_page_range_zero_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            server._parse_page_range("0")
+
+    def test_parse_page_range_inverted_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            server._parse_page_range("5-3")
+
+
+class PdfVisionExtractionTests(unittest.TestCase):
+    """Pure-function tests for _extract_pdf_vision."""
+
+    def test_renders_each_page_as_png(self) -> None:
+        result = server._extract_pdf_vision(
+            "slides.pdf", "application/pdf", _TINY_PDF_BYTES, len(_TINY_PDF_BYTES), None
+        )
+        self.assertEqual(result["kind"], "pdf")
+        self.assertEqual(result["pageCount"], 1)
+        self.assertEqual(result["pagesRendered"], [1])
+        images = result["_images"]
+        self.assertEqual(len(images), 1)
+        label, png_bytes = images[0]
+        self.assertIn("page 1", label)
+        # PNG magic header — confirms PyMuPDF actually rendered an image.
+        self.assertTrue(png_bytes.startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_text_includes_per_page_header(self) -> None:
+        result = server._extract_pdf_vision(
+            "slides.pdf", "application/pdf", _TINY_PDF_BYTES, len(_TINY_PDF_BYTES), None
+        )
+        self.assertIn("## Page 1", result["text"])
+        self.assertIn("Hello PDF Fixture", result["text"])
+
+    def test_pages_filter_restricts_render(self) -> None:
+        # Filter to a non-existent page — extractor should render nothing
+        # and report empty pagesRendered. This exercises the 1-indexed
+        # bounds check without needing a multi-page fixture.
+        result = server._extract_pdf_vision(
+            "slides.pdf",
+            "application/pdf",
+            _TINY_PDF_BYTES,
+            len(_TINY_PDF_BYTES),
+            {99},
+        )
+        self.assertEqual(result["pageCount"], 1)
+        self.assertEqual(result["pagesRendered"], [])
+        self.assertEqual(result["_images"], [])
+
+    def test_corrupted_pdf_returns_error(self) -> None:
+        result = server._extract_pdf_vision(
+            "bad.pdf", "application/pdf", b"not really a pdf", 16, None
+        )
+        self.assertEqual(result["kind"], "pdf")
+        self.assertIn("error", result)
+        self.assertNotIn("_images", result)
+
+
+class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
+    """End-to-end tests for the vision/text mode handling in _read_file_content."""
+
+    async def test_auto_mode_emits_image_blocks(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        content, payload = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        # Structured payload still has the text + page count.
+        f = payload["files"][0]
+        self.assertEqual(f["kind"], "pdf")
+        self.assertEqual(f["pageCount"], 1)
+        self.assertEqual(f["pagesRendered"], [1])
+        # Structured payload must NOT carry the raw image bytes — those
+        # only belong in the unstructured content list as ImageContent.
+        self.assertNotIn("_images", f)
+        # Unstructured content includes one TextContent + one ImageContent.
+        text_blocks = [b for b in content if isinstance(b, TextContent)]
+        image_blocks = [b for b in content if isinstance(b, ImageContent)]
+        self.assertEqual(len(text_blocks), 1)
+        self.assertEqual(len(image_blocks), 1)
+        self.assertEqual(image_blocks[0].mimeType, "image/png")
+        # base64 data is non-empty and decodes back to a PNG.
+        self.assertTrue(image_blocks[0].data)
+        self.assertTrue(
+            base64.b64decode(image_blocks[0].data).startswith(b"\x89PNG\r\n\x1a\n")
+        )
+
+    async def test_text_mode_skips_image_rendering(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        content, payload = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i", "mode": "text"}
+        )
+        f = payload["files"][0]
+        self.assertEqual(f["kind"], "pdf")
+        # text-mode pypdf path does not populate pagesRendered.
+        self.assertNotIn("pagesRendered", f)
+        self.assertIn("Hello PDF Fixture", f["text"])
+        # No ImageContent blocks in the unstructured content list.
+        image_blocks = [b for b in content if isinstance(b, ImageContent)]
+        self.assertEqual(image_blocks, [])
+
+    async def test_invalid_mode_raises(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        with self.assertRaises(ValueError):
+            await server._read_file_content(
+                client,
+                {"course_id": "c", "content_id": "i", "mode": "vision"},
+            )
+
+    async def test_pages_filter_threads_through(self) -> None:
+        # Single-page PDF; pages="1" preserves it. Asserts the arg actually
+        # reaches _extract_pdf_vision (vs. being silently dropped).
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        _, payload = await server._read_file_content(
+            client,
+            {"course_id": "c", "content_id": "i", "pages": "1"},
+        )
+        self.assertEqual(payload["files"][0]["pagesRendered"], [1])
+
+    async def test_pages_filter_excludes_out_of_range(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        content, payload = await server._read_file_content(
+            client,
+            {"course_id": "c", "content_id": "i", "pages": "99"},
+        )
+        # Page 99 doesn't exist on a 1-page PDF — extractor should render
+        # nothing and we should see no ImageContent.
+        self.assertEqual(payload["files"][0]["pagesRendered"], [])
+        image_blocks = [b for b in content if isinstance(b, ImageContent)]
+        self.assertEqual(image_blocks, [])
+
+    async def test_invalid_pages_arg_raises(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        with self.assertRaises(ValueError):
+            await server._read_file_content(
+                client,
+                {"course_id": "c", "content_id": "i", "pages": "abc"},
+            )
+
+    async def test_text_mode_does_not_apply_to_office_formats(self) -> None:
+        # mode='text' is only meaningful for PDFs; .docx still extracts
+        # paragraphs via python-docx and produces no ImageContent.
+        docx_bytes = _make_docx_bytes(["Sample text body."])
+        client = FakeReadClient(
+            url_to_payload={"/u/brief.docx": (docx_bytes, None)},
+            attachments=[{"id": "a", "fileName": "brief.docx"}],
+            attachment_urls={"a": "/u/brief.docx"},
+        )
+        content, payload = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i", "mode": "text"}
+        )
+        self.assertEqual(payload["files"][0]["kind"], "docx")
+        self.assertIn("Sample text body", payload["files"][0]["text"])
+        image_blocks = [b for b in content if isinstance(b, ImageContent)]
+        self.assertEqual(image_blocks, [])
 
 
 if __name__ == "__main__":
