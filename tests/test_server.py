@@ -54,14 +54,15 @@ class _CookieEnvIsolation:
 
 
 class MissingCookieTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
-    async def test_missing_cookie_returns_mcp_error(self) -> None:
+    async def test_missing_cookie_raises(self) -> None:
+        # call_tool now raises on errors so the MCP framework can wrap them
+        # into CallToolResult(isError=True). Verify the message is preserved.
         os.environ.pop("NTULEARN_COOKIE", None)
         server._client = None
         with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
-            result = await server.call_tool("list_courses", {})
-
-        self.assertEqual(len(result), 1)
-        self.assertIn("No NTULearn cookie found", result[0].text)
+            with self.assertRaises(RuntimeError) as ctx:
+                await server.call_tool("ntulearn_list_courses", {})
+        self.assertIn("No NTULearn cookie found", str(ctx.exception))
 
 
 class DotenvPrecedenceTests(unittest.TestCase):
@@ -135,7 +136,7 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
 
         try:
             server._list_courses = flaky  # type: ignore[assignment]
-            result = await server.call_tool("list_courses", {})
+            result = await server.call_tool("ntulearn_list_courses", {})
         finally:
             server._list_courses = original  # type: ignore[assignment]
 
@@ -156,11 +157,12 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
             # Refresh will look for a cookie and find none.
             os.environ.pop("NTULEARN_COOKIE", None)
             with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
-                result = await server.call_tool("list_courses", {})
+                with self.assertRaises(RuntimeError) as ctx:
+                    await server.call_tool("ntulearn_list_courses", {})
         finally:
             server._list_courses = original  # type: ignore[assignment]
 
-        self.assertIn("No NTULearn cookie found", result[0].text)
+        self.assertIn("No NTULearn cookie found", str(ctx.exception))
 
     async def test_call_tool_retries_only_once(self) -> None:
         os.environ["NTULEARN_COOKIE"] = "test-cookie"
@@ -176,12 +178,13 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
 
         try:
             server._list_courses = always_expired  # type: ignore[assignment]
-            result = await server.call_tool("list_courses", {})
+            with self.assertRaises(BbRouterExpiredError):
+                await server.call_tool("ntulearn_list_courses", {})
         finally:
             server._list_courses = original  # type: ignore[assignment]
 
-        self.assertEqual(call_count, 2)  # initial + one retry, no third attempt
-        self.assertIn("expired", result[0].text.lower())
+        # initial call + one retry, no third attempt before the error propagates
+        self.assertEqual(call_count, 2)
 
 
 class FakeGradebookClient:
@@ -230,8 +233,7 @@ class FakeSearchClient:
 
 class ToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
     async def test_gradebook_partial_failure_is_reported(self) -> None:
-        result = await server._get_gradebook(FakeGradebookClient(), {"course_id": "course-1"})
-        payload = json.loads(result[0].text)
+        _, payload = await server._get_gradebook(FakeGradebookClient(), {"course_id": "course-1"})
 
         self.assertFalse(payload["gradesAvailable"])
         self.assertIn("grades endpoint unavailable", payload["gradeFetchError"])
@@ -244,34 +246,32 @@ class ToolBehaviorTests(unittest.IsolatedAsyncioTestCase):
             server.DOWNLOAD_DIR = Path(tmp)
             (server.DOWNLOAD_DIR / "slides.pdf").write_bytes(b"old slides")
             try:
-                result = await server._download_file(
+                _, payload = await server._download_file(
                     FakeDownloadClient(), {"course_id": "course-1", "content_id": "content-1"}
                 )
             finally:
                 server.DOWNLOAD_DIR = old_download_dir
 
-            payload = json.loads(result[0].text)
             saved = payload["files"][0]
             self.assertEqual(saved["filename"], "slides (2).pdf")
             self.assertEqual((Path(tmp) / "slides.pdf").read_bytes(), b"old slides")
             self.assertEqual((Path(tmp) / "slides (2).pdf").read_bytes(), b"new slides")
 
     async def test_blank_search_query_errors(self) -> None:
-        result = await server._search_course_content(
-            FakeSearchClient(), {"course_id": "course-1", "query": "   "}
-        )
-
-        self.assertIn("query cannot be blank", result[0].text)
+        with self.assertRaises(ValueError) as ctx:
+            await server._search_course_content(
+                FakeSearchClient(), {"course_id": "course-1", "query": "   "}
+            )
+        self.assertIn("query cannot be blank", str(ctx.exception))
 
     async def test_search_max_results_caps_output(self) -> None:
-        result = await server._search_course_content(
+        _, payload = await server._search_course_content(
             FakeSearchClient(),
             {"course_id": "course-1", "query": "match", "max_results": 2},
         )
-        payload = json.loads(result[0].text)
 
-        self.assertEqual(len(payload), 2)
-        self.assertEqual([item["id"] for item in payload], ["1", "2"])
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual([item["id"] for item in payload["matches"]], ["1", "2"])
 
 
 class ContentClassificationTests(unittest.TestCase):
@@ -415,10 +415,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "att-1", "fileName": "slides.pdf"}],
             attachment_urls={"att-1": "/url/slides.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(len(payload["files"]), 1)
         self.assertEqual(len(payload["skipped"]), 0)
         f = payload["files"][0]
@@ -433,10 +432,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "notes.txt"}],
             attachment_urls={"a": "/u/notes.txt"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"][0]["kind"], "text")
         self.assertEqual(payload["files"][0]["text"], "hello world")
 
@@ -447,10 +445,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "page.html"}],
             attachment_urls={"a": "/u/page.html"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         text = payload["files"][0]["text"]
         self.assertNotIn("<h1>", text)
         self.assertNotIn("<body>", text)
@@ -463,10 +460,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "img.png"}],
             attachment_urls={"a": "/u/img.png"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"], [])
         self.assertEqual(len(payload["skipped"]), 1)
         skipped = payload["skipped"][0]
@@ -480,10 +476,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "huge.pdf"}],
             attachment_urls={"a": "/u/huge.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"], [])
         self.assertEqual(len(payload["skipped"]), 1)
         self.assertIn("too large", payload["skipped"][0]["reason"].lower())
@@ -497,10 +492,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             attachments=[{"id": "a", "fileName": "lecture.pdf"}],
             attachment_urls={"a": "/u/lecture.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertEqual(payload["files"][0]["kind"], "pdf")
         self.assertIn("Hello PDF Fixture", payload["files"][0]["text"])
 
@@ -514,10 +508,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
                 "body": "<p>just some text, no links</p>",
             },
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         self.assertIn("error", payload)
         self.assertEqual(payload["title"], "Empty Item")
         self.assertEqual(payload["contentHandlerId"], "resource/x-bb-document")
@@ -550,11 +543,10 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             return refreshed
 
         with mock.patch.object(server, "_refresh_client", fake_refresh):
-            result = await server._read_file_content(
+            _, payload = await server._read_file_content(
                 flaky, {"course_id": "c", "content_id": "i"}
             )
 
-        payload = json.loads(result[0].text)
         self.assertTrue(expired_once["done"])
         self.assertEqual(payload["files"][0]["text"], "after retry")
 
@@ -572,10 +564,9 @@ class ReadFileContentTests(unittest.IsolatedAsyncioTestCase):
             ],
             attachment_urls={"1": "/u/a.txt", "2": "/u/b.png", "3": "/u/c.pdf"},
         )
-        result = await server._read_file_content(
+        _, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
         )
-        payload = json.loads(result[0].text)
         kinds = sorted(f["kind"] for f in payload["files"])
         self.assertEqual(kinds, ["pdf", "text"])
         self.assertEqual(len(payload["skipped"]), 1)

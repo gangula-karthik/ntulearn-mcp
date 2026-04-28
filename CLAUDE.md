@@ -58,9 +58,36 @@ Graceful degradation works (no crash, clean fall-through to error message), but 
 
 If usage data shows ~all friends are Windows-Chrome, consider escalating to a browser extension (the `chrome.cookies` API is unaffected by ABE) as the actual primary path.
 
-## What's implemented this session
+## mcp-builder remediation pass (claude/mcp-builder-eval)
 
-All 24 tests pass: `uv run python -m unittest discover -s tests`.
+The work on this branch closes every issue raised by the `anthropic-skills:mcp-builder`
+skill review. See [evals/REPORT.md](evals/REPORT.md) for the full audit + remediation
+table. Highlights:
+
+- All 9 tools are renamed `ntulearn_*` (no more collision risk with other MCP servers).
+- Every tool carries `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`
+  annotations. Only `ntulearn_download_file` is `readOnlyHint=False`.
+- List-returning tools (`list_courses`, `get_course_contents`, `get_folder_children`,
+  `get_announcements`, `get_gradebook`) accept `limit`/`offset` and return
+  `{total, count, offset, limit, hasMore, nextOffset}` pagination metadata.
+- Every data-returning tool accepts `response_format ∈ {json, markdown}`.
+- Every tool declares an `outputSchema`. Handlers return
+  `(unstructured_content, structured_content)` tuples — MCP propagates both forms
+  to clients and validates structured against the schema.
+- Errors raise instead of returning success-shaped TextContent. The MCP framework
+  wraps in `CallToolResult(isError=True, …)` automatically.
+- `course_id`/`content_id` patterns + length, `query` `minLength`, `max_depth`
+  capped at 10, `limit`/`max_results` capped at 200, `additionalProperties: false`
+  on every input schema. SDK enforces before our code runs.
+- `BlackboardAPIError` distinguishes 403/404/429/5xx with actionable messages
+  including the request path.
+- `_validate_cookie_value` rejects CR/LF/NUL on cookie ingest (header-injection
+  defence in depth).
+- 31 new tests in `tests/test_fixes.py` cover every behaviour change.
+
+## Test status
+
+All 81 tests pass: `uv run python -m unittest discover -s tests`.
 
 | File | Status | Notes |
 |---|---|---|
