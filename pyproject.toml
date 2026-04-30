@@ -1,6 +1,6 @@
 [project]
 name = "ntulearn-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP server wrapping the Blackboard Learn REST API for NTULearn (NTU Singapore's LMS)."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -26,6 +26,7 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "browser-cookie3>=0.20.1",
     "httpx>=0.28.1",
+    "keyring>=25.0",
     "mcp[cli]>=1.27.0",
     "openpyxl>=3.1",
     "pydantic>=2.13.3",

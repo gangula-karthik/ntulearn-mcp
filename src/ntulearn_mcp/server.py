@@ -18,6 +18,11 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import ImageContent, TextContent, Tool
 
+from ntulearn_mcp.cache import (
+    delete_cached_cookie,
+    read_cached_cookie,
+    write_cached_cookie,
+)
 from ntulearn_mcp.client import BbRouterExpiredError, NTULearnClient
 from ntulearn_mcp.cookie import read_bbrouter_cookie
 from ntulearn_mcp.parsers import extract_all_files
@@ -108,13 +113,45 @@ def _validate_cookie_value(value: str) -> str:
 
 
 def _resolve_cookie() -> str:
-    """Resolve the BbRouter cookie. Explicit env var wins over browser auto-read."""
+    """Resolve the BbRouter cookie.
+
+    Resolution order:
+      1. ``NTULEARN_COOKIE`` env var — explicit override always wins.
+      2. ``read_bbrouter_cookie()`` — auto-read from a logged-in browser.
+         On success the value is mirrored to the OS keychain so the next
+         resolution can fall back to it if the browser read fails.
+      3. ``read_cached_cookie()`` — last-known-good value from the OS
+         keychain. This is what makes the server resilient to transient
+         ``browser-cookie3`` failures (SQLite write-lock races, keychain
+         timeouts) and to permanent ones (Windows + Chrome/Edge ABE)
+         once *any* successful read has happened.
+      4. Raise — there is nothing useful left to try.
+
+    Cache writes use the value from the *current* successful read, so a
+    rotated cookie naturally supersedes the stored one. Cache reads are
+    invalidated by ``_refresh_client`` after a 401 so we don't loop on
+    a dead value.
+    """
     explicit = os.getenv("NTULEARN_COOKIE", "").strip()
     if explicit:
         return _validate_cookie_value(explicit)
+
     auto = read_bbrouter_cookie()
     if auto:
+        # Persist for next time. Best-effort: a missing/broken keyring
+        # backend just returns False and we move on.
+        write_cached_cookie(auto)
         return _validate_cookie_value(auto)
+
+    cached = read_cached_cookie()
+    if cached:
+        # Browser read failed (transient race, ABE on Windows, browser
+        # signed out, etc.). The cached value is from the most recent
+        # successful read — likely still valid since BbRouter cookies
+        # last days–weeks. If it's expired, the 401-retry path in
+        # _refresh_client will nuke it and force a re-resolve.
+        return _validate_cookie_value(cached)
+
     raise RuntimeError(_NO_COOKIE_MESSAGE)
 
 
@@ -128,13 +165,17 @@ def get_client() -> NTULearnClient:
 async def _refresh_client() -> NTULearnClient:
     """Discard the current client, re-read the cookie, build a fresh client.
 
-    Called after a 401 so that an expired cookie can be transparently swapped
-    for the fresh value the user's browser already has.
+    Called after a 401 so an expired cookie can be transparently swapped
+    for the fresh value the user's browser already has. Invalidates the
+    keychain cache first — the cookie we just used produced a 401, so it's
+    dead, and leaving it in the cache would let the next resolution loop
+    back to the same dead value.
     """
     global _client
     if _client is not None:
         await _client.close()
         _client = None
+    delete_cached_cookie()
     _client = NTULearnClient(BASE_URL, _resolve_cookie())
     return _client
 

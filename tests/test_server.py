@@ -105,13 +105,36 @@ def _make_xlsx_bytes(sheets: dict[str, list[list[Any]]]) -> bytes:
 
 
 class _CookieEnvIsolation:
-    """Mixin that snapshots NTULEARN_COOKIE + server._client and restores them."""
+    """Mixin that snapshots NTULEARN_COOKIE + server._client and restores them.
+
+    Also stubs out the keychain cache so tests never touch the user's real
+    OS keychain. Tests that want to exercise specific cache behavior can
+    re-patch the same symbols inside the test body.
+    """
 
     def setUp(self) -> None:
         self._old_env = os.environ.get("NTULEARN_COOKIE")
         self._old_client = server._client
 
+        # Default: cache is empty and inert. Start patches here so every
+        # cookie-related test gets the same hermetic baseline.
+        self._cache_read_patch = mock.patch.object(
+            server, "read_cached_cookie", return_value=None
+        )
+        self._cache_write_patch = mock.patch.object(
+            server, "write_cached_cookie", return_value=False
+        )
+        self._cache_delete_patch = mock.patch.object(
+            server, "delete_cached_cookie", return_value=None
+        )
+        self._cache_read_patch.start()
+        self._cache_write_patch.start()
+        self._cache_delete_patch.start()
+
     def tearDown(self) -> None:
+        self._cache_delete_patch.stop()
+        self._cache_write_patch.stop()
+        self._cache_read_patch.stop()
         if self._old_env is None:
             os.environ.pop("NTULEARN_COOKIE", None)
         else:
@@ -176,6 +199,68 @@ class CookieResolutionTests(_CookieEnvIsolation, unittest.TestCase):
         with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:
                 server._resolve_cookie()
+        self.assertIn("No NTULearn cookie found", str(ctx.exception))
+
+    # --- Cache integration -----------------------------------------------
+    # The hot path: every successful browser read mirrors the value into the
+    # OS keychain so the next resolution can ride through a transient
+    # browser-cookie3 failure (SQLite race, keychain timeout, ABE flake).
+
+    def test_successful_browser_read_writes_value_to_cache(self) -> None:
+        os.environ.pop("NTULEARN_COOKIE", None)
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value="fresh-value"):
+            with mock.patch.object(server, "write_cached_cookie") as write:
+                server._resolve_cookie()
+        write.assert_called_once_with("fresh-value")
+
+    def test_falls_back_to_cache_when_browser_returns_none(self) -> None:
+        os.environ.pop("NTULEARN_COOKIE", None)
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
+            with mock.patch.object(
+                server, "read_cached_cookie", return_value="cached-value"
+            ):
+                self.assertEqual(server._resolve_cookie(), "cached-value")
+
+    def test_browser_value_preferred_over_cache_when_both_present(self) -> None:
+        # Cookie may have rotated since the cache was last written; the
+        # browser is the source of truth, cache is just a fallback.
+        os.environ.pop("NTULEARN_COOKIE", None)
+        with mock.patch.object(
+            server, "read_bbrouter_cookie", return_value="rotated-value"
+        ):
+            with mock.patch.object(
+                server, "read_cached_cookie", return_value="stale-cached-value"
+            ):
+                self.assertEqual(server._resolve_cookie(), "rotated-value")
+
+    def test_env_var_does_not_touch_cache(self) -> None:
+        # An explicit NTULEARN_COOKIE is the user's deliberate override —
+        # we shouldn't mirror it into the keychain (it might be a one-off
+        # debugging value) or read from the keychain to second-guess it.
+        os.environ["NTULEARN_COOKIE"] = "explicit"
+        with mock.patch.object(server, "read_bbrouter_cookie") as browser:
+            with mock.patch.object(server, "write_cached_cookie") as write:
+                with mock.patch.object(server, "read_cached_cookie") as read_cache:
+                    self.assertEqual(server._resolve_cookie(), "explicit")
+        browser.assert_not_called()
+        write.assert_not_called()
+        read_cache.assert_not_called()
+
+    def test_does_not_consult_cache_when_browser_succeeds(self) -> None:
+        # Hot-path optimization: if the browser read works, we don't need
+        # to bother reading the cache too.
+        os.environ.pop("NTULEARN_COOKIE", None)
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value="from-browser"):
+            with mock.patch.object(server, "read_cached_cookie") as read_cache:
+                server._resolve_cookie()
+        read_cache.assert_not_called()
+
+    def test_raises_when_browser_fails_and_cache_empty(self) -> None:
+        os.environ.pop("NTULEARN_COOKIE", None)
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
+            with mock.patch.object(server, "read_cached_cookie", return_value=None):
+                with self.assertRaises(RuntimeError) as ctx:
+                    server._resolve_cookie()
         self.assertIn("No NTULearn cookie found", str(ctx.exception))
 
 
@@ -251,6 +336,19 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
 
         # initial call + one retry, no third attempt before the error propagates
         self.assertEqual(call_count, 2)
+
+    async def test_refresh_invalidates_cache_before_resolving(self) -> None:
+        # The cookie that just produced a 401 might be the one in the cache
+        # (we may have used it as a fallback when the browser failed). If we
+        # re-resolve without nuking the cache first and the browser is still
+        # failing, we'd loop forever on the same dead value.
+        os.environ["NTULEARN_COOKIE"] = "test-cookie"
+        server._client = NTULearnClient(server.BASE_URL, "test-cookie")
+
+        with mock.patch.object(server, "delete_cached_cookie") as delete:
+            await server._refresh_client()
+
+        delete.assert_called_once()
 
 
 class FakeGradebookClient:

@@ -9,7 +9,8 @@ Context for AI assistants resuming work on this repo. Captures the **decisions a
 Source layout in [src/ntulearn_mcp/](src/ntulearn_mcp/):
 - [server.py](src/ntulearn_mcp/server.py) — MCP entrypoint, tool handlers, cookie resolution, 401-retry wrapper
 - [client.py](src/ntulearn_mcp/client.py) — async httpx-based Blackboard REST client
-- [cookie.py](src/ntulearn_mcp/cookie.py) — browser cookie auto-read (added in this session)
+- [cookie.py](src/ntulearn_mcp/cookie.py) — browser cookie auto-read with bounded retry/backoff
+- [cache.py](src/ntulearn_mcp/cache.py) — last-known-good cookie persisted to OS keychain via `keyring`
 - [parsers.py](src/ntulearn_mcp/parsers.py) — HTML body → download URL extraction
 
 ## Audience and distribution decision
@@ -29,11 +30,31 @@ Source layout in [src/ntulearn_mcp/](src/ntulearn_mcp/):
 Blackboard auth is via the `BbRouter` cookie (`HttpOnly`, `Secure`, typically lasts days–weeks). Every approach has to either get the user to copy it from DevTools or read it from a browser they're already logged into.
 
 **Resolution order in [server.py:_resolve_cookie](src/ntulearn_mcp/server.py):**
-1. `NTULEARN_COOKIE` env var (explicit override, always wins)
-2. [cookie.py:read_bbrouter_cookie](src/ntulearn_mcp/cookie.py) — walks Edge → Chrome → Firefox → Brave via `browser-cookie3`, returns first valid value (validated by `expires:` prefix to reject ABE-decrypt-to-garbage)
-3. `RuntimeError` with a help message pointing to manual setup
+1. `NTULEARN_COOKIE` env var (explicit override, always wins; never touches cache)
+2. [cookie.py:read_bbrouter_cookie](src/ntulearn_mcp/cookie.py) — walks Edge → Chrome → Firefox → Brave via `browser-cookie3` with bounded retry + exponential backoff (0.5s → 1.0s → 2.0s by default). Returns first valid value (validated by `expires:` prefix). On success the value is mirrored into the OS keychain via [cache.py:write_cached_cookie](src/ntulearn_mcp/cache.py).
+3. [cache.py:read_cached_cookie](src/ntulearn_mcp/cache.py) — last-known-good value from the OS keychain (`keyring`: macOS Keychain / Windows Credential Manager / Linux Secret Service / KWallet). This is the band-aid for both transient `browser-cookie3` failures (SQLite write-lock race, keychain timeout, TCC re-evaluation) and the permanent Windows + Chrome/Edge ABE block — once *any* successful read has happened on this machine, subsequent resolutions ride through the cookie's lifetime even if the browser path keeps failing.
+4. `RuntimeError` with a help message pointing to manual env-var setup.
 
-**Mid-session expiry:** `call_tool` catches `BbRouterExpiredError`, calls `_refresh_client()` (which re-runs resolution and rebuilds the httpx client), retries the call once, then surfaces. Transparent for the user when the browser still has a fresh session.
+**Mid-session expiry:** `call_tool` catches `BbRouterExpiredError`, calls `_refresh_client()` which:
+1. Closes the existing httpx client.
+2. **Invalidates the cookie cache** ([cache.py:delete_cached_cookie](src/ntulearn_mcp/cache.py)) — the cookie that just produced the 401 is dead, and leaving it cached would let the next resolution loop on the same dead value if `browser-cookie3` is also failing.
+3. Re-runs `_resolve_cookie()` and rebuilds the client.
+
+`call_tool` then retries the failed call once. Transparent for the user when the browser still has a fresh session.
+
+**How the cache shifts the failure surface:**
+
+| Scenario | Pre-cache | Post-cache |
+|---|---|---|
+| Mac/Linux, transient `browser-cookie3` race, ever-succeeded before | Retry exhausts → error, user retries the call | Cache fallback → success, user sees nothing |
+| Windows + Chrome/Edge ABE, ever-succeeded before (Firefox once, admin run, env-var seed) | Permanent error until manual env var | Cache fallback for cookie's full lifetime → success |
+| Genuinely no NTULearn login anywhere ever | Errors with help message | Same (cache empty too) |
+| Cookie expires mid-session | 401 → refresh → re-read browser → use fresh value | Same; cache transparently nuked + rewritten |
+| User logged out + back in (cookie rotated) | Browser auto-read gets fresh value, cache stale | Browser still wins over cache when both present; fresh value overwrites stale cache entry |
+
+The cache does **not** fix:
+- A cold-start machine with no NTULearn login anywhere (cache is empty).
+- Windows + Chrome/Edge ABE on the *very first* resolution before any successful read has happened. Falls back to env var or "no cookie" error as before.
 
 ## Known limitation: Windows + Chrome/Edge
 
@@ -52,11 +73,21 @@ Graceful degradation works (no crash, clean fall-through to error message), but 
 - Manual env var fallback needed for: Windows + Chrome/Edge users — most NTU students.
 - Do **not** advise users to "run Claude Desktop as admin" — elevates everything else too.
 
-**Open question:** is `browser-cookie3` worth keeping as default given how often it falls through on the target platform? Two reasons it still earns its keep:
-1. Cross-platform users (Mac/Linux) get the magic UX.
-2. Even when initial resolution falls back to env var, the **mid-session refresh** still works for non-Chromium-on-Windows browsers — auto-handles cookie expiry without user intervention.
+**Mac + Claude Desktop + `.mcpb`: auto-read works, but is intermittent.** Empirically observed on this dev machine — `mcp-server-ntulearn.log` shows 5+ successful auto-reads followed by a single "No NTULearn cookie found" error, then immediate success again 30s later in the same server process. The mcpb child can access Chrome's cookie DB / Keychain (otherwise it would never succeed), but reads occasionally race with browser writes, keychain access timeouts, or TCC re-evaluation.
 
-If usage data shows ~all friends are Windows-Chrome, consider escalating to a browser extension (the `chrome.cookies` API is unaffected by ABE) as the actual primary path.
+**Mitigations now in place:**
+- [cookie.py](src/ntulearn_mcp/cookie.py) does a bounded retry with exponential backoff (0.5s → 1.0s → 2.0s, 3 attempts total). Catches the in-band transient cases.
+- [cache.py](src/ntulearn_mcp/cache.py) persists every successful read into the OS keychain. The next resolution reads the cache if `browser-cookie3` fails, so a single successful browser read carries the user through the cookie's full lifetime.
+- [server.py:_refresh_client](src/ntulearn_mcp/server.py) invalidates the cache before re-resolving on 401, so we don't loop on a dead cookie.
+
+**Net effect on the target platforms:**
+- Mac/Linux (`browser-cookie3` works most of the time): user almost never sees a transient failure. Retry catches in-band races; cache catches the rest.
+- Windows + Firefox: same as Mac/Linux.
+- Windows + Chrome/Edge (ABE): browser auto-read fails permanently. **But** if the user has *ever* successfully resolved a cookie on this machine — via Firefox, an admin run, or seeding `NTULEARN_COOKIE` once — the cache holds the value for the cookie's lifetime (days–weeks). They keep getting silent renewals via the 401-refresh path until the underlying NTULearn session expires.
+
+**Remaining failure mode:** cold-start on Windows + Chrome/Edge with no Firefox installed and no env-var seed. Browser auto-read hits ABE; cache is empty; we raise. User has to either install Firefox, paste the cookie once into `NTULEARN_COOKIE`, or accept the ABE block. None of those are zero-friction, but they're each one-time.
+
+**Browser extension is no longer the only architectural escape.** Cache-backed `browser-cookie3` covers ~all "ever-succeeded" cases. Browser extension would still be the only way to make the cold-start Windows-Chrome path zero-friction.
 
 ## mcp-builder remediation pass (claude/mcp-builder-eval)
 
@@ -87,16 +118,18 @@ table. Highlights:
 
 ## Test status
 
-All 81 tests pass: `uv run python -m unittest discover -s tests`.
+All 155 tests pass: `uv run python -m unittest discover -s tests`.
 
 | File | Status | Notes |
 |---|---|---|
-| [src/ntulearn_mcp/cookie.py](src/ntulearn_mcp/cookie.py) | new | Dependency-injectable for tests via `module=` kwarg |
-| [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) | modified | Removed module-level `COOKIE` constant; added `_resolve_cookie`, `_refresh_client`, `_dispatch`; refactored `call_tool` for 401-retry |
-| [pyproject.toml](pyproject.toml) | modified | Added `browser-cookie3>=0.20.1` |
-| [tests/test_cookie.py](tests/test_cookie.py) | new | 8 tests, all use a `_fake_module` SimpleNamespace — no real browser access |
-| [tests/test_server.py](tests/test_server.py) | modified | Existing tests adapted; added `CookieResolutionTests` (4) and `CookieRefreshTests` (3) |
-| [uv.lock](uv.lock) | modified | Reflects new deps (cryptography, pycryptodomex, lz4, pywin32, etc.) |
+| [src/ntulearn_mcp/cookie.py](src/ntulearn_mcp/cookie.py) | modified | Dependency-injectable for tests via `module=` kwarg; added bounded retry + exponential backoff (0.5s → 1.0s → 2.0s), injectable `sleep` for fast tests, structured browser-error logging |
+| [src/ntulearn_mcp/cache.py](src/ntulearn_mcp/cache.py) | new | OS-keychain cookie cache via `keyring`. Read/write/delete all degrade to no-op on backend failure |
+| [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) | modified | `_resolve_cookie` now mirrors browser reads to cache and falls back to cache on browser failure; `_refresh_client` invalidates cache before re-resolving |
+| [pyproject.toml](pyproject.toml) | modified | Added `browser-cookie3>=0.20.1`, `keyring>=25.0`; bumped version to 0.1.1 |
+| [tests/test_cookie.py](tests/test_cookie.py) | modified | Original 8 tests + 3 new retry tests (`CookieRetryTests`) |
+| [tests/test_cache.py](tests/test_cache.py) | new | 15 tests against an in-memory `FakeKeyring`; covers happy path + all backend-failure branches |
+| [tests/test_server.py](tests/test_server.py) | modified | `_CookieEnvIsolation` now also stubs cache so tests never touch real keychain. Added 6 cache-integration tests in `CookieResolutionTests` and 1 cache-invalidation test in `CookieRefreshTests` |
+| [uv.lock](uv.lock) | modified | Reflects new deps (`keyring`, `jaraco-classes`, `jaraco-context`, `jaraco-functools`, `more-itertools`) |
 
 Changes are **uncommitted** in this worktree on branch `claude/pedantic-taussig-9c8400`. To resume on another machine, see "Resuming on another machine" below.
 
@@ -123,7 +156,7 @@ URL resolution is shared with `download_file` via `_resolve_content_files`. `dow
 
 In rough priority order:
 
-1. **Decide on browser-cookie3 as primary vs. demoting to nice-to-have.** Depends on user's appetite for the Windows-Chrome/Edge fallback friction. Either ship as-is and document, or escalate to browser-extension primary.
+1. **Ship 0.1.1 with cookie.py retry + cache.py keychain layer.** Test on the real Windows-Chrome path before publishing — the Mac smoke test passed but the Windows ABE-then-cache codepath needs verification with at least one successful seed read.
 2. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly. Should also mention `read_file_content` as the primary tool for asking questions about content (vs `download_file` for "save to disk").
 3. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
 4. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
@@ -148,6 +181,9 @@ uv run mcp dev src/ntulearn_mcp/server.py        # interactive tool inspector
 
 # Live smoke test — does browser-cookie3 work on this machine?
 uv run python -c "import logging; logging.basicConfig(level=logging.DEBUG); from ntulearn_mcp.cookie import read_bbrouter_cookie; print(read_bbrouter_cookie())"
+
+# Live smoke test — does the OS-keychain cache work on this machine?
+uv run python -c "from ntulearn_mcp.cache import read_cached_cookie, write_cached_cookie, delete_cached_cookie; delete_cached_cookie(); write_cached_cookie('expires:9999999999,id:smoketest'); print(read_cached_cookie()); delete_cached_cookie()"
 ```
 
 ## Resuming on another machine
