@@ -1,0 +1,58 @@
+{
+  "manifest_version": "0.4",
+  "name": "ntulearn-mcp",
+  "display_name": "NTULearn",
+  "version": "0.1.1",
+  "description": "MCP server for NTULearn (NTU Singapore's Blackboard Learn). Read your courses, content, announcements, and grades.",
+  "long_description": "Lets Claude read your NTULearn courses, content, announcements, and grades. Authenticates via the BbRouter cookie — auto-read from your browser on macOS / Linux / Windows-with-Firefox; Windows + Chrome/Edge users provide it manually via the configuration field below (Claude Desktop stores it in your OS keychain).\n\nTools: list_courses, get_course_contents, get_folder_children, get_announcements, get_gradebook, search_course_content, get_file_download_url, download_file, read_file_content (extracts text from PDFs / Office files inline so Claude can answer questions about lecture material directly).",
+  "author": {
+    "name": "kingdonkatsu",
+    "url": "https://github.com/kingdonkatsu"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kingdonkatsu/ntulearn-mcp.git"
+  },
+  "homepage": "https://github.com/kingdonkatsu/ntulearn-mcp",
+  "support": "https://github.com/kingdonkatsu/ntulearn-mcp/issues",
+  "license": "MIT",
+  "keywords": ["mcp", "ntulearn", "blackboard", "ntu", "singapore", "lms", "education"],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/ntulearn_mcp/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "ntulearn-mcp"],
+      "env": {
+        "NTULEARN_COOKIE": "${user_config.bbrouter_cookie}"
+      }
+    }
+  },
+  "user_config": {
+    "bbrouter_cookie": {
+      "type": "string",
+      "title": "BbRouter cookie (optional)",
+      "description": "Leave empty to auto-read from your browser. Required on Windows + Chrome/Edge (browser auto-read is blocked there). To get the value: log into ntulearn.ntu.edu.sg, open DevTools → Application → Cookies → ntulearn.ntu.edu.sg, copy the BbRouter cookie value.",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  },
+  "tools": [
+    { "name": "ntulearn_list_courses", "description": "List the user's enrolled NTULearn courses." },
+    { "name": "ntulearn_get_course_contents", "description": "Get the content tree of a course (folders, items, links)." },
+    { "name": "ntulearn_get_folder_children", "description": "List the children of a content folder." },
+    { "name": "ntulearn_get_announcements", "description": "Get announcements for a course or across all courses." },
+    { "name": "ntulearn_get_gradebook", "description": "Get the gradebook (grade columns + grades) for a course." },
+    { "name": "ntulearn_search_course_content", "description": "Full-text search across a course's content." },
+    { "name": "ntulearn_get_file_download_url", "description": "Resolve the authenticated download URL for a content file." },
+    { "name": "ntulearn_download_file", "description": "Download a content file to the local filesystem." },
+    { "name": "ntulearn_read_file_content", "description": "Fetch a content file and extract text inline (PDF / docx / pptx / xlsx) so Claude can answer questions about it without a filesystem hop." }
+  ]
+}
