@@ -83,9 +83,11 @@ _NO_COOKIE_MESSAGE = (
     "No NTULearn cookie found. Two options:\n"
     "  1. Log into https://ntulearn.ntu.edu.sg in a supported browser "
     "(Firefox works best on Windows; Chrome/Edge auto-read often needs "
-    "admin), then restart your MCP host (e.g. Claude Desktop).\n"
-    "  2. Set the NTULEARN_COOKIE env var manually — see README for "
-    "the DevTools cookie-copy steps. This always works."
+    "admin), then restart your MCP host (e.g. Claude Desktop). This is "
+    "the primary path — the server tries browsers first.\n"
+    "  2. Set the NTULEARN_COOKIE env var manually as a fallback — see "
+    "README for the DevTools cookie-copy steps. This always works but "
+    "is only consulted when the browser auto-read fails."
 )
 
 # ---------------------------------------------------------------------------
@@ -115,27 +117,34 @@ def _validate_cookie_value(value: str) -> str:
 def _resolve_cookie() -> str:
     """Resolve the BbRouter cookie.
 
-    Resolution order:
-      1. ``NTULEARN_COOKIE`` env var — explicit override always wins.
-      2. ``read_bbrouter_cookie()`` — auto-read from a logged-in browser.
-         On success the value is mirrored to the OS keychain so the next
-         resolution can fall back to it if the browser read fails.
+    Resolution order (browser-first):
+      1. ``read_bbrouter_cookie()`` — auto-read from a logged-in browser.
+         This is the convenience path the MCP server exists for: zero
+         config when the user is logged into NTULearn somewhere we can
+         read. Bounded retry + backoff inside ``read_bbrouter_cookie``
+         absorbs transient races. On success the value is mirrored to
+         the OS keychain via ``write_cached_cookie`` so subsequent
+         resolutions can fall back to it if the browser path later
+         fails.
+      2. ``NTULEARN_COOKIE`` env var — manual fallback. Used when the
+         browser path can't deliver (Windows + Chrome/Edge ABE, no
+         logged-in browser, headless environments). The env var is a
+         safety net, not an override: a fresh browser read wins over a
+         possibly-stale env value, which is what the user almost
+         always wants when both are present.
       3. ``read_cached_cookie()`` — last-known-good value from the OS
-         keychain. This is what makes the server resilient to transient
-         ``browser-cookie3`` failures (SQLite write-lock races, keychain
-         timeouts) and to permanent ones (Windows + Chrome/Edge ABE)
-         once *any* successful read has happened.
-      4. Raise — there is nothing useful left to try.
+         keychain. Catches the case where the browser fails right now
+         AND the user hasn't seeded an env var, but a previous run did
+         successfully read from the browser. Stretches a single
+         successful read across the cookie's full lifetime.
+      4. Raise — nothing left to try.
 
-    Cache writes use the value from the *current* successful read, so a
-    rotated cookie naturally supersedes the stored one. Cache reads are
-    invalidated by ``_refresh_client`` after a 401 so we don't loop on
-    a dead value.
+    Cache writes only happen on the browser path: an env var value is
+    user-deliberate and not necessarily worth persisting (could be a
+    one-off debug value), and a cache hit obviously doesn't need
+    re-caching. The 401-retry path in ``_refresh_client`` invalidates
+    the cache before re-resolving so we never loop on a dead value.
     """
-    explicit = os.getenv("NTULEARN_COOKIE", "").strip()
-    if explicit:
-        return _validate_cookie_value(explicit)
-
     auto = read_bbrouter_cookie()
     if auto:
         # Persist for next time. Best-effort: a missing/broken keyring
@@ -143,13 +152,18 @@ def _resolve_cookie() -> str:
         write_cached_cookie(auto)
         return _validate_cookie_value(auto)
 
+    explicit = os.getenv("NTULEARN_COOKIE", "").strip()
+    if explicit:
+        return _validate_cookie_value(explicit)
+
     cached = read_cached_cookie()
     if cached:
-        # Browser read failed (transient race, ABE on Windows, browser
-        # signed out, etc.). The cached value is from the most recent
-        # successful read — likely still valid since BbRouter cookies
-        # last days–weeks. If it's expired, the 401-retry path in
-        # _refresh_client will nuke it and force a re-resolve.
+        # Browser failed (transient race, ABE on Windows, browser
+        # signed out, etc.) and there's no env var override. Cached
+        # value is from the most recent successful read — likely still
+        # valid since BbRouter cookies last days–weeks. If it's
+        # expired, the 401-retry path in _refresh_client will nuke it
+        # and force a re-resolve.
         return _validate_cookie_value(cached)
 
     raise RuntimeError(_NO_COOKIE_MESSAGE)

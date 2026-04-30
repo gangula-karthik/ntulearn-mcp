@@ -29,11 +29,13 @@ Source layout in [src/ntulearn_mcp/](src/ntulearn_mcp/):
 
 Blackboard auth is via the `BbRouter` cookie (`HttpOnly`, `Secure`, typically lasts days–weeks). Every approach has to either get the user to copy it from DevTools or read it from a browser they're already logged into.
 
-**Resolution order in [server.py:_resolve_cookie](src/ntulearn_mcp/server.py):**
-1. `NTULEARN_COOKIE` env var (explicit override, always wins; never touches cache)
-2. [cookie.py:read_bbrouter_cookie](src/ntulearn_mcp/cookie.py) — walks Edge → Chrome → Firefox → Brave via `browser-cookie3` with bounded retry + exponential backoff (0.5s → 1.0s → 2.0s by default). Returns first valid value (validated by `expires:` prefix). On success the value is mirrored into the OS keychain via [cache.py:write_cached_cookie](src/ntulearn_mcp/cache.py).
-3. [cache.py:read_cached_cookie](src/ntulearn_mcp/cache.py) — last-known-good value from the OS keychain (`keyring`: macOS Keychain / Windows Credential Manager / Linux Secret Service / KWallet). This is the band-aid for both transient `browser-cookie3` failures (SQLite write-lock race, keychain timeout, TCC re-evaluation) and the permanent Windows + Chrome/Edge ABE block — once *any* successful read has happened on this machine, subsequent resolutions ride through the cookie's lifetime even if the browser path keeps failing.
+**Resolution order in [server.py:_resolve_cookie](src/ntulearn_mcp/server.py)** (browser-first since v0.1.2):
+1. [cookie.py:read_bbrouter_cookie](src/ntulearn_mcp/cookie.py) — walks Edge → Chrome → Firefox → Brave via `browser-cookie3` with bounded retry + exponential backoff (0.5s → 1.0s → 2.0s by default). Returns first valid value (validated by `expires:` prefix). On success the value is mirrored into the OS keychain via [cache.py:write_cached_cookie](src/ntulearn_mcp/cache.py). **This is the primary path** — the convenience the MCP server exists for.
+2. `NTULEARN_COOKIE` env var — manual fallback (Windows + Chrome/Edge ABE, no logged-in browser, headless environments). The env var is a safety net, not an override: a fresh browser read wins over a possibly-stale env value.
+3. [cache.py:read_cached_cookie](src/ntulearn_mcp/cache.py) — last-known-good value from the OS keychain (`keyring`: macOS Keychain / Windows Credential Manager / Linux Secret Service / KWallet). Catches the case where browser fails AND there's no env var seed, but a previous run did successfully read from the browser.
 4. `RuntimeError` with a help message pointing to manual env-var setup.
+
+**Why browser-first** (changed from env-first in v0.1.2): a stale `NTULEARN_COOKIE` lingering from one-time debugging or an old `.env` shouldn't preempt a fresh, working browser cookie. Putting the browser first makes the env var a true fallback rather than an override. If you need to force a specific cookie value, the cleanest way is now to ensure no browser auto-read can succeed (sign out of NTULearn in any auto-readable browser) — there is no "always-wins" override anymore.
 
 **Mid-session expiry:** `call_tool` catches `BbRouterExpiredError`, calls `_refresh_client()` which:
 1. Closes the existing httpx client.
@@ -118,20 +120,21 @@ table. Highlights:
 
 ## Test status
 
-All 155 tests pass: `uv run python -m unittest discover -s tests`.
+All 158 tests pass: `uv run python -m unittest discover -s tests`.
 
 | File | Status | Notes |
 |---|---|---|
 | [src/ntulearn_mcp/cookie.py](src/ntulearn_mcp/cookie.py) | modified | Dependency-injectable for tests via `module=` kwarg; added bounded retry + exponential backoff (0.5s → 1.0s → 2.0s), injectable `sleep` for fast tests, structured browser-error logging |
 | [src/ntulearn_mcp/cache.py](src/ntulearn_mcp/cache.py) | new | OS-keychain cookie cache via `keyring`. Read/write/delete all degrade to no-op on backend failure |
-| [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) | modified | `_resolve_cookie` now mirrors browser reads to cache and falls back to cache on browser failure; `_refresh_client` invalidates cache before re-resolving |
+| [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) | modified | `_resolve_cookie` is browser-first → env-fallback → cache-fallback → raise. Mirrors browser reads to cache. `_refresh_client` invalidates cache before re-resolving |
 | [pyproject.toml](pyproject.toml) | modified | Added `browser-cookie3>=0.20.1`, `keyring>=25.0`; bumped version to 0.1.1 |
 | [tests/test_cookie.py](tests/test_cookie.py) | modified | Original 8 tests + 3 new retry tests (`CookieRetryTests`) |
 | [tests/test_cache.py](tests/test_cache.py) | new | 15 tests against an in-memory `FakeKeyring`; covers happy path + all backend-failure branches |
-| [tests/test_server.py](tests/test_server.py) | modified | `_CookieEnvIsolation` now also stubs cache so tests never touch real keychain. Added 6 cache-integration tests in `CookieResolutionTests` and 1 cache-invalidation test in `CookieRefreshTests` |
+| [tests/test_server.py](tests/test_server.py) | modified | `_CookieEnvIsolation` stubs browser auto-read AND cache so tests are deterministic regardless of dev-machine state. 13 tests in `CookieResolutionTests` cover the new browser → env → cache priority order |
+| [tests/test_fixes.py](tests/test_fixes.py) | modified | `CookieValidationTests.setUp` now also patches the browser/cache paths so env-var validation tests don't get preempted by a real cookie on the dev machine |
 | [uv.lock](uv.lock) | modified | Reflects new deps (`keyring`, `jaraco-classes`, `jaraco-context`, `jaraco-functools`, `more-itertools`) |
 
-Changes are **uncommitted** in this worktree on branch `claude/pedantic-taussig-9c8400`. To resume on another machine, see "Resuming on another machine" below.
+The cache layer landed in commit `e545e60`. The browser-first priority flip is uncommitted in this worktree. To resume on another machine, see "Resuming on another machine" below.
 
 ## Architecture gap: downloaded files are unreachable from Claude — RESOLVED
 

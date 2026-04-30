@@ -215,8 +215,23 @@ class MarkdownFormatTests(unittest.IsolatedAsyncioTestCase):
 class CookieValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self._old = os.environ.get("NTULEARN_COOKIE")
+        # Resolution is browser → env → cache → raise. To assert env-var
+        # validation behaviour, the browser and cache paths must return
+        # None — otherwise a real cookie on the dev machine (or a stored
+        # keychain entry from prior runs) would short-circuit before the
+        # env var is read.
+        self._browser_patch = mock.patch.object(
+            server, "read_bbrouter_cookie", return_value=None
+        )
+        self._cache_patch = mock.patch.object(
+            server, "read_cached_cookie", return_value=None
+        )
+        self._browser_patch.start()
+        self._cache_patch.start()
 
     def tearDown(self) -> None:
+        self._cache_patch.stop()
+        self._browser_patch.stop()
         if self._old is None:
             os.environ.pop("NTULEARN_COOKIE", None)
         else:

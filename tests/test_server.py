@@ -107,17 +107,24 @@ def _make_xlsx_bytes(sheets: dict[str, list[list[Any]]]) -> bytes:
 class _CookieEnvIsolation:
     """Mixin that snapshots NTULEARN_COOKIE + server._client and restores them.
 
-    Also stubs out the keychain cache so tests never touch the user's real
-    OS keychain. Tests that want to exercise specific cache behavior can
-    re-patch the same symbols inside the test body.
+    Also stubs out browser auto-read and the keychain cache so tests never
+    touch the user's real browser cookies or OS keychain, and never hit
+    the retry/backoff sleeps inside ``read_bbrouter_cookie``. Tests that
+    want to exercise specific browser/cache behavior re-patch the same
+    symbols inside the test body — those override these defaults.
     """
 
     def setUp(self) -> None:
         self._old_env = os.environ.get("NTULEARN_COOKIE")
         self._old_client = server._client
 
-        # Default: cache is empty and inert. Start patches here so every
-        # cookie-related test gets the same hermetic baseline.
+        # Default: browser auto-read returns None (so resolution falls
+        # through to env / cache deterministically) and cache is empty +
+        # inert. Tests that need a different shape patch the same symbols
+        # inside their `with` blocks.
+        self._browser_patch = mock.patch.object(
+            server, "read_bbrouter_cookie", return_value=None
+        )
         self._cache_read_patch = mock.patch.object(
             server, "read_cached_cookie", return_value=None
         )
@@ -127,6 +134,7 @@ class _CookieEnvIsolation:
         self._cache_delete_patch = mock.patch.object(
             server, "delete_cached_cookie", return_value=None
         )
+        self._browser_patch.start()
         self._cache_read_patch.start()
         self._cache_write_patch.start()
         self._cache_delete_patch.start()
@@ -135,6 +143,7 @@ class _CookieEnvIsolation:
         self._cache_delete_patch.stop()
         self._cache_write_patch.stop()
         self._cache_read_patch.stop()
+        self._browser_patch.stop()
         if self._old_env is None:
             os.environ.pop("NTULEARN_COOKIE", None)
         else:
@@ -163,7 +172,13 @@ class DotenvPrecedenceTests(unittest.TestCase):
             os.environ["NTULEARN_COOKIE"] = "fresh-from-env"
             env_path.write_text("NTULEARN_COOKIE=stale-from-dotenv\n", encoding="utf-8")
             reloaded = importlib.reload(server)
-            self.assertEqual(reloaded._resolve_cookie(), "fresh-from-env")
+            # Resolution order is browser → env → cache → raise. To assert
+            # env-from-environ beats env-from-dotenv we need to silence the
+            # browser and cache paths; otherwise a real BbRouter cookie on
+            # the dev machine (or a previously-cached value) would win.
+            with mock.patch.object(reloaded, "read_bbrouter_cookie", return_value=None):
+                with mock.patch.object(reloaded, "read_cached_cookie", return_value=None):
+                    self.assertEqual(reloaded._resolve_cookie(), "fresh-from-env")
         finally:
             if old_env is None:
                 os.environ.pop("NTULEARN_COOKIE", None)
@@ -179,22 +194,44 @@ class DotenvPrecedenceTests(unittest.TestCase):
 
 
 class CookieResolutionTests(_CookieEnvIsolation, unittest.TestCase):
-    def test_env_var_takes_precedence_over_browser(self) -> None:
+    """Resolution order is browser → env → cache → raise.
+
+    Browser-first matches the MCP server's reason for existing: zero-config
+    convenience when the user is logged in somewhere we can read. Env var
+    is a manual fallback (e.g. Windows + Chrome/Edge ABE), cache is a
+    keychain-backed safety net for transient browser failures.
+    """
+
+    def test_browser_takes_precedence_over_env_var(self) -> None:
+        # Browser-first: a fresh browser read wins over a possibly-stale
+        # env value. Users almost always want this — env var was likely
+        # set ages ago when the browser path didn't work, but if browser
+        # is working *now* we should prefer the live value.
         os.environ["NTULEARN_COOKIE"] = "from-env"
         with mock.patch.object(server, "read_bbrouter_cookie", return_value="from-browser"):
+            self.assertEqual(server._resolve_cookie(), "from-browser")
+
+    def test_falls_back_to_env_var_when_browser_returns_none(self) -> None:
+        # Windows + Chrome/Edge ABE, browser not logged in, etc. Env var
+        # is the manual safety net.
+        os.environ["NTULEARN_COOKIE"] = "from-env"
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
             self.assertEqual(server._resolve_cookie(), "from-env")
 
-    def test_falls_back_to_browser_when_env_unset(self) -> None:
+    def test_uses_browser_when_env_unset(self) -> None:
         os.environ.pop("NTULEARN_COOKIE", None)
         with mock.patch.object(server, "read_bbrouter_cookie", return_value="from-browser"):
             self.assertEqual(server._resolve_cookie(), "from-browser")
 
-    def test_falls_back_to_browser_when_env_blank(self) -> None:
+    def test_skips_blank_env_var(self) -> None:
+        # Whitespace-only NTULEARN_COOKIE is treated as unset — falls
+        # through to the cache layer rather than failing validation.
         os.environ["NTULEARN_COOKIE"] = "   "
-        with mock.patch.object(server, "read_bbrouter_cookie", return_value="from-browser"):
-            self.assertEqual(server._resolve_cookie(), "from-browser")
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
+            with mock.patch.object(server, "read_cached_cookie", return_value="from-cache"):
+                self.assertEqual(server._resolve_cookie(), "from-cache")
 
-    def test_raises_when_both_sources_empty(self) -> None:
+    def test_raises_when_all_sources_empty(self) -> None:
         os.environ.pop("NTULEARN_COOKIE", None)
         with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:
@@ -213,7 +250,10 @@ class CookieResolutionTests(_CookieEnvIsolation, unittest.TestCase):
                 server._resolve_cookie()
         write.assert_called_once_with("fresh-value")
 
-    def test_falls_back_to_cache_when_browser_returns_none(self) -> None:
+    def test_falls_back_to_cache_when_browser_and_env_both_fail(self) -> None:
+        # Last-resort path: browser can't read AND no manual override is
+        # set. Cache holds whatever the most-recent successful browser
+        # read gave us — typically still valid (BbRouter lasts days–weeks).
         os.environ.pop("NTULEARN_COOKIE", None)
         with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
             with mock.patch.object(
@@ -233,29 +273,46 @@ class CookieResolutionTests(_CookieEnvIsolation, unittest.TestCase):
             ):
                 self.assertEqual(server._resolve_cookie(), "rotated-value")
 
-    def test_env_var_does_not_touch_cache(self) -> None:
-        # An explicit NTULEARN_COOKIE is the user's deliberate override —
-        # we shouldn't mirror it into the keychain (it might be a one-off
-        # debugging value) or read from the keychain to second-guess it.
-        os.environ["NTULEARN_COOKIE"] = "explicit"
-        with mock.patch.object(server, "read_bbrouter_cookie") as browser:
+    def test_env_var_preferred_over_cache_when_browser_fails(self) -> None:
+        # Env var is user-deliberate; cache is automatic best-guess. When
+        # both are present and browser fails, env wins because it's the
+        # closer-to-user-intent signal.
+        os.environ["NTULEARN_COOKIE"] = "from-env"
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
+            with mock.patch.object(
+                server, "read_cached_cookie", return_value="from-cache"
+            ):
+                self.assertEqual(server._resolve_cookie(), "from-env")
+
+    def test_env_var_fallback_does_not_write_cache(self) -> None:
+        # We only mirror browser-derived values into the keychain. An env
+        # var value might be a one-off debug cookie or a permanent manual
+        # fallback — either way, persisting it isn't our job.
+        os.environ["NTULEARN_COOKIE"] = "from-env"
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
             with mock.patch.object(server, "write_cached_cookie") as write:
-                with mock.patch.object(server, "read_cached_cookie") as read_cache:
-                    self.assertEqual(server._resolve_cookie(), "explicit")
-        browser.assert_not_called()
+                self.assertEqual(server._resolve_cookie(), "from-env")
         write.assert_not_called()
+
+    def test_env_var_fallback_does_not_read_cache(self) -> None:
+        # Env var beats cache. Once env var matches, we shouldn't even
+        # consult the keychain.
+        os.environ["NTULEARN_COOKIE"] = "from-env"
+        with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
+            with mock.patch.object(server, "read_cached_cookie") as read_cache:
+                server._resolve_cookie()
         read_cache.assert_not_called()
 
-    def test_does_not_consult_cache_when_browser_succeeds(self) -> None:
-        # Hot-path optimization: if the browser read works, we don't need
-        # to bother reading the cache too.
-        os.environ.pop("NTULEARN_COOKIE", None)
+    def test_does_not_consult_env_or_cache_when_browser_succeeds(self) -> None:
+        # Hot-path optimization: when the browser read works (the common
+        # case), we don't bother with env var or cache lookups.
+        os.environ["NTULEARN_COOKIE"] = "from-env"
         with mock.patch.object(server, "read_bbrouter_cookie", return_value="from-browser"):
             with mock.patch.object(server, "read_cached_cookie") as read_cache:
                 server._resolve_cookie()
         read_cache.assert_not_called()
 
-    def test_raises_when_browser_fails_and_cache_empty(self) -> None:
+    def test_raises_when_browser_env_and_cache_all_empty(self) -> None:
         os.environ.pop("NTULEARN_COOKIE", None)
         with mock.patch.object(server, "read_bbrouter_cookie", return_value=None):
             with mock.patch.object(server, "read_cached_cookie", return_value=None):
