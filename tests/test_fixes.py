@@ -314,5 +314,138 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
             server._client = old_client
 
 
+# ---------------------------------------------------------------------------
+# HTML stripping (Bug 1 fix)
+# ---------------------------------------------------------------------------
+
+class StripHtmlTests(unittest.TestCase):
+    """The shared _strip_html helper, used by both the file-content text path
+    and the announcements path. Centralises the previously-duplicated logic."""
+
+    def test_strips_basic_tags(self) -> None:
+        html = "<p>Hello <strong>world</strong>!</p>"
+        # BeautifulSoup's separator="\n" inserts a newline at every tag boundary,
+        # including inline tags. This matches the long-standing behaviour of the
+        # HTML-file extraction path in _extract_content; staying consistent.
+        self.assertEqual(server._strip_html(html), "Hello\nworld\n!")
+
+    def test_collapses_blank_lines(self) -> None:
+        html = "<p>One</p><p></p><p>Two</p>"
+        self.assertEqual(server._strip_html(html), "One\nTwo")
+
+    def test_unwraps_html_entities(self) -> None:
+        html = "<p>Tom &amp; Jerry</p>"
+        self.assertEqual(server._strip_html(html), "Tom & Jerry")
+
+    def test_handles_nbsp(self) -> None:
+        html = "<p>a&nbsp;b</p>"
+        # BeautifulSoup decodes &nbsp; to U+00A0; we don't normalise that further,
+        # but the tag is gone.
+        result = server._strip_html(html)
+        self.assertNotIn("<", result)
+        self.assertNotIn("&nbsp", result)
+        self.assertIn("a", result)
+        self.assertIn("b", result)
+
+    def test_passes_plain_text_through(self) -> None:
+        self.assertEqual(server._strip_html("just words"), "just words")
+
+    def test_none_returns_empty(self) -> None:
+        self.assertEqual(server._strip_html(None), "")
+
+    def test_empty_string_returns_empty(self) -> None:
+        self.assertEqual(server._strip_html(""), "")
+
+    def test_non_string_coerced(self) -> None:
+        # Defensive: a callsite passing an int or similar shouldn't crash.
+        self.assertEqual(server._strip_html(42), "42")
+
+
+class FakeAnnouncementsClient:
+    """Minimal client surface used by _get_announcements."""
+
+    def __init__(self, announcements: list[dict[str, Any]]) -> None:
+        self._announcements = announcements
+
+    async def get_announcements(self, course_id: str) -> list[dict[str, Any]]:
+        return self._announcements
+
+
+class GetAnnouncementsHtmlStripTests(unittest.IsolatedAsyncioTestCase):
+    """Bug 1 — announcement bodies must come back as plain text."""
+
+    async def test_html_body_is_stripped(self) -> None:
+        client = FakeAnnouncementsClient([
+            {
+                "id": "_a1_1",
+                "title": "Welcome",
+                "body": {"rawText": "<p>Dear students, the deadline is <strong>Friday</strong>.</p>"},
+                "created": "2025-01-01T00:00:00Z",
+                "modified": "2025-01-01T00:00:00Z",
+                "availability": {"available": "Yes"},
+            }
+        ])
+        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        body = payload["announcements"][0]["body"]
+        self.assertNotIn("<", body)
+        self.assertNotIn(">", body)
+        self.assertIn("Dear students", body)
+        self.assertIn("Friday", body)
+
+    async def test_table_body_is_stripped(self) -> None:
+        # Many real announcements wrap deadlines/agendas in tables.
+        client = FakeAnnouncementsClient([
+            {
+                "id": "_a2_1",
+                "title": "Schedule",
+                "body": {
+                    "rawText": (
+                        "<table><tr><td>Mon</td><td>Lab 1</td></tr>"
+                        "<tr><td>Tue</td><td>Lab 2</td></tr></table>"
+                    )
+                },
+                "created": "2025-01-02T00:00:00Z",
+                "modified": "2025-01-02T00:00:00Z",
+                "availability": {"available": "Yes"},
+            }
+        ])
+        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        body = payload["announcements"][0]["body"]
+        self.assertNotIn("<table", body)
+        self.assertNotIn("<tr", body)
+        self.assertNotIn("<td", body)
+        for token in ("Mon", "Lab 1", "Tue", "Lab 2"):
+            self.assertIn(token, body)
+
+    async def test_missing_body_does_not_crash(self) -> None:
+        client = FakeAnnouncementsClient([
+            {
+                "id": "_a3_1",
+                "title": "Empty",
+                "body": None,
+                "created": "2025-01-03T00:00:00Z",
+                "modified": "2025-01-03T00:00:00Z",
+                "availability": {"available": "Yes"},
+            }
+        ])
+        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        self.assertEqual(payload["announcements"][0]["body"], "")
+
+    async def test_string_body_also_stripped(self) -> None:
+        # Some Blackboard endpoints return a bare string body instead of a dict.
+        client = FakeAnnouncementsClient([
+            {
+                "id": "_a4_1",
+                "title": "Bare string",
+                "body": "<p>Plain wrapped</p>",
+                "created": "2025-01-04T00:00:00Z",
+                "modified": "2025-01-04T00:00:00Z",
+                "availability": {"available": "Yes"},
+            }
+        ])
+        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        self.assertEqual(payload["announcements"][0]["body"], "Plain wrapped")
+
+
 if __name__ == "__main__":
     unittest.main()

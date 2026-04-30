@@ -198,6 +198,26 @@ def _file_extension(filename: str) -> str:
     return filename.rpartition(".")[2].lower()
 
 
+def _strip_html(value: Any) -> str:
+    """Strip HTML tags and collapse whitespace from a possibly-HTML string.
+
+    Used by both the file-content text path (HTML pages, e.g. course handouts saved
+    as .html) and the announcements path (Blackboard stores rich-text bodies as
+    HTML in `body.rawText`). Centralised so both call sites stay consistent.
+
+    Accepts non-strings for caller convenience: ``None`` and other falsy values
+    return ``""``; non-string truthy values are coerced via ``str()``.
+    """
+    if not value:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    text = BeautifulSoup(value, "html.parser").get_text(separator="\n")
+    return "\n".join(
+        line for line in (segment.strip() for segment in text.splitlines()) if line
+    )
+
+
 def _parse_content_type(content_type: str | None) -> tuple[str, str | None]:
     """Return (mime, charset) from a Content-Type header value."""
     if not content_type:
@@ -337,8 +357,7 @@ def _extract_content(
         ext = _file_extension(filename)
         mime, _ = _parse_content_type(content_type)
         if ext in {"html", "htm"} or mime == "text/html":
-            text = BeautifulSoup(text, "html.parser").get_text(separator="\n")
-            text = "\n".join(line for line in (l.strip() for l in text.splitlines()) if line)
+            text = _strip_html(text)
 
         return {
             "filename": filename,
@@ -1904,10 +1923,14 @@ async def _get_announcements(
     rows = []
     for a in announcements:
         body_raw = a.get("body") or {}
+        # Blackboard stores announcement bodies as HTML in `body.rawText`. Strip
+        # tags so callers see plain text, matching how the HTML file path in
+        # _extract_content already behaves.
+        body_html = body_raw.get("rawText") if isinstance(body_raw, dict) else body_raw
         rows.append({
             "id": a.get("id"),
             "title": a.get("title"),
-            "body": (body_raw.get("rawText") if isinstance(body_raw, dict) else body_raw),
+            "body": _strip_html(body_html),
             "created": a.get("created"),
             "modified": a.get("modified"),
             "available": (a.get("availability") or {}).get("available"),
