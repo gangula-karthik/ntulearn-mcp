@@ -2,9 +2,9 @@
   "manifest_version": "0.4",
   "name": "ntulearn-mcp",
   "display_name": "NTULearn",
-  "version": "0.1.1",
-  "description": "MCP server for NTULearn (NTU Singapore's Blackboard Learn). Read your courses, content, announcements, and grades.",
-  "long_description": "Lets Claude read your NTULearn courses, content, announcements, and grades. Authenticates via the BbRouter cookie — auto-read from your browser on macOS / Linux / Windows-with-Firefox; Windows + Chrome/Edge users provide it manually via the configuration field below (Claude Desktop stores it in your OS keychain).\n\nTools: list_courses, get_course_contents, get_folder_children, get_announcements, get_gradebook, search_course_content, get_file_download_url, download_file, read_file_content (extracts text from PDFs / Office files inline so Claude can answer questions about lecture material directly).",
+  "version": "0.2.0",
+  "description": "MCP server for NTULearn (NTU Singapore's Blackboard Learn). Announcements, assignments, grades, and course files — across all your enrolled courses.",
+  "long_description": "Lets Claude answer questions like \"what's due next week?\", \"what announcements went out this week?\", and \"organise my semester files into ~/NTU/y3s1/…\" — fanning out across all your enrolled courses automatically.\n\nAuthenticates via the BbRouter cookie — auto-read from your browser on macOS / Linux / Windows-with-Firefox. Windows + Chrome/Edge users paste the cookie into the field below (Claude Desktop stores it in your OS keychain).\n\nTools: list_courses, get_course_contents (with folder drill-down), get_upcoming (calendar + assignment due dates), get_announcements (cross-course, with since filter), get_gradebook (cross-course), search_course_content, download_file (with destination_dir for folder hierarchies), read_file_content (text extraction from PDFs / Office files; vision opt-in for diagrams).",
   "author": {
     "name": "kingdonkatsu",
     "url": "https://github.com/kingdonkatsu"
@@ -46,13 +46,12 @@
   },
   "tools": [
     { "name": "ntulearn_list_courses", "description": "List the user's enrolled NTULearn courses." },
-    { "name": "ntulearn_get_course_contents", "description": "Get the content tree of a course (folders, items, links)." },
-    { "name": "ntulearn_get_folder_children", "description": "List the children of a content folder." },
-    { "name": "ntulearn_get_announcements", "description": "Get announcements for a course or across all courses." },
-    { "name": "ntulearn_get_gradebook", "description": "Get the gradebook (grade columns + grades) for a course." },
-    { "name": "ntulearn_search_course_content", "description": "Full-text search across a course's content." },
-    { "name": "ntulearn_get_file_download_url", "description": "Resolve the authenticated download URL for a content file." },
-    { "name": "ntulearn_download_file", "description": "Download a content file to the local filesystem." },
-    { "name": "ntulearn_read_file_content", "description": "Fetch a content file and extract text inline (PDF / docx / pptx / xlsx) so Claude can answer questions about it without a filesystem hop." }
+    { "name": "ntulearn_get_course_contents", "description": "Get the content tree of a course. Omit parent_id for the root; pass it to drill into a folder." },
+    { "name": "ntulearn_get_upcoming", "description": "Calendar items across enrolled courses for the next 2 weeks. type='GradebookColumn' filters to assignment due dates." },
+    { "name": "ntulearn_get_announcements", "description": "Announcements across all enrolled courses, newest first. Optional since (ISO-8601) for a time window." },
+    { "name": "ntulearn_get_gradebook", "description": "Gradebook columns and scores across all enrolled courses." },
+    { "name": "ntulearn_search_course_content", "description": "Recursive substring search within one course's content tree." },
+    { "name": "ntulearn_download_file", "description": "Download a content item's files to disk. destination_dir accepts absolute paths and ~/… prefixes." },
+    { "name": "ntulearn_read_file_content", "description": "Read an attached file inline — text mode by default (PDF/docx/pptx/xlsx); pass mode='vision' for diagram pages." }
   ]
 }
