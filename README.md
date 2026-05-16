@@ -233,7 +233,7 @@ src/ntulearn_mcp/
 └── parsers.py    # HTML body → download URL extraction
 ```
 
-Tests use `unittest` (not pytest); HTTP is mocked via `httpx.MockTransport`. See [CLAUDE.md](CLAUDE.md) for design decisions and known limitations.
+Tests use `unittest` (not pytest); HTTP is mocked via `httpx.MockTransport`.
 
 ---
 

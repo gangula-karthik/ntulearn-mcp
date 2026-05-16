@@ -13,6 +13,7 @@ wheels/
 .env
 downloads/
 .DS_Store
+.Rhistory
 
 # Local tooling / ad-hoc scripts
 .claude/
