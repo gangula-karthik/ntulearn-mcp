@@ -17,13 +17,64 @@ Source layout in [src/ntulearn_mcp/](src/ntulearn_mcp/):
 
 **Target audience:** tech-inclined NTU students reached via LinkedIn + GitHub. Not the general student population — anyone who can install `uv` and edit a JSON config file.
 
-**Distribution path:** publish to PyPI as `ntulearn-mcp`; users invoke via `uvx ntulearn-mcp` from their MCP host's config. **Not yet published as of this session.** README still describes the dev-from-source flow; needs rewrite to lead with the `uvx` flow.
+**Distribution path:** publish to PyPI as `ntulearn-mcp`; users invoke via `uvx ntulearn-mcp` from their MCP host's config. **Not yet published as of this session.** README now leads with the `uvx` flow as of v0.2.0.
 
 **Explicitly rejected paths and why:**
 - *AI-free product (Chrome extension dashboard, etc.):* user judged the deterministic value not high enough to compete with just opening NTULearn.
 - *Hosted web app / Telegram bot:* requires custodian of N students' Blackboard sessions — privacy/policy nightmare. NTU has no public OAuth flow for student apps.
 - *`.mcpb` Desktop Extensions:* nicer UX (single file, double-click install, OS-keychain config) but bundles Node.js, not Python — would mean either a Node-wraps-Python adapter or a second distribution artifact. Skipped for v1; revisit if `uvx` friction proves too high.
 - *Scripted SSO login:* dead because of NTU's mandatory MFA (Microsoft Authenticator push). Don't try.
+
+## v0.2.0 architectural pivot: "deep reader" → "student helper"
+
+The product framing changed in v0.2.0. The previous framing — "ask Claude about NTULearn files inline via `read_file_content` with vision rendering by default" — turned out to be structurally hostile to MCP:
+
+- **MCP enforces a 1 MB tool-result cap** (claude.ai web especially). PyMuPDF rendering at 2× zoom blows past this on any deck longer than ~5 pages.
+- **MuPDF writes errors to stdout**, which is the JSON-RPC framing stream when the server runs over stdio. A single corrupt PDF can break the protocol mid-conversation. Observed in the wild: `Syntax_Differences_Python_vs_Java.pdf` (27 pages) triggered both the >1 MB error *and* two JSON-RPC frame corruption events in the same call.
+- **claude.ai's drag-drop already exists** with a ~32 MB budget and native vision document blocks. The server should not try to compete with it.
+
+The pivot reframes the server around **four prompts that fit MCP's payload shape**:
+
+1. *"What announcements happened across my courses this week?"*
+2. *"What assignments do I have due next week?"* (via Blackboard calendar)
+3. *"Organise this semester's NTULearn content into `~/NTU/y3s1/sc2002/week 8/...` on disk."*
+4. *"Pull due dates + grading weightages out of this course briefing PDF."* (small, text-heavy docs only)
+
+For multi-page diagram-heavy lecture decks, users `download_file` to disk and drag the PDF into claude.ai. The server **shortens the path to drag-drop** rather than competing with it.
+
+### Concrete changes in v0.2.0
+
+| Tool | Change |
+|---|---|
+| `ntulearn_get_course_contents` | Gained optional `parent_id` — absorbs the old `get_folder_children` tool. |
+| `ntulearn_get_folder_children` | **Removed.** Merged into `get_course_contents`. |
+| `ntulearn_get_file_download_url` | **Removed.** Raw URLs aren't useful standalone (need the auth cookie); `download_file` already returns the resolved path. |
+| `ntulearn_get_upcoming` | **NEW.** Wraps `GET /learn/api/public/v1/calendars/items`. Defaults to next 2 weeks across enrolled courses. `type='GradebookColumn'` filters to assignments. |
+| `ntulearn_get_announcements` | Gained `course_ids` (optional, defaults to all enrolled, fanned out via `asyncio.gather`) and `since` (ISO-8601 filter). Returns newest-first. |
+| `ntulearn_get_gradebook` | Gained `course_ids` (optional, defaults to all enrolled, fanned out). Per-course grade fetch failures flip global `gradesAvailable=False`. |
+| `ntulearn_download_file` | Gained `destination_dir` (string; accepts absolute paths and `~`-prefixed paths; created on demand). Enables the `~/NTU/y3s1/sc2002/week 8/` hierarchy use case. Falls back to `$NTULEARN_DOWNLOAD_DIR` env var, then `./downloads/`. |
+| `ntulearn_read_file_content` | PDF default flipped from `mode='auto'` (vision-by-default) to `mode='text'`. Vision is now opt-in (`mode='vision'` + a narrow `pages='5'` range is the supported pattern). |
+
+### read_file_content correctness fixes (also v0.2.0)
+
+Three fixes landed together — all needed regardless of the framing pivot:
+
+1. **Stdout protection.** Wrap PyMuPDF rendering in a context manager that calls `fitz.TOOLS.mupdf_display_errors(False)` *and* does fd-level `os.dup2(devnull_fd, 1)` for the duration of the render. The Python-level redirect alone isn't enough — MuPDF emits at C level. Tested in `PDFStdoutProtectionTests` via `os.pipe()` + `os.dup(1)` to assert nothing leaks to the real fd 1.
+2. **Byte-budget cap.** Cumulative cap on rendered bytes during vision mode, complementing the page-count cap. When hit, response carries `truncated_pages` + `truncation_reason` so the model can request the next range via existing `pages='X-Y'` parameter.
+3. **DPI drop.** Vision zoom lowered from 2.0 → 1.3 (~96 DPI). Smaller bytes per page, still readable for diagrams.
+
+### Final tool surface (8 tools, down from 9)
+
+| Tool | Purpose |
+|---|---|
+| `ntulearn_list_courses` | Enrolled courses, paginated. |
+| `ntulearn_get_course_contents` | Course tree walk. `parent_id` for drilling into folders. |
+| `ntulearn_search_course_content` | BFS substring search within one course. |
+| `ntulearn_get_upcoming` | Calendar items across enrolled courses (assignments via `type='GradebookColumn'`). |
+| `ntulearn_get_announcements` | Cross-course announcements, newest first. |
+| `ntulearn_get_gradebook` | Cross-course gradebook columns + scores. |
+| `ntulearn_download_file` | File-to-disk with optional `destination_dir`. |
+| `ntulearn_read_file_content` | Inline text (default) or vision (opt-in) read of small docs. |
 
 ## Cookie acquisition design
 
@@ -91,18 +142,21 @@ Graceful degradation works (no crash, clean fall-through to error message), but 
 
 **Browser extension is no longer the only architectural escape.** Cache-backed `browser-cookie3` covers ~all "ever-succeeded" cases. Browser extension would still be the only way to make the cold-start Windows-Chrome path zero-friction.
 
-## mcp-builder remediation pass (claude/mcp-builder-eval)
+## mcp-builder remediation pass (originally claude/mcp-builder-eval; still in force)
 
-The work on this branch closes every issue raised by the `anthropic-skills:mcp-builder`
+The pre-pivot work closed every issue raised by the `anthropic-skills:mcp-builder`
 skill review. See [evals/REPORT.md](evals/REPORT.md) for the full audit + remediation
-table. Highlights:
+table. Highlights (still apply to the post-pivot 8-tool surface):
 
-- All 9 tools are renamed `ntulearn_*` (no more collision risk with other MCP servers).
+- All tools are namespaced `ntulearn_*` (no collision risk with other MCP servers).
 - Every tool carries `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`
   annotations. Only `ntulearn_download_file` is `readOnlyHint=False`.
-- List-returning tools (`list_courses`, `get_course_contents`, `get_folder_children`,
+- List-returning tools (`list_courses`, `get_course_contents`, `get_upcoming`,
   `get_announcements`, `get_gradebook`) accept `limit`/`offset` and return
   `{total, count, offset, limit, hasMore, nextOffset}` pagination metadata.
+- Cross-course aggregators (`get_upcoming`, `get_announcements`, `get_gradebook`)
+  fan out via `asyncio.gather(*, return_exceptions=True)`; per-course failures land
+  in a `courseErrors` array on the response without sinking the rest.
 - Every data-returning tool accepts `response_format ∈ {json, markdown}`.
 - Every tool declares an `outputSchema`. Handlers return
   `(unstructured_content, structured_content)` tuples — MCP propagates both forms
@@ -113,58 +167,62 @@ table. Highlights:
   capped at 10, `limit`/`max_results` capped at 200, `additionalProperties: false`
   on every input schema. SDK enforces before our code runs.
 - `BlackboardAPIError` distinguishes 403/404/429/5xx with actionable messages
-  including the request path.
+  including the request path. Calendar 429 is surfaced as a distinct "rate limited"
+  message (Anthology docs warn non-3LO calendar calls can be throttled).
 - `_validate_cookie_value` rejects CR/LF/NUL on cookie ingest (header-injection
   defence in depth).
-- 31 new tests in `tests/test_fixes.py` cover every behaviour change.
 
 ## Test status
 
-All 158 tests pass: `uv run python -m unittest discover -s tests`.
+All 185 tests pass: `uv run python -m unittest discover -s tests`.
 
-| File | Status | Notes |
-|---|---|---|
-| [src/ntulearn_mcp/cookie.py](src/ntulearn_mcp/cookie.py) | modified | Dependency-injectable for tests via `module=` kwarg; added bounded retry + exponential backoff (0.5s → 1.0s → 2.0s), injectable `sleep` for fast tests, structured browser-error logging |
-| [src/ntulearn_mcp/cache.py](src/ntulearn_mcp/cache.py) | new | OS-keychain cookie cache via `keyring`. Read/write/delete all degrade to no-op on backend failure |
-| [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) | modified | `_resolve_cookie` is browser-first → env-fallback → cache-fallback → raise. Mirrors browser reads to cache. `_refresh_client` invalidates cache before re-resolving |
-| [pyproject.toml](pyproject.toml) | modified | Added `browser-cookie3>=0.20.1`, `keyring>=25.0`; bumped version to 0.1.1 |
-| [tests/test_cookie.py](tests/test_cookie.py) | modified | Original 8 tests + 3 new retry tests (`CookieRetryTests`) |
-| [tests/test_cache.py](tests/test_cache.py) | new | 15 tests against an in-memory `FakeKeyring`; covers happy path + all backend-failure branches |
-| [tests/test_server.py](tests/test_server.py) | modified | `_CookieEnvIsolation` stubs browser auto-read AND cache so tests are deterministic regardless of dev-machine state. 13 tests in `CookieResolutionTests` cover the new browser → env → cache priority order |
-| [tests/test_fixes.py](tests/test_fixes.py) | modified | `CookieValidationTests.setUp` now also patches the browser/cache paths so env-var validation tests don't get preempted by a real cookie on the dev machine |
-| [uv.lock](uv.lock) | modified | Reflects new deps (`keyring`, `jaraco-classes`, `jaraco-context`, `jaraco-functools`, `more-itertools`) |
+Notable test groupings worth knowing about:
+- `tests/test_client.py::CalendarItemsTests` — covers the `get_calendar_items` wrapper (param forwarding, empty window, 429 → BlackboardAPIError with "rate limited" message).
+- `tests/test_server.py::UpcomingTests` — cross-course fan-out, explicit `course_ids`, `type` filter, ISO-8601 validation, per-course failure recorded.
+- `tests/test_server.py::AnnouncementsCrossCourseTests` + `GradebookCrossCourseTests` — verify fan-out + `since` filtering + courseId attribution + per-course error containment. Gradebook tests also verify the "any course's grade fetch fails → global `gradesAvailable=False`" contract.
+- `tests/test_server.py::GetCourseContentsTests` — covers the `parent_id` branch (post-merge of `get_folder_children`).
+- `tests/test_server.py::DownloadDestinationTests` — `destination_dir` happy path, `~` expansion, env-var fallback, validation errors. Note: tests must compare `Path.resolve()` outputs because on macOS `/var` symlinks to `/private/var`.
+- `tests/test_server.py::PDFTextDefaultTests` + `PDFStdoutProtectionTests` — verify text default emits no `ImageContent` blocks, and that fd-level stdout protection actually catches MuPDF C-level emissions (via `os.dup(1)` + `os.pipe()` real-fd capture, not Python-level mocks).
+- `tests/test_server.py::CookieResolutionTests` — covers the browser-first → env-fallback → cache-fallback resolution order (still in force post-pivot).
 
-The cache layer landed in commit `e545e60`. The browser-first priority flip is uncommitted in this worktree. To resume on another machine, see "Resuming on another machine" below.
-
-## Architecture gap: downloaded files are unreachable from Claude — RESOLVED
+## Architecture gap: downloaded files are unreachable from Claude — RESOLVED, then reframed
 
 Original problem: `download_file` writes to the user's local filesystem, but Claude Desktop's built-in tools (`bash`, code execution) run in a sandboxed container on Anthropic's servers and can't see local files. `localAgentModeTrustedFolders` does **not** bridge this (it's for Cowork / local agent mode, not standard chat tools), and `web_fetch` refuses URLs that didn't come from user input or prior search results — so Claude can't bypass the gap by hitting the bbcswebdav URL directly either.
 
-**Resolved by `read_file_content` tool.** Added in [src/ntulearn_mcp/server.py](src/ntulearn_mcp/server.py) — fetches bytes via the authenticated client, extracts text inline, returns the content as `TextContent` (plus `ImageContent` blocks for PDFs in the default mode). No filesystem hop. Per-file cap 25 MB, batch cap 40 MB. Supported formats:
-- **PDFs — vision mode by default** (`pymupdf`): each page is rendered as a PNG and text-extracted, so Claude sees diagrams, equations, and scanned content at the same depth as a drag-and-drop into Claude.ai. Costs ~3K vision tokens per rendered page; capped at `_MAX_PDF_PAGES_VISION = 50` pages per call. Pass `mode='text'` to skip rendering and use the cheaper `pypdf`-only path for pure-prose PDFs, or `pages='1-10'` / `pages='1,3,5'` to restrict the page range.
-- Microsoft Office: `.docx` (paragraphs + tables), `.pptx` (per-slide shapes + speaker notes), `.xlsx` (all sheets, row-by-row, capped at 1000 rows/sheet to keep grade dumps from blowing up the response)
-- Text-likes (txt, md, csv, json, xml, code, html with tags stripped — charset-aware decode)
+**Pre-v0.2.0 fix:** `read_file_content` with PDF vision-by-default. Pulled bytes via the authenticated client, rendered every page to PNG, returned `TextContent` + `ImageContent` blocks inline. Worked for small docs; broke for multi-page lecture decks (>1 MB cap, MuPDF stdout corruption).
+
+**v0.2.0 reframing:** `read_file_content` keeps its inline-read role but **PDFs default to text mode**. Vision is opt-in for narrow ranges (e.g. `mode='vision', pages='5'` to ask about a single diagram). For full-fidelity multi-page reading, users `download_file` to disk and drag the PDF into claude.ai (~32 MB budget, native vision document blocks). The server's job is to shorten the path to drag-drop, not compete with it.
+
+Supported formats in `read_file_content`:
+- **PDFs** — text by default (`pypdf`); vision opt-in (`pymupdf`) at 1.3× zoom (~96 DPI). Per-call caps: `_MAX_PDF_PAGES_VISION` page count, plus a cumulative byte-budget cap that emits `truncated_pages` + `truncation_reason` when hit so the model can request the next range. Stdout is fd-redirected during render (`os.dup2`) + `fitz.TOOLS.mupdf_display_errors(False)` so MuPDF's C-level emissions never corrupt JSON-RPC framing.
+- Microsoft Office: `.docx` (paragraphs + tables), `.pptx` (per-slide shapes + speaker notes), `.xlsx` (all sheets, row-by-row, capped at 1000 rows/sheet to keep grade dumps from blowing up the response).
+- Text-likes (txt, md, csv, json, xml, code, html with tags stripped — charset-aware decode).
 
 True binaries (images, video, audio, archives, legacy `.doc`/`.ppt`/`.xls`) are listed under a `skipped` array with a "use download_file" message.
 
-URL resolution is shared with `download_file` via `_resolve_content_files`. `download_file` is kept — different job (users who actually want bytes on disk).
+URL resolution is shared with `download_file` via `_resolve_content_files`.
 
 **Out of scope (future tickets):**
 - Image files via `ImageContent` — would let Claude see lecture diagrams uploaded as standalone `.jpg`/`.png`.
 - Image extraction from inside `.pptx` slides (would catch the most common diagram case but requires mixed-content response).
 - Legacy `.doc`/`.ppt`/`.xls` — generally rare on NTULearn; users can convert or use `download_file`.
 - Streaming for very large PDFs / Office files (current implementation buffers the full file in memory; 25 MB cap mitigates worst case).
+- A `get_course_tree(depth=N)` mega-fetch helper — tempting for the "organise a semester" use case but balloons response size. Model recursion via `get_course_contents` is good enough for now; revisit only if tool-call latency proves painful in real use.
 
 ## Open decisions / next steps
 
 In rough priority order:
 
-1. **Ship 0.1.1 with cookie.py retry + cache.py keychain layer.** Test on the real Windows-Chrome path before publishing — the Mac smoke test passed but the Windows ABE-then-cache codepath needs verification with at least one successful seed read.
-2. **Rewrite README** to lead with the `uvx ntulearn-mcp` flow (5-step Claude Desktop config), demote dev-from-source to a "Contributing" section, document both auto and manual cookie paths honestly. Should also mention `read_file_content` as the primary tool for asking questions about content (vs `download_file` for "save to disk").
-3. **PyPI publication.** `pyproject.toml` needs more metadata (`license`, `authors`, `urls`, `classifiers`). Then `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
-4. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
-5. **Test the full flow on a fresh machine** (Mac, planned for next session) — verify `browser-cookie3` actually works on Mac with Chrome (it should — keychain protects it for the same user). Also exercise `read_file_content` against real PDF / Office files.
-6. **Image-content support** — add an `image` kind that returns `ImageContent` for standalone `.jpg`/`.png`, and consider extracting embedded images from `.pptx` slides so Claude can see lecture diagrams.
+1. **Live smoke test v0.2.0 against real NTULearn.** Specifically:
+   - `ntulearn_get_upcoming()` with no args → next 2 weeks across enrolled courses. Confirm `GradebookColumn` items carry due dates.
+   - `ntulearn_get_upcoming(type='GradebookColumn', since=..., until=...)` → assignments-only window.
+   - `ntulearn_read_file_content` on the previously-failing `SC2002_tutorials qns-2025S2.docx` + `Syntax_Differences_Python_vs_Java.pdf` → confirm no >1 MB error, no JSON-RPC corruption.
+   - `ntulearn_download_file(..., destination_dir='~/NTU/y3s1/sc2002/week 8/')` → verify `~` expansion and on-demand directory creation.
+2. **PyPI publication of 0.2.0.** `pyproject.toml` has the metadata; run `uv build` + `uv publish` (requires PyPI account + API token). Verify locally first with `uvx --from . ntulearn-mcp`.
+3. **GitHub Actions for tag-triggered PyPI publishing** (optional polish).
+4. **Test the full flow on a fresh machine** — verify `browser-cookie3` works on Mac with Chrome (it should — keychain protects it for the same user). Verify the new tools end-to-end.
+5. **Image-content support** — add an `image` kind that returns `ImageContent` for standalone `.jpg`/`.png`, and consider extracting embedded images from `.pptx` slides so Claude can see lecture diagrams.
+6. **Notion MCP chaining demo** — the "organise a semester" use case becomes powerful when paired with a Notion MCP that mirrors the folder structure into a digital binder. The server stays Notion-agnostic; the value emerges from the chain.
 
 ## Project conventions worth knowing
 
@@ -193,5 +251,5 @@ uv run python -c "from ntulearn_mcp.cache import read_cached_cookie, write_cache
 
 The conversation history that produced this state lives only on the original machine (Claude Code stores sessions locally as JSONL under `~/.claude/projects/<encoded-path>/`). To continue on a different machine, you have two practical options:
 
-1. **Recommended:** push this branch (`claude/pedantic-taussig-9c8400`), pull on the other machine, start a fresh Claude session, and let this CLAUDE.md provide the context. The decisions are captured here; the conversation narrative isn't load-bearing.
+1. **Recommended:** push the current branch, pull on the other machine, start a fresh Claude session, and let this CLAUDE.md provide the context. The decisions are captured here; the conversation narrative isn't load-bearing.
 2. **If you really need the literal transcript:** copy the session JSONL from `~/.claude/projects/<encoded-source-path>/<uuid>.jsonl` to the equivalent encoded path on the target machine. Path encoding replaces `/` and `\` with `-` based on the *absolute project path*, so the project must live at the same absolute path on both machines for `/resume` to find it. Fiddly; option 1 is cleaner.

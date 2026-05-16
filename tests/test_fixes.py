@@ -62,9 +62,9 @@ class ToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
         for tname in (
             "ntulearn_list_courses",
             "ntulearn_get_course_contents",
-            "ntulearn_get_folder_children",
             "ntulearn_get_announcements",
             "ntulearn_get_gradebook",
+            "ntulearn_get_upcoming",
         ):
             schema = self._by_name[tname].inputSchema
             self.assertIn("limit", schema["properties"], tname)
@@ -400,7 +400,7 @@ class GetAnnouncementsHtmlStripTests(unittest.IsolatedAsyncioTestCase):
                 "availability": {"available": "Yes"},
             }
         ])
-        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        _, payload = await server._get_announcements(client, {"course_ids": ["_c_1"]})
         body = payload["announcements"][0]["body"]
         self.assertNotIn("<", body)
         self.assertNotIn(">", body)
@@ -424,7 +424,7 @@ class GetAnnouncementsHtmlStripTests(unittest.IsolatedAsyncioTestCase):
                 "availability": {"available": "Yes"},
             }
         ])
-        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        _, payload = await server._get_announcements(client, {"course_ids": ["_c_1"]})
         body = payload["announcements"][0]["body"]
         self.assertNotIn("<table", body)
         self.assertNotIn("<tr", body)
@@ -443,7 +443,7 @@ class GetAnnouncementsHtmlStripTests(unittest.IsolatedAsyncioTestCase):
                 "availability": {"available": "Yes"},
             }
         ])
-        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        _, payload = await server._get_announcements(client, {"course_ids": ["_c_1"]})
         self.assertEqual(payload["announcements"][0]["body"], "")
 
     async def test_string_body_also_stripped(self) -> None:
@@ -458,7 +458,7 @@ class GetAnnouncementsHtmlStripTests(unittest.IsolatedAsyncioTestCase):
                 "availability": {"available": "Yes"},
             }
         ])
-        _, payload = await server._get_announcements(client, {"course_id": "_c_1"})
+        _, payload = await server._get_announcements(client, {"course_ids": ["_c_1"]})
         self.assertEqual(payload["announcements"][0]["body"], "Plain wrapped")
 
 

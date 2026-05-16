@@ -409,6 +409,9 @@ class CookieRefreshTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
 
 
 class FakeGradebookClient:
+    async def get_my_enrollments(self) -> list[dict[str, Any]]:
+        return [{"courseId": "course-1", "availability": {"available": "Yes"}}]
+
     async def get_gradebook_columns(self, course_id: str) -> list[dict[str, Any]]:
         return [{"id": "col-1", "name": "Quiz", "score": {"possible": 10}}]
 
@@ -979,18 +982,23 @@ class ResolveContentFilesTests(unittest.IsolatedAsyncioTestCase):
 class PdfModeAndPageRangeParsingTests(unittest.TestCase):
     """Pure-function tests for the PDF mode/pages arg parsers."""
 
-    def test_resolve_pdf_mode_default_is_auto(self) -> None:
-        self.assertEqual(server._resolve_pdf_mode({}), "auto")
+    def test_resolve_pdf_mode_default_is_text(self) -> None:
+        self.assertEqual(server._resolve_pdf_mode({}), "text")
 
     def test_resolve_pdf_mode_explicit_text(self) -> None:
         self.assertEqual(server._resolve_pdf_mode({"mode": "text"}), "text")
 
-    def test_resolve_pdf_mode_case_insensitive(self) -> None:
-        self.assertEqual(server._resolve_pdf_mode({"mode": "AUTO"}), "auto")
+    def test_resolve_pdf_mode_explicit_vision(self) -> None:
+        self.assertEqual(server._resolve_pdf_mode({"mode": "vision"}), "vision")
+
+    def test_resolve_pdf_mode_auto_is_alias_for_text(self) -> None:
+        # 'auto' kept for backwards compatibility with earlier callers.
+        self.assertEqual(server._resolve_pdf_mode({"mode": "auto"}), "text")
+        self.assertEqual(server._resolve_pdf_mode({"mode": "AUTO"}), "text")
 
     def test_resolve_pdf_mode_invalid_raises(self) -> None:
         with self.assertRaises(ValueError):
-            server._resolve_pdf_mode({"mode": "vision"})
+            server._resolve_pdf_mode({"mode": "garbage"})
 
     def test_parse_page_range_none(self) -> None:
         self.assertIsNone(server._parse_page_range(None))
@@ -1077,7 +1085,7 @@ class PdfVisionExtractionTests(unittest.TestCase):
 class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
     """End-to-end tests for the vision/text mode handling in _read_file_content."""
 
-    async def test_auto_mode_emits_image_blocks(self) -> None:
+    async def test_default_mode_is_text(self) -> None:
         client = FakeReadClient(
             url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
             attachments=[{"id": "a", "fileName": "slides.pdf"}],
@@ -1085,6 +1093,23 @@ class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         content, payload = await server._read_file_content(
             client, {"course_id": "c", "content_id": "i"}
+        )
+        f = payload["files"][0]
+        self.assertEqual(f["kind"], "pdf")
+        # Default is text — pypdf path, no pages rendered.
+        self.assertNotIn("pagesRendered", f)
+        self.assertIn("Hello PDF Fixture", f["text"])
+        image_blocks = [b for b in content if isinstance(b, ImageContent)]
+        self.assertEqual(image_blocks, [])
+
+    async def test_vision_mode_emits_image_blocks(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/slides.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "slides.pdf"}],
+            attachment_urls={"a": "/u/slides.pdf"},
+        )
+        content, payload = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i", "mode": "vision"}
         )
         # Structured payload still has the text + page count.
         f = payload["files"][0]
@@ -1133,7 +1158,7 @@ class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await server._read_file_content(
                 client,
-                {"course_id": "c", "content_id": "i", "mode": "vision"},
+                {"course_id": "c", "content_id": "i", "mode": "garbage"},
             )
 
     async def test_pages_filter_threads_through(self) -> None:
@@ -1146,7 +1171,7 @@ class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         _, payload = await server._read_file_content(
             client,
-            {"course_id": "c", "content_id": "i", "pages": "1"},
+            {"course_id": "c", "content_id": "i", "mode": "vision", "pages": "1"},
         )
         self.assertEqual(payload["files"][0]["pagesRendered"], [1])
 
@@ -1158,7 +1183,7 @@ class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
         )
         content, payload = await server._read_file_content(
             client,
-            {"course_id": "c", "content_id": "i", "pages": "99"},
+            {"course_id": "c", "content_id": "i", "mode": "vision", "pages": "99"},
         )
         # Page 99 doesn't exist on a 1-page PDF — extractor should render
         # nothing and we should see no ImageContent.
@@ -1194,6 +1219,512 @@ class ReadFileContentVisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Sample text body", payload["files"][0]["text"])
         image_blocks = [b for b in content if isinstance(b, ImageContent)]
         self.assertEqual(image_blocks, [])
+
+
+class FakeCalendarClient:
+    """Minimal client surface for _get_upcoming cross-course fan-out tests."""
+
+    def __init__(
+        self,
+        enrollments: list[dict[str, Any]],
+        per_course_items: dict[str, list[dict[str, Any]]],
+        failing_courses: set[str] | None = None,
+    ) -> None:
+        self._enrollments = enrollments
+        self._per_course = per_course_items
+        self._failing = failing_courses or set()
+        self.calls: list[dict[str, Any]] = []
+
+    async def get_my_enrollments(self) -> list[dict[str, Any]]:
+        return self._enrollments
+
+    async def get_calendar_items(
+        self,
+        *,
+        course_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        item_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.calls.append(
+            {"course_id": course_id, "since": since, "until": until, "item_type": item_type}
+        )
+        if course_id in self._failing:
+            raise RuntimeError(f"course {course_id} blew up")
+        return self._per_course.get(course_id or "", [])
+
+
+class UpcomingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fans_out_across_enrolled_courses_by_default(self) -> None:
+        client = FakeCalendarClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course_items={
+                "_1_1": [
+                    {
+                        "id": "ci-a",
+                        "calendarName": "course-cal-1",
+                        "title": "Lecture A",
+                        "start": "2026-05-20T10:00:00Z",
+                        "end": "2026-05-20T11:00:00Z",
+                    }
+                ],
+                "_2_1": [
+                    {
+                        "id": "ci-b",
+                        "calendarName": "course-cal-2",
+                        "title": "Quiz B",
+                        "start": "2026-05-18T09:00:00Z",
+                        "end": "2026-05-18T10:00:00Z",
+                        "dynamicCalendarItemProps": {
+                            "eventType": "GradebookColumn",
+                            "gradable": True,
+                            "attemptable": True,
+                        },
+                    }
+                ],
+            },
+        )
+        _, payload = await server._get_upcoming(client, {})
+
+        self.assertEqual(sorted(payload["courseIdsQueried"]), ["_1_1", "_2_1"])
+        ids = [i["id"] for i in payload["items"]]
+        self.assertEqual(ids, ["ci-b", "ci-a"])  # sorted by start asc
+        self.assertEqual(payload["items"][0]["courseId"], "_2_1")
+        self.assertTrue(payload["items"][0]["gradable"])
+        self.assertEqual(payload["courseErrors"], {})
+
+    async def test_explicit_course_ids_overrides_enrollment_fanout(self) -> None:
+        client = FakeCalendarClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course_items={"_2_1": []},
+        )
+        await server._get_upcoming(client, {"course_ids": ["_2_1"]})
+        self.assertEqual([c["course_id"] for c in client.calls], ["_2_1"])
+
+    async def test_type_filter_threads_through(self) -> None:
+        client = FakeCalendarClient(
+            enrollments=[{"courseId": "_1_1", "availability": {"available": "Yes"}}],
+            per_course_items={"_1_1": []},
+        )
+        await server._get_upcoming(
+            client,
+            {"course_ids": ["_1_1"], "type": "GradebookColumn"},
+        )
+        self.assertEqual(client.calls[0]["item_type"], "GradebookColumn")
+
+    async def test_invalid_iso8601_since_raises(self) -> None:
+        client = FakeCalendarClient(
+            enrollments=[{"courseId": "_1_1", "availability": {"available": "Yes"}}],
+            per_course_items={"_1_1": []},
+        )
+        with self.assertRaises(ValueError):
+            await server._get_upcoming(client, {"since": "not-a-date"})
+
+    async def test_per_course_failure_recorded(self) -> None:
+        client = FakeCalendarClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course_items={"_1_1": []},
+            failing_courses={"_2_1"},
+        )
+        _, payload = await server._get_upcoming(client, {})
+        self.assertEqual(payload["items"], [])
+        self.assertIn("_2_1", payload["courseErrors"])
+        self.assertIn("blew up", payload["courseErrors"]["_2_1"])
+
+
+class FakeCrossCourseAnnouncementsClient:
+    """Client that returns per-course announcements + enrollments."""
+
+    def __init__(
+        self,
+        enrollments: list[dict[str, Any]],
+        per_course: dict[str, list[dict[str, Any]]],
+        failing: set[str] | None = None,
+    ) -> None:
+        self._enrollments = enrollments
+        self._per_course = per_course
+        self._failing = failing or set()
+
+    async def get_my_enrollments(self) -> list[dict[str, Any]]:
+        return self._enrollments
+
+    async def get_announcements(self, course_id: str) -> list[dict[str, Any]]:
+        if course_id in self._failing:
+            raise RuntimeError(f"forbidden for {course_id}")
+        return self._per_course.get(course_id, [])
+
+
+class AnnouncementsCrossCourseTests(unittest.IsolatedAsyncioTestCase):
+    def _ann(self, ann_id: str, created: str) -> dict[str, Any]:
+        return {
+            "id": ann_id,
+            "title": ann_id,
+            "body": {"rawText": "<p>body</p>"},
+            "created": created,
+            "modified": created,
+            "availability": {"available": "Yes"},
+        }
+
+    async def test_default_fans_out_and_sorts_newest_first(self) -> None:
+        client = FakeCrossCourseAnnouncementsClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course={
+                "_1_1": [self._ann("a1", "2026-05-15T10:00:00Z")],
+                "_2_1": [self._ann("a2", "2026-05-16T10:00:00Z")],
+            },
+        )
+        _, payload = await server._get_announcements(client, {})
+        ids = [a["id"] for a in payload["announcements"]]
+        self.assertEqual(ids, ["a2", "a1"])
+        self.assertEqual(payload["announcements"][0]["courseId"], "_2_1")
+        self.assertEqual(payload["announcements"][1]["courseId"], "_1_1")
+        self.assertEqual(sorted(payload["courseIdsQueried"]), ["_1_1", "_2_1"])
+        self.assertEqual(payload["courseErrors"], {})
+
+    async def test_since_filters_older_announcements(self) -> None:
+        client = FakeCrossCourseAnnouncementsClient(
+            enrollments=[{"courseId": "_1_1", "availability": {"available": "Yes"}}],
+            per_course={
+                "_1_1": [
+                    self._ann("old", "2025-01-01T00:00:00Z"),
+                    self._ann("new", "2026-05-15T00:00:00Z"),
+                ],
+            },
+        )
+        _, payload = await server._get_announcements(
+            client, {"since": "2026-05-09T00:00:00Z"}
+        )
+        ids = [a["id"] for a in payload["announcements"]]
+        self.assertEqual(ids, ["new"])
+
+    async def test_explicit_course_ids_scopes_to_one_course(self) -> None:
+        client = FakeCrossCourseAnnouncementsClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course={
+                "_1_1": [self._ann("a1", "2026-05-15T00:00:00Z")],
+                "_2_1": [self._ann("a2", "2026-05-15T00:00:00Z")],
+            },
+        )
+        _, payload = await server._get_announcements(
+            client, {"course_ids": ["_1_1"]}
+        )
+        ids = [a["id"] for a in payload["announcements"]]
+        self.assertEqual(ids, ["a1"])
+        self.assertEqual(payload["courseIdsQueried"], ["_1_1"])
+
+    async def test_per_course_failure_recorded_not_raised(self) -> None:
+        client = FakeCrossCourseAnnouncementsClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course={"_1_1": [self._ann("a1", "2026-05-15T00:00:00Z")]},
+            failing={"_2_1"},
+        )
+        _, payload = await server._get_announcements(client, {})
+        self.assertEqual([a["id"] for a in payload["announcements"]], ["a1"])
+        self.assertIn("_2_1", payload["courseErrors"])
+
+    async def test_invalid_since_raises(self) -> None:
+        client = FakeCrossCourseAnnouncementsClient(
+            enrollments=[{"courseId": "_1_1", "availability": {"available": "Yes"}}],
+            per_course={"_1_1": []},
+        )
+        with self.assertRaises(ValueError):
+            await server._get_announcements(client, {"since": "garbage"})
+
+
+class FakeCrossCourseGradebookClient:
+    def __init__(
+        self,
+        enrollments: list[dict[str, Any]],
+        per_course_columns: dict[str, list[dict[str, Any]]],
+        per_course_grades: dict[str, list[dict[str, Any]]],
+        failing_columns: set[str] | None = None,
+        grades_fail_globally: bool = False,
+    ) -> None:
+        self._enrollments = enrollments
+        self._cols = per_course_columns
+        self._grades = per_course_grades
+        self._failing_cols = failing_columns or set()
+        self._grades_fail_globally = grades_fail_globally
+
+    async def get_my_enrollments(self) -> list[dict[str, Any]]:
+        return self._enrollments
+
+    async def get_my_user_id(self) -> str:
+        return "user-1"
+
+    async def get_gradebook_columns(self, course_id: str) -> list[dict[str, Any]]:
+        if course_id in self._failing_cols:
+            raise RuntimeError(f"columns failed for {course_id}")
+        return self._cols.get(course_id, [])
+
+    async def get_user_grades(
+        self, course_id: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        if self._grades_fail_globally:
+            raise RuntimeError(f"grades endpoint unavailable for {course_id}")
+        return self._grades.get(course_id, [])
+
+
+class GradebookCrossCourseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_fans_out_and_attributes_courseid_per_column(self) -> None:
+        client = FakeCrossCourseGradebookClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course_columns={
+                "_1_1": [
+                    {"id": "col-a", "name": "Quiz 1", "score": {"possible": 10}}
+                ],
+                "_2_1": [
+                    {"id": "col-b", "name": "Lab 1", "score": {"possible": 20}}
+                ],
+            },
+            per_course_grades={
+                "_1_1": [{"columnId": "col-a", "score": 9, "grade": "9"}],
+                "_2_1": [],
+            },
+        )
+        _, payload = await server._get_gradebook(client, {})
+        by_id = {c["id"]: c for c in payload["columns"]}
+        self.assertEqual(by_id["col-a"]["courseId"], "_1_1")
+        self.assertEqual(by_id["col-b"]["courseId"], "_2_1")
+        self.assertEqual(by_id["col-a"]["score"], 9)
+        self.assertTrue(payload["gradesAvailable"])
+
+    async def test_column_failure_per_course_recorded(self) -> None:
+        client = FakeCrossCourseGradebookClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+                {"courseId": "_2_1", "availability": {"available": "Yes"}},
+            ],
+            per_course_columns={
+                "_1_1": [{"id": "col-a", "name": "Quiz", "score": {"possible": 10}}],
+            },
+            per_course_grades={"_1_1": []},
+            failing_columns={"_2_1"},
+        )
+        _, payload = await server._get_gradebook(client, {})
+        self.assertEqual([c["id"] for c in payload["columns"]], ["col-a"])
+        self.assertIn("_2_1", payload["courseErrors"])
+
+    async def test_global_grade_failure_flips_grades_available(self) -> None:
+        client = FakeCrossCourseGradebookClient(
+            enrollments=[
+                {"courseId": "_1_1", "availability": {"available": "Yes"}},
+            ],
+            per_course_columns={
+                "_1_1": [{"id": "col-a", "name": "Quiz", "score": {"possible": 10}}],
+            },
+            per_course_grades={},
+            grades_fail_globally=True,
+        )
+        _, payload = await server._get_gradebook(client, {})
+        self.assertFalse(payload["gradesAvailable"])
+        self.assertIn("grades endpoint unavailable", payload["gradeFetchError"])
+        self.assertEqual(payload["columns"][0]["score"], None)
+
+
+class FakeContentsClient:
+    def __init__(
+        self,
+        top_level: list[dict[str, Any]],
+        children_by_id: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> None:
+        self._top = top_level
+        self._children = children_by_id or {}
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def get_course_contents(self, course_id: str) -> list[dict[str, Any]]:
+        self.calls.append((course_id, None))
+        return self._top
+
+    async def get_content_children(
+        self, course_id: str, content_id: str
+    ) -> list[dict[str, Any]]:
+        self.calls.append((course_id, content_id))
+        return self._children.get(content_id, [])
+
+
+class GetCourseContentsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_without_parent_id_returns_root(self) -> None:
+        client = FakeContentsClient(
+            top_level=[{"id": "x", "title": "X"}],
+        )
+        _, payload = await server._get_course_contents(
+            client, {"course_id": "_1_1"}
+        )
+        self.assertEqual(payload["items"][0]["id"], "x")
+        self.assertEqual(client.calls, [("_1_1", None)])
+
+    async def test_with_parent_id_drills_into_children(self) -> None:
+        client = FakeContentsClient(
+            top_level=[],
+            children_by_id={
+                "_p_1": [{"id": "kid-1", "title": "Kid"}],
+            },
+        )
+        _, payload = await server._get_course_contents(
+            client, {"course_id": "_1_1", "parent_id": "_p_1"}
+        )
+        self.assertEqual(payload["items"][0]["id"], "kid-1")
+        self.assertEqual(client.calls, [("_1_1", "_p_1")])
+
+
+class FakeDownloadClientForDest:
+    """download-only fake that records bytes per URL."""
+
+    def __init__(self, items: list[tuple[str, str]]) -> None:
+        # items: list of (url, filename)
+        self._items = items
+
+    async def get_content_item(self, course_id: str, content_id: str) -> dict[str, Any]:
+        return {
+            "title": "Lecture pack",
+            "contentHandler": {"id": "resource/x-bb-file"},
+        }
+
+    async def get_attachments(
+        self, course_id: str, content_id: str
+    ) -> list[dict[str, Any]]:
+        return [{"id": f"att-{i}", "fileName": fn} for i, (_, fn) in enumerate(self._items)]
+
+    async def get_attachment_download_url(
+        self, course_id: str, content_id: str, attachment_id: str
+    ) -> str:
+        idx = int(attachment_id.split("-")[1])
+        return self._items[idx][0]
+
+    async def download_bytes(self, url: str) -> tuple[bytes, str | None]:
+        return b"payload", "application/pdf"
+
+
+class DownloadDestinationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_destination_dir_used(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "y3s1" / "sc2002" / "week 8"
+            _, payload = await server._download_file(
+                FakeDownloadClientForDest([("/u/tut.pdf", "tut.pdf")]),
+                {
+                    "course_id": "_1_1",
+                    "content_id": "_2_1",
+                    "destination_dir": str(target),
+                },
+            )
+            self.assertTrue(target.exists())
+            saved_path = Path(payload["files"][0]["localPath"])
+            self.assertEqual(saved_path.parent.resolve(), target.resolve())
+            self.assertEqual(saved_path.read_bytes(), b"payload")
+
+    async def test_tilde_destination_expands(self) -> None:
+        # We don't want to actually write under ~ in tests; just verify the
+        # resolver expansion logic.
+        resolved = server._resolve_destination_dir("~/foo/bar")
+        self.assertFalse(str(resolved).startswith("~"))
+        self.assertTrue(str(resolved).endswith("foo/bar"))
+
+    async def test_env_var_default_when_no_arg(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_resolved = Path(tmp).resolve()
+            old = os.environ.get("NTULEARN_DOWNLOAD_DIR")
+            os.environ["NTULEARN_DOWNLOAD_DIR"] = tmp
+            try:
+                _, payload = await server._download_file(
+                    FakeDownloadClientForDest([("/u/tut.pdf", "tut.pdf")]),
+                    {"course_id": "_1_1", "content_id": "_2_1"},
+                )
+            finally:
+                if old is None:
+                    del os.environ["NTULEARN_DOWNLOAD_DIR"]
+                else:
+                    os.environ["NTULEARN_DOWNLOAD_DIR"] = old
+            saved_parent = Path(payload["files"][0]["localPath"]).resolve().parent
+            self.assertEqual(saved_parent, tmp_resolved)
+
+    async def test_empty_destination_dir_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            server._resolve_destination_dir("   ")
+
+    async def test_non_string_destination_dir_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            server._resolve_destination_dir(123)
+
+
+class PDFTextDefaultTests(unittest.IsolatedAsyncioTestCase):
+    """Step 6 acceptance: PDFs default to text, no ImageContent emitted."""
+
+    async def test_pdf_no_mode_arg_returns_text_only(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/notes.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "notes.pdf"}],
+            attachment_urls={"a": "/u/notes.pdf"},
+        )
+        content, payload = await server._read_file_content(
+            client, {"course_id": "c", "content_id": "i"}
+        )
+        f = payload["files"][0]
+        self.assertEqual(f["kind"], "pdf")
+        self.assertIn("Hello PDF Fixture", f["text"])
+        self.assertEqual(
+            [b for b in content if isinstance(b, ImageContent)], []
+        )
+
+
+class PDFStdoutProtectionTests(unittest.IsolatedAsyncioTestCase):
+    """Step 1 acceptance: nothing leaks to stdout during PDF vision render.
+
+    Captures fd=1 across the render call by redirecting it to a pipe, then
+    asserts the pipe is empty. This is a stronger guarantee than mocking out
+    `print` — it catches C-level emissions from MuPDF.
+    """
+
+    async def test_vision_render_does_not_write_to_stdout(self) -> None:
+        client = FakeReadClient(
+            url_to_payload={"/u/notes.pdf": (_TINY_PDF_BYTES, "application/pdf")},
+            attachments=[{"id": "a", "fileName": "notes.pdf"}],
+            attachment_urls={"a": "/u/notes.pdf"},
+        )
+
+        # Save the real stdout fd, redirect fd=1 to a pipe for the render call.
+        original_stdout_fd = os.dup(1)
+        r_fd, w_fd = os.pipe()
+        os.dup2(w_fd, 1)
+        try:
+            try:
+                await server._read_file_content(
+                    client,
+                    {"course_id": "c", "content_id": "i", "mode": "vision"},
+                )
+            finally:
+                # Restore real stdout before reading the pipe — otherwise the
+                # subsequent assert prints would also land in the pipe.
+                os.dup2(original_stdout_fd, 1)
+                os.close(original_stdout_fd)
+                os.close(w_fd)
+
+            captured = os.read(r_fd, 8192)
+        finally:
+            os.close(r_fd)
+
+        self.assertEqual(captured, b"")
 
 
 if __name__ == "__main__":

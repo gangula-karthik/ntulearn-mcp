@@ -1,8 +1,21 @@
 # ntulearn-mcp
 
-MCP server for **NTULearn** (NTU Singapore's Blackboard Learn instance). Lets Claude Desktop, Claude Code, Cursor, Cline, and other MCP hosts read your courses, content, announcements, and grades.
+MCP server for **NTULearn** (NTU Singapore's Blackboard Learn instance). Lets Claude Desktop, Claude Code, Cursor, Cline, and other MCP hosts answer questions about your courses, announcements, calendar, and grades — and organise course files into a folder hierarchy on your disk.
 
 Built for tech-inclined NTU students. Requires Python 3.12+ and `uv`.
+
+---
+
+## What it's for
+
+Four prompts this server is built to make easy:
+
+1. **"What announcements happened across my courses this week?"** → fans out across all enrolled courses, sorted newest first.
+2. **"What assignments do I have due next week?"** → reads NTULearn's calendar, including gradable items (`type=GradebookColumn`).
+3. **"Organise this semester's NTULearn content into `~/NTU/y3s1/sc2002/week 8/…` on my disk."** → walks the course tree and downloads files into a folder layout you describe in plain English.
+4. **"Pull the assignment due dates and grading weightages out of this course briefing PDF."** → reads small text-heavy PDFs / Office docs inline (no filesystem hop).
+
+For multi-page, diagram-heavy lecture decks, **use `download_file` and drag the PDF into claude.ai** — that path has a 32 MB budget and native vision rendering. MCP tool results are capped at 1 MB; this server doesn't try to compete with drag-and-drop for full lecture decks.
 
 ---
 
@@ -48,17 +61,50 @@ claude mcp add ntulearn -- uvx ntulearn-mcp
 
 **Cursor** — edit `~/.cursor/mcp.json` with the same shape as Claude Desktop above.
 
-**OpenClaw:**
-
-```bash
-openclaw mcp set ntulearn '{"command":"uvx","args":["ntulearn-mcp"]}'
-```
-
 ### 4. Restart your MCP host, then try it
 
-Ask Claude: *"List my NTULearn courses."*
+Ask Claude: *"What's due in NTULearn over the next two weeks?"*
 
-That's the whole flow for most users. Read [Authentication](#authentication) if you're on Windows with Chrome/Edge, or if step 4 doesn't return anything.
+That's the whole flow for most users. Read [Authentication](#authentication) if you're on Windows with Chrome/Edge, or if the call doesn't return anything.
+
+---
+
+## Tools
+
+8 tools. Most do cross-course aggregation by default — you almost never need to pass course IDs by hand.
+
+| Tool | What it does |
+|---|---|
+| `ntulearn_list_courses` | List enrolled courses. |
+| `ntulearn_get_course_contents` | Walk a course's content tree. Omit `parent_id` for the top level; pass it to drill into a folder. |
+| `ntulearn_search_course_content` | Recursive substring search within one course. |
+| `ntulearn_get_upcoming` | **Calendar items across enrolled courses.** Defaults to the next 2 weeks. `type='GradebookColumn'` filters to assignments. |
+| `ntulearn_get_announcements` | **Announcements across enrolled courses, newest first.** Optional `since` for "this week". |
+| `ntulearn_get_gradebook` | **Gradebook columns across enrolled courses,** with your scores when available. |
+| `ntulearn_download_file` | Download every file on a content item to disk. `destination_dir` lets you build hierarchies (`~/NTU/y3s1/sc2002/week 8/`). |
+| `ntulearn_read_file_content` | Read attached file content inline (no filesystem hop). PDFs default to **text** mode; pass `mode='vision'` + a narrow `pages` range for diagram-heavy pages. |
+
+## Example prompts
+
+- *"What announcements went out across my courses this past week?"* — `get_announcements(since='2026-05-09T00:00:00Z')`.
+- *"What assignments do I have due in the next two weeks?"* — `get_upcoming(type='GradebookColumn')`.
+- *"Show me the full calendar for the next 10 days."* — `get_upcoming(until='2026-05-26T00:00:00Z')`.
+- *"What's my current grade in `_12345_1`?"* — `get_gradebook(course_ids=['_12345_1'])`.
+- *"Read me the assignment brief — `_67890_1` in `_12345_1`."* — `read_file_content` text mode.
+- *"There's a UML diagram on slide 5 of this deck I want to ask about."* — `read_file_content(mode='vision', pages='5')`.
+
+## Walkthrough: organising a semester
+
+> *"Walk my enrolled courses and put each course's content under `~/NTU/y3s1/<course-name>/<topic>/…`."*
+
+The model chains tools roughly like this:
+
+1. `ntulearn_list_courses` → enrolled course list.
+2. For each course: `ntulearn_get_course_contents(course_id)` → top-level folders.
+3. For each folder: `ntulearn_get_course_contents(course_id, parent_id=...)` → child items (recurse).
+4. For each file-bearing content item: `ntulearn_download_file(course_id, content_id, destination_dir='~/NTU/y3s1/<course>/<topic>/')`.
+
+`destination_dir` accepts absolute paths and `~`-prefixed paths and is created on demand. Pair this with the Notion MCP server if you want the result mirrored to a digital binder.
 
 ---
 
@@ -66,10 +112,11 @@ That's the whole flow for most users. Read [Authentication](#authentication) if 
 
 The server resolves your `BbRouter` cookie in this order:
 
-1. **`NTULEARN_COOKIE` env var** — explicit override; always wins.
-2. **Browser auto-read** — walks Edge → Chrome → Firefox → Brave via [`browser-cookie3`](https://pypi.org/project/browser-cookie3/), returns the first valid `BbRouter`.
+1. **Browser auto-read** — walks Edge → Chrome → Firefox → Brave via [`browser-cookie3`](https://pypi.org/project/browser-cookie3/), returns the first valid `BbRouter`.
+2. **`NTULEARN_COOKIE` env var** — manual fallback when no browser auto-read can succeed (Windows + Chrome/Edge ABE, headless, etc.).
+3. **Last-known-good cache** in your OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service) — covers transient browser-read failures for the cookie's full lifetime once any path has succeeded once.
 
-When your session expires mid-conversation, the server catches the 401, re-reads from your browser, and retries the call once. If your browser still has a fresh session, this is invisible.
+When your session expires mid-conversation, the server catches the 401, invalidates the cache, re-reads from your browser, and retries the call once. If your browser still has a fresh session, this is invisible.
 
 ### Platform support for auto-read
 
@@ -123,31 +170,7 @@ If auto-read doesn't work for you:
 
 5. Restart your MCP host.
 
-The cookie expires with your NTULearn session (days–weeks). When it does, repeat from step 1. **This will not auto-refresh** — manual override disables the browser auto-read fallback.
-
----
-
-## Available tools
-
-| Tool | Description |
-|---|---|
-| `list_courses` | List enrolled courses |
-| `get_course_contents` | Top-level content tree for a course |
-| `get_folder_children` | Children of a folder/lesson |
-| `search_course_content` | Recursively search a course's content tree |
-| `get_file_download_url` | Extract download URL from a content item |
-| `download_file` | Download a file to your local downloads folder |
-| `get_announcements` | Course announcements |
-| `get_gradebook` | Gradebook columns and your scores |
-
-## Example prompts
-
-- *"List all my NTULearn courses."*
-- *"Show me the content tree for course `_12345_1`."*
-- *"Search for 'assignment' in course `_12345_1`."*
-- *"Download the lecture slides from content item `_67890_1` in course `_12345_1`."*
-- *"What are the latest announcements in my courses?"*
-- *"Show me my grades for course `_12345_1`."*
+The cookie expires with your NTULearn session (days–weeks). When it does, repeat from step 1. As of 0.2.0 the env var is a **fallback**, not an override — if a browser auto-read succeeds, the fresh browser value wins.
 
 ---
 
@@ -155,9 +178,9 @@ The cookie expires with your NTULearn session (days–weeks). When it does, repe
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `NTULEARN_COOKIE` | (auto-read) | Override the cookie source |
-| `NTULEARN_BASE_URL` | `https://ntulearn.ntu.edu.sg` | Change for a different Blackboard instance |
-| `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Where `download_file` saves files |
+| `NTULEARN_COOKIE` | (auto-read) | Manual cookie fallback. |
+| `NTULEARN_BASE_URL` | `https://ntulearn.ntu.edu.sg` | Change for a different Blackboard instance. |
+| `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` when no per-call value is passed. |
 
 Set these in your MCP host's `env` block (same place as `NTULEARN_COOKIE` above).
 
@@ -166,11 +189,13 @@ Set these in your MCP host's `env` block (same place as `NTULEARN_COOKIE` above)
 ## Troubleshooting
 
 **"No NTULearn cookie found" / tools fail with 401.**
-- Make sure you're logged into NTULearn in a supported browser.
-- Check that no stale `NTULEARN_COOKIE` value is set anywhere — env vars and `.env` files **always** override browser auto-read. If you previously set it manually and want to switch to auto-read, delete the line.
+Make sure you're logged into NTULearn in a supported browser. If you're on Windows + Chrome/Edge, set `NTULEARN_COOKIE` per the [manual fallback](#manual-cookie-fallback).
 
 **MCP host lists "ntulearn" but the tool calls hang or return nothing.**
 On macOS, the first call may be blocked on a hidden Keychain prompt. See [macOS first-time setup](#macos-first-time-setup).
+
+**`read_file_content` returns "would exceed batch cap" / nothing useful for a big PDF.**
+That's expected for multi-page lecture decks. Use `download_file` (with a `destination_dir` if you want it organised) and drag the resulting file into claude.ai for full-fidelity reading. `read_file_content` is for small documents (briefs, tutorials) you want to ask questions about inline.
 
 **The server crashes on startup.**
 Run it directly to see the error:
@@ -192,7 +217,7 @@ Your browser session probably expired. Open NTULearn in your browser, complete S
 git clone https://github.com/kingdonkatsu/ntulearn-mcp.git
 cd ntulearn-mcp
 uv sync                                          # install deps incl. dev
-uv run python -m unittest discover -s tests      # run tests (24)
+uv run python -m unittest discover -s tests      # run tests
 uv run ntulearn-mcp                              # run the server (stdio)
 uv run mcp dev src/ntulearn_mcp/server.py        # interactive tool inspector
 ```
@@ -204,8 +229,8 @@ src/ntulearn_mcp/
 ├── server.py     # MCP entrypoint, tool handlers, cookie resolution
 ├── client.py     # async httpx-based Blackboard REST client
 ├── cookie.py     # browser cookie auto-read
-├── parsers.py    # HTML body → download URL extraction
-└── models.py     # Pydantic models (validation / reference)
+├── cache.py      # last-known-good cookie cache (OS keychain)
+└── parsers.py    # HTML body → download URL extraction
 ```
 
 Tests use `unittest` (not pytest); HTTP is mocked via `httpx.MockTransport`. See [CLAUDE.md](CLAUDE.md) for design decisions and known limitations.

@@ -218,6 +218,39 @@ class NTULearnClient:
         return await self._get_paginated(f"/learn/api/public/v1/courses/{course_id}/announcements")
 
     # -------------------------------------------------------------------------
+    # Calendar
+    # -------------------------------------------------------------------------
+
+    async def get_calendar_items(
+        self,
+        *,
+        course_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        item_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch calendar items, optionally scoped to a course.
+
+        Wraps GET /learn/api/public/v1/calendars/items. Note Anthology's
+        docs warn that unscoped calls (no courseId) under non-3LO auth can
+        attempt to dump the entire institution calendar — server layer
+        defaults to fanning out across the user's enrolled courses rather
+        than relying on the unscoped path.
+
+        Assignment due dates surface as items with type='GradebookColumn'.
+        """
+        params: dict[str, Any] = {}
+        if course_id is not None:
+            params["courseId"] = course_id
+        if since is not None:
+            params["since"] = since
+        if until is not None:
+            params["until"] = until
+        if item_type is not None:
+            params["type"] = item_type
+        return await self._get_paginated("/learn/api/public/v1/calendars/items", params)
+
+    # -------------------------------------------------------------------------
     # Gradebook
     # -------------------------------------------------------------------------
 
