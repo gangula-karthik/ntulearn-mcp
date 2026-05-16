@@ -80,5 +80,79 @@ class DownloadSafetyTests(unittest.IsolatedAsyncioTestCase):
             await client.close()
 
 
+class CalendarItemsTests(unittest.IsolatedAsyncioTestCase):
+    """Coverage for the calendar wrapper that feeds ntulearn_get_upcoming."""
+
+    async def test_courseid_since_until_and_type_are_forwarded(self) -> None:
+        seen: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.update(dict(request.url.params))
+            return httpx.Response(
+                200, json={"results": [{"id": "ci-1", "title": "Quiz"}], "paging": {}}
+            )
+
+        client = NTULearnClient(
+            "https://ntulearn.ntu.edu.sg",
+            "secret",
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            items = await client.get_calendar_items(
+                course_id="_123_1",
+                since="2026-05-23T00:00:00Z",
+                until="2026-05-30T00:00:00Z",
+                item_type="GradebookColumn",
+            )
+        finally:
+            await client.close()
+
+        self.assertEqual(seen["courseId"], "_123_1")
+        self.assertEqual(seen["since"], "2026-05-23T00:00:00Z")
+        self.assertEqual(seen["until"], "2026-05-30T00:00:00Z")
+        self.assertEqual(seen["type"], "GradebookColumn")
+        self.assertEqual(items, [{"id": "ci-1", "title": "Quiz"}])
+
+    async def test_empty_window_returns_empty_list(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"results": [], "paging": {}})
+
+        client = NTULearnClient(
+            "https://ntulearn.ntu.edu.sg",
+            "secret",
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            items = await client.get_calendar_items(course_id="_1_1")
+        finally:
+            await client.close()
+
+        self.assertEqual(items, [])
+
+    async def test_429_raises_blackboard_api_error_with_rate_limit_message(
+        self,
+    ) -> None:
+        # Anthology docs warn unscoped calendar calls under non-3LO auth can be
+        # throttled — confirm we surface a 429 distinctly rather than crashing.
+        from ntulearn_mcp.client import BlackboardAPIError
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, content=b"throttled")
+
+        client = NTULearnClient(
+            "https://ntulearn.ntu.edu.sg",
+            "secret",
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            with self.assertRaises(BlackboardAPIError) as ctx:
+                await client.get_calendar_items(course_id="_1_1")
+        finally:
+            await client.close()
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertIn("rate limited", str(ctx.exception).lower())
+
+
 if __name__ == "__main__":
     unittest.main()

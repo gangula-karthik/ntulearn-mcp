@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
+import sys
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -52,6 +55,17 @@ _MAX_XLSX_ROWS_PER_SHEET = 1000
 # attachment a user would realistically read in one tool call. Use the `pages`
 # arg to step through bigger PDFs.
 _MAX_PDF_PAGES_VISION = 50
+
+# Cumulative PNG byte budget for PDF vision mode. claude.ai web caps a single
+# tool result at ~1 MB; base64-inflated images push past that fast. Stop
+# rendering once we've produced this many bytes of PNG. 800 KB leaves headroom
+# for the structured payload + text and stays comfortably under the 1 MB cap
+# even after base64 expansion (~33%).
+_MAX_PDF_VISION_BYTES = 800 * 1024
+
+# Render zoom for PDF vision. 1.3x ≈ 96 DPI is plenty for the API's 1568px
+# downscale and roughly halves PNG byte size vs the previous 2.0x default.
+_PDF_VISION_ZOOM = 1.3
 
 # Pagination defaults / caps for list-returning tools.
 _DEFAULT_LIMIT = 50
@@ -210,6 +224,51 @@ def _strip_content(item: dict[str, Any]) -> dict[str, Any]:
         "description": description_raw.get("rawText") if isinstance(description_raw, dict) else description_raw,
         "modified": item.get("modified"),
     }
+
+
+def _strip_calendar_item(item: dict[str, Any], course_id: str | None) -> dict[str, Any]:
+    """Reduce a raw calendar item to fields useful to a student / agent.
+
+    `dynamicCalendarItemProps` carries the interesting GradebookColumn metadata
+    (eventType, gradable, attemptable) — flatten so callers don't have to dig.
+    """
+    dyn = item.get("dynamicCalendarItemProps") or {}
+    return {
+        "id": item.get("id"),
+        "type": item.get("type"),
+        "title": item.get("title"),
+        "description": item.get("description"),
+        "location": item.get("location"),
+        "start": item.get("start"),
+        "end": item.get("end"),
+        "calendarName": item.get("calendarName"),
+        "courseId": course_id,
+        "eventType": dyn.get("eventType"),
+        "gradable": dyn.get("gradable"),
+        "attemptable": dyn.get("attemptable"),
+    }
+
+
+def _validate_iso8601(value: str, *, name: str) -> str:
+    """Accept an ISO-8601 datetime string and return it.
+
+    Blackboard's calendar API wants ``2026-05-09T00:00:00Z`` style. We round-trip
+    through ``datetime.fromisoformat`` for a cheap sanity check — anything that
+    parses survives. ``Z`` is normalised because ``fromisoformat`` only handles
+    it natively from 3.11+, and we want a clear error rather than a 400 from
+    Blackboard.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty ISO-8601 timestamp string")
+    normalised = value.replace("Z", "+00:00") if value.endswith("Z") else value
+    try:
+        datetime.fromisoformat(normalised)
+    except ValueError as e:
+        raise ValueError(
+            f"{name}={value!r} is not a valid ISO-8601 timestamp. "
+            "Expected format like '2026-05-09T00:00:00Z'."
+        ) from e
+    return value
 
 
 async def _resolve_content_files(
@@ -434,6 +493,28 @@ def _extract_content(
     }
 
 
+@contextlib.contextmanager
+def _suppress_stdout_fd():
+    """Redirect raw stdout fd (1) to /dev/null for the duration of the block.
+
+    MuPDF emits warnings/errors from C, bypassing any Python-level
+    ``sys.stdout`` redirection. Anything that reaches fd 1 corrupts the
+    MCP JSON-RPC frame the host is parsing. Belt-and-suspenders alongside
+    ``fitz.TOOLS.mupdf_display_errors(False)``.
+    """
+    sys.stdout.flush()
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    saved_fd = os.dup(1)
+    try:
+        os.dup2(devnull_fd, 1)
+        yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved_fd, 1)
+        os.close(saved_fd)
+        os.close(devnull_fd)
+
+
 def _extract_pdf_vision(
     filename: str,
     content_type: str | None,
@@ -446,7 +527,8 @@ def _extract_pdf_vision(
     Mirrors what Claude.ai does when a user attaches a PDF: per-page text
     AND a rendered image, so the model can see diagrams / equations /
     scanned content that pure-text extractors miss. Each rendered page
-    costs roughly 2-2.5K vision tokens, so we cap at _MAX_PDF_PAGES_VISION.
+    costs roughly 1-2K vision tokens; rendering stops at whichever of
+    _MAX_PDF_PAGES_VISION or _MAX_PDF_VISION_BYTES is hit first.
 
     Returns a dict with the structured-content fields and a private
     ``_images`` list of ``(label, png_bytes)`` tuples for the caller to
@@ -464,8 +546,17 @@ def _extract_pdf_vision(
             "contentType": content_type,
         }
 
+    # Silence MuPDF's Python-visible diagnostic stream. fd-level redirect
+    # catches anything the C layer emits regardless. Both are necessary —
+    # invalid-PDF errors fire during open, well before the render loop.
     try:
-        doc = fitz.open(stream=content_bytes, filetype="pdf")
+        fitz.TOOLS.mupdf_display_errors(False)
+    except Exception:
+        pass
+
+    try:
+        with _suppress_stdout_fd():
+            doc = fitz.open(stream=content_bytes, filetype="pdf")
     except Exception as e:
         return {
             "filename": filename,
@@ -492,41 +583,63 @@ def _extract_pdf_vision(
             # 1-indexed in the API, 0-indexed for PyMuPDF.
             page_indices = sorted(p - 1 for p in pages_filter if 1 <= p <= total_pages)
 
-        truncated = False
+        truncation_reason: str | None = None
         if len(page_indices) > _MAX_PDF_PAGES_VISION:
             page_indices = page_indices[:_MAX_PDF_PAGES_VISION]
-            truncated = True
+            truncation_reason = "page_cap"
 
         text_parts: list[str] = []
         images: list[tuple[str, bytes]] = []
-        # 2x zoom ≈ 144 DPI — comfortably within Claude's vision sweet spot
-        # without bloating the response. Higher DPI doesn't help once the
-        # API resizes back to its 1568px cap.
-        zoom = fitz.Matrix(2.0, 2.0)
-        for idx in page_indices:
-            page = doc[idx]
-            text_parts.append(f"## Page {idx + 1}\n\n{page.get_text()}")
-            pix = page.get_pixmap(matrix=zoom, alpha=False)
-            png_bytes = pix.tobytes("png")
-            images.append((f"{filename} · page {idx + 1}", png_bytes))
+        rendered_indices: list[int] = []
+        cumulative_bytes = 0
+        zoom = fitz.Matrix(_PDF_VISION_ZOOM, _PDF_VISION_ZOOM)
+        with _suppress_stdout_fd():
+            for idx in page_indices:
+                page = doc[idx]
+                page_text = page.get_text()
+                pix = page.get_pixmap(matrix=zoom, alpha=False)
+                png_bytes = pix.tobytes("png")
+                if (
+                    cumulative_bytes + len(png_bytes) > _MAX_PDF_VISION_BYTES
+                    and rendered_indices
+                ):
+                    truncation_reason = "byte_budget"
+                    break
+                cumulative_bytes += len(png_bytes)
+                text_parts.append(f"## Page {idx + 1}\n\n{page_text}")
+                images.append((f"{filename} · page {idx + 1}", png_bytes))
+                rendered_indices.append(idx)
 
         text = "\n\n".join(text_parts)
+        truncated_pages = len(page_indices) - len(rendered_indices)
         out: dict[str, Any] = {
             "filename": filename,
             "kind": "pdf",
             "text": text,
             "pageCount": total_pages,
-            "pagesRendered": [i + 1 for i in page_indices],
+            "pagesRendered": [i + 1 for i in rendered_indices],
             "_images": images,
             "sizeBytes": size,
             "contentType": content_type,
         }
-        if truncated:
-            out["warning"] = (
-                f"PDF has more than {_MAX_PDF_PAGES_VISION} pages; only the first "
-                f"{_MAX_PDF_PAGES_VISION} pages of the requested range were rendered. "
-                "Use the `pages` arg to read other ranges."
-            )
+        if truncation_reason is not None:
+            out["truncatedPages"] = truncated_pages
+            out["truncationReason"] = truncation_reason
+            if truncation_reason == "byte_budget":
+                next_page = rendered_indices[-1] + 2 if rendered_indices else 1
+                out["warning"] = (
+                    f"Rendered {len(rendered_indices)} page(s) before hitting the "
+                    f"~{_MAX_PDF_VISION_BYTES // 1024} KB image-bytes budget. "
+                    f"{truncated_pages} page(s) of the requested range were not rendered. "
+                    f"Call again with pages='{next_page}-' to continue, or pass "
+                    f"mode='text' for a cheaper text-only pass."
+                )
+            else:
+                out["warning"] = (
+                    f"Requested range exceeds the {_MAX_PDF_PAGES_VISION}-page render cap; "
+                    f"only the first {_MAX_PDF_PAGES_VISION} page(s) were rendered. "
+                    "Use the `pages` arg to step through the rest."
+                )
         return out
     except Exception as e:
         return {
@@ -793,10 +906,22 @@ def _resolve_response_format(args: dict[str, Any]) -> str:
 
 
 def _resolve_pdf_mode(args: dict[str, Any]) -> str:
-    """Return 'auto' or 'text'. Default: 'auto' (matches Claude.ai's PDF flow)."""
-    mode = str(args.get("mode", "auto")).lower()
-    if mode not in ("auto", "text"):
-        raise ValueError("mode must be 'auto' or 'text'")
+    """Return 'text' or 'vision'. Default: 'text'.
+
+    Most PDF reads on NTULearn are text-extraction questions ("what's the due
+    date in this brief?", "summarise this reading"); rendering every page as an
+    image bloats the response past MCP's 1 MB cap for typical lecture decks.
+    Vision is opt-in for diagram/equation-heavy pages — pair with `pages` to
+    restrict to the specific page(s) you need.
+
+    'auto' is accepted as an alias for 'text' for backwards compatibility with
+    earlier callers; treating auto as text is the safe default.
+    """
+    mode = str(args.get("mode", "text")).lower()
+    if mode == "auto":
+        mode = "text"
+    if mode not in ("text", "vision"):
+        raise ValueError("mode must be 'text' or 'vision'")
     return mode
 
 
@@ -938,6 +1063,7 @@ _ANNOUNCEMENT_SCHEMA = {
     "type": "object",
     "properties": {
         "id": {"type": ["string", "null"]},
+        "courseId": {"type": ["string", "null"]},
         "title": {"type": ["string", "null"]},
         "body": {"type": ["string", "null"]},
         "created": {"type": ["string", "null"]},
@@ -946,10 +1072,31 @@ _ANNOUNCEMENT_SCHEMA = {
     },
 }
 
+_CALENDAR_ITEM_TYPES = ("Course", "GradebookColumn", "Institution", "OfficeHours", "Personal")
+
+_CALENDAR_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": ["string", "null"]},
+        "type": {"type": ["string", "null"]},
+        "title": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "location": {"type": ["string", "null"]},
+        "start": {"type": ["string", "null"]},
+        "end": {"type": ["string", "null"]},
+        "calendarName": {"type": ["string", "null"]},
+        "courseId": {"type": ["string", "null"]},
+        "eventType": {"type": ["string", "null"]},
+        "gradable": {"type": ["boolean", "null"]},
+        "attemptable": {"type": ["boolean", "null"]},
+    },
+}
+
 _GRADEBOOK_COLUMN_SCHEMA = {
     "type": "object",
     "properties": {
         "id": {"type": ["string", "null"]},
+        "courseId": {"type": ["string", "null"]},
         "name": {"type": ["string", "null"]},
         "displayName": {"type": ["string", "null"]},
         "possible": {"type": ["number", "null"]},
@@ -976,6 +1123,8 @@ _FILE_INFO_SCHEMA = {
         "text": {"type": "string"},
         "pageCount": {"type": "integer"},
         "pagesRendered": {"type": "array", "items": {"type": "integer"}},
+        "truncatedPages": {"type": "integer"},
+        "truncationReason": {"type": "string", "enum": ["byte_budget", "page_cap"]},
         "paragraphCount": {"type": "integer"},
         "tableCount": {"type": "integer"},
         "slideCount": {"type": "integer"},
@@ -1044,12 +1193,13 @@ async def list_tools() -> list[Tool]:
         Tool(
             name=f"{_TOOL_PREFIX}_get_course_contents",
             description=(
-                "Get the top-level content tree for a course. "
-                "Returns folders, documents, links, and assignments at the root level. "
-                "Use ntulearn_get_folder_children to drill into items where hasChildren=true."
+                "Walk a course's content tree. Omit parent_id to get the top-level "
+                "items (folders, documents, links, assignments); pass parent_id of a "
+                "folder/lesson where hasChildren=true to drill into its children. "
+                "Supports pagination."
             ),
             annotations={
-                "title": "Get top-level course contents",
+                "title": "Get course contents (root or folder children)",
                 "readOnlyHint": True,
                 "destructiveHint": False,
                 "idempotentHint": True,
@@ -1059,45 +1209,18 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "course_id": _COURSE_ID_SCHEMA,
+                    "parent_id": {
+                        **_CONTENT_ID_SCHEMA,
+                        "description": (
+                            "Optional content item ID of a folder/lesson to list "
+                            "children of. Omit to list the course's top-level items."
+                        ),
+                    },
                     "limit": _LIMIT_SCHEMA,
                     "offset": _OFFSET_SCHEMA,
                     "response_format": _RESPONSE_FORMAT_SCHEMA,
                 },
                 "required": ["course_id"],
-                "additionalProperties": False,
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "items": {"type": "array", "items": _CONTENT_ITEM_SCHEMA},
-                    **_PAGINATION_OUTPUT_FIELDS,
-                },
-                "required": ["items", "total", "count", "offset", "limit", "hasMore"],
-            },
-        ),
-        Tool(
-            name=f"{_TOOL_PREFIX}_get_folder_children",
-            description=(
-                "Get the children of a folder or lesson within a course. "
-                "Use this to drill into content items where hasChildren=true."
-            ),
-            annotations={
-                "title": "Get folder children",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": True,
-            },
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "course_id": _COURSE_ID_SCHEMA,
-                    "content_id": {**_CONTENT_ID_SCHEMA, "description": "Content item ID of the folder"},
-                    "limit": _LIMIT_SCHEMA,
-                    "offset": _OFFSET_SCHEMA,
-                    "response_format": _RESPONSE_FORMAT_SCHEMA,
-                },
-                "required": ["course_id", "content_id"],
                 "additionalProperties": False,
             },
             outputSchema={
@@ -1171,52 +1294,16 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name=f"{_TOOL_PREFIX}_get_file_download_url",
-            description=(
-                "Get the download URL(s) for files attached to a Blackboard content item. "
-                "Parses both attachment-API items and HTML body bbcswebdav links. "
-                "Use ntulearn_download_file to actually fetch them, or "
-                "ntulearn_read_file_content to read text inline."
-            ),
-            annotations={
-                "title": "Get file download URLs",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": True,
-            },
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "course_id": _COURSE_ID_SCHEMA,
-                    "content_id": _CONTENT_ID_SCHEMA,
-                    "response_format": _RESPONSE_FORMAT_SCHEMA,
-                },
-                "required": ["course_id", "content_id"],
-                "additionalProperties": False,
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "contentId": {"type": ["string", "null"]},
-                    "title": {"type": ["string", "null"]},
-                    "contentHandlerId": {"type": ["string", "null"]},
-                    "files": {"type": "array", "items": _FILE_INFO_SCHEMA},
-                    "error": {"type": "string"},
-                },
-                "required": ["files"],
-            },
-        ),
-        Tool(
             name=f"{_TOOL_PREFIX}_download_file",
             description=(
-                "Download every file attached to a Blackboard content item into the local "
-                "download directory. Handles both resource/x-bb-file (attachment API) and "
+                "Download every file attached to a Blackboard content item to local "
+                "disk. Handles both resource/x-bb-file (attachment API) and "
                 "resource/x-bb-document (HTML body with bbcswebdav links) handler types. "
-                "Returns a list of saved files with their local paths and sizes. "
-                "WARNING: writes to local filesystem — Claude Desktop's sandboxed "
-                "tools cannot read those files. Use ntulearn_read_file_content "
-                "instead to ask questions about content inline."
+                "Pass destination_dir to target a specific folder — useful for "
+                "organising a semester (e.g. destination_dir='~/NTU/y3s1/sc2002/week 8/'). "
+                "Returns saved files with their resolved local paths and sizes. "
+                "Use ntulearn_read_file_content if you want to inspect the content "
+                "inline rather than saving to disk."
             ),
             annotations={
                 "title": "Download files to local disk",
@@ -1230,6 +1317,17 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "course_id": _COURSE_ID_SCHEMA,
                     "content_id": _CONTENT_ID_SCHEMA,
+                    "destination_dir": {
+                        "type": "string",
+                        "description": (
+                            "Optional target directory. Accepts absolute paths and "
+                            "`~`-prefixed paths (e.g. '~/NTU/y3s1/sc2002/week 8/'). "
+                            "Created if missing. Defaults to NTULEARN_DOWNLOAD_DIR "
+                            "env var, or ./downloads/ if unset."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 1024,
+                    },
                     "response_format": _RESPONSE_FORMAT_SCHEMA,
                 },
                 "required": ["course_id", "content_id"],
@@ -1242,6 +1340,7 @@ async def list_tools() -> list[Tool]:
                     "title": {"type": ["string", "null"]},
                     "contentHandlerId": {"type": ["string", "null"]},
                     "files": {"type": "array", "items": _FILE_INFO_SCHEMA},
+                    "destinationDir": {"type": "string"},
                     "error": {"type": "string"},
                 },
                 "required": ["files"],
@@ -1254,11 +1353,13 @@ async def list_tools() -> list[Tool]:
                 "returned inline (no local-filesystem hop). Use this to ask questions "
                 "about lecture material — ntulearn_download_file is for users who "
                 "actually want the bytes on disk. "
-                "PDFs default to vision mode (each page rendered to an image AND "
-                "text-extracted via PyMuPDF — same depth Claude.ai gets when a user "
-                "drag-and-drops a PDF; ~3K vision tokens per page). Pass mode='text' "
-                "to skip rendering for pure-prose PDFs, or pages='1-10' / pages='1,3,5' "
-                "to restrict the page range. "
+                "PDFs default to text mode (via pypdf — cheap and almost always "
+                "what you want for written content). Pass mode='vision' for "
+                "diagram-, equation-, or screenshot-heavy pages; pair with "
+                "pages='5' or pages='1-3' to keep the payload under MCP's 1 MB "
+                "cap (~3K vision tokens per page). For multi-page diagram-heavy "
+                "decks, prefer ntulearn_download_file plus drag-and-drop into "
+                "claude.ai. "
                 "Also supports Microsoft Office formats (.docx, .pptx with speaker "
                 "notes, .xlsx with all sheets) and text-like files (txt, md, csv, "
                 "json, xml, html with tags stripped, code files). "
@@ -1282,22 +1383,26 @@ async def list_tools() -> list[Tool]:
                     "mode": {
                         "type": "string",
                         "description": (
-                            "PDF handling. 'auto' (default) renders each page as an "
-                            "image and extracts text — matches Claude.ai's native PDF "
-                            "flow. 'text' skips rendering and returns text only via "
-                            "pypdf (cheaper; use when you know the PDF has no diagrams "
-                            "or scanned content). Ignored for non-PDF files."
+                            "PDF handling. 'text' (default) extracts text via "
+                            "pypdf — cheap, fits MCP's payload budget. 'vision' "
+                            "additionally renders each page as an image with "
+                            "PyMuPDF (~3K vision tokens per page); use for "
+                            "diagram/equation/handwritten content, ideally with "
+                            "a narrow `pages` range to stay under the 1 MB cap. "
+                            "Ignored for non-PDF files."
                         ),
-                        "enum": ["auto", "text"],
-                        "default": "auto",
+                        "enum": ["text", "vision", "auto"],
+                        "default": "text",
                     },
                     "pages": {
                         "type": "string",
                         "description": (
                             "Optional page range for PDFs (1-indexed, inclusive). "
-                            "Examples: '1-10', '3', '1,3,5', '1-5,8,10-12'. Omit to "
-                            f"render all pages (capped at {_MAX_PDF_PAGES_VISION}). "
-                            "Ignored for non-PDF files and when mode='text'."
+                            "Examples: '1-10', '3', '1,3,5', '1-5,8,10-12'. Omit "
+                            f"to read all pages (vision mode capped at "
+                            f"{_MAX_PDF_PAGES_VISION} rendered pages). Especially "
+                            "useful with mode='vision' to keep the response "
+                            "under MCP's 1 MB cap."
                         ),
                     },
                     "response_format": _RESPONSE_FORMAT_SCHEMA,
@@ -1319,10 +1424,18 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
-            name=f"{_TOOL_PREFIX}_get_announcements",
-            description="Get announcements for a course, newest first. Supports pagination.",
+            name=f"{_TOOL_PREFIX}_get_upcoming",
+            description=(
+                "Get upcoming calendar items and assignment due dates across your "
+                "enrolled courses. Wraps Blackboard's calendar API — assignment "
+                "due dates surface as items with type='GradebookColumn'. "
+                "By default returns the next 2 weeks across every available course "
+                "(server fans out per-course in parallel). Pass course_ids to scope "
+                "to specific courses, since/until (ISO-8601) to override the window, "
+                "or type to filter (e.g. type='GradebookColumn' for due dates only)."
+            ),
             annotations={
-                "title": "Get course announcements",
+                "title": "Get upcoming items / due dates",
                 "readOnlyHint": True,
                 "destructiveHint": False,
                 "idempotentHint": True,
@@ -1331,12 +1444,98 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "course_id": _COURSE_ID_SCHEMA,
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "ISO-8601 start of the window (e.g. '2026-05-09T00:00:00Z'). "
+                            "Omit to default to now."
+                        ),
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": (
+                            "ISO-8601 end of the window. Omit to default to "
+                            "two weeks after `since`."
+                        ),
+                    },
+                    "course_ids": {
+                        "type": "array",
+                        "description": (
+                            "Optional list of course IDs to scope to. Omit to fan "
+                            "out across all available enrolled courses."
+                        ),
+                        "items": {"type": "string", "pattern": _BB_ID_PATTERN},
+                        "maxItems": _MAX_LIMIT,
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": (
+                            "Optional calendar item type filter. Use 'GradebookColumn' "
+                            "for assignment due dates only."
+                        ),
+                        "enum": list(_CALENDAR_ITEM_TYPES),
+                    },
                     "limit": _LIMIT_SCHEMA,
                     "offset": _OFFSET_SCHEMA,
                     "response_format": _RESPONSE_FORMAT_SCHEMA,
                 },
-                "required": ["course_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "items": {"type": "array", "items": _CALENDAR_ITEM_SCHEMA},
+                    **_PAGINATION_OUTPUT_FIELDS,
+                    "courseIdsQueried": {"type": "array", "items": {"type": "string"}},
+                    "courseErrors": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                "required": ["items", "total", "count", "offset", "limit", "hasMore"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_get_announcements",
+            description=(
+                "Get announcements across your enrolled courses, newest first. "
+                "By default fans out across every available course; pass "
+                "course_ids=['_123_1'] to scope. Use since (ISO-8601) to filter "
+                "to recent announcements only (e.g. \"this week\"). Each item "
+                "includes the courseId it was posted to so cross-course views "
+                "stay attributable. Supports pagination."
+            ),
+            annotations={
+                "title": "Get announcements (cross-course)",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_ids": {
+                        "type": "array",
+                        "description": (
+                            "Optional list of course IDs to scope to. Omit to fan "
+                            "out across all available enrolled courses."
+                        ),
+                        "items": {"type": "string", "pattern": _BB_ID_PATTERN},
+                        "maxItems": _MAX_LIMIT,
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "Optional ISO-8601 cutoff (e.g. '2026-05-09T00:00:00Z'). "
+                            "Only announcements with `created` on/after this time "
+                            "are returned. Filtered client-side after fetch."
+                        ),
+                    },
+                    "limit": _LIMIT_SCHEMA,
+                    "offset": _OFFSET_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
                 "additionalProperties": False,
             },
             outputSchema={
@@ -1344,6 +1543,11 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "announcements": {"type": "array", "items": _ANNOUNCEMENT_SCHEMA},
                     **_PAGINATION_OUTPUT_FIELDS,
+                    "courseIdsQueried": {"type": "array", "items": {"type": "string"}},
+                    "courseErrors": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
                 },
                 "required": ["announcements", "total", "count", "offset", "limit", "hasMore"],
             },
@@ -1351,12 +1555,14 @@ async def list_tools() -> list[Tool]:
         Tool(
             name=f"{_TOOL_PREFIX}_get_gradebook",
             description=(
-                "Get gradebook columns for a course, including your scores where available. "
-                "Returns column names, max scores, and your grade for each. "
+                "Get gradebook columns across your enrolled courses, including your "
+                "scores where available. By default fans out across every available "
+                "course; pass course_ids=['_123_1'] to scope. Each column carries the "
+                "courseId it belongs to so cross-course views stay attributable. "
                 "Supports pagination."
             ),
             annotations={
-                "title": "Get course gradebook",
+                "title": "Get gradebook (cross-course)",
                 "readOnlyHint": True,
                 "destructiveHint": False,
                 "idempotentHint": True,
@@ -1365,12 +1571,19 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "course_id": _COURSE_ID_SCHEMA,
+                    "course_ids": {
+                        "type": "array",
+                        "description": (
+                            "Optional list of course IDs to scope to. Omit to fan "
+                            "out across all available enrolled courses."
+                        ),
+                        "items": {"type": "string", "pattern": _BB_ID_PATTERN},
+                        "maxItems": _MAX_LIMIT,
+                    },
                     "limit": _LIMIT_SCHEMA,
                     "offset": _OFFSET_SCHEMA,
                     "response_format": _RESPONSE_FORMAT_SCHEMA,
                 },
-                "required": ["course_id"],
                 "additionalProperties": False,
             },
             outputSchema={
@@ -1380,6 +1593,11 @@ async def list_tools() -> list[Tool]:
                     **_PAGINATION_OUTPUT_FIELDS,
                     "gradesAvailable": {"type": "boolean"},
                     "gradeFetchError": {"type": ["string", "null"]},
+                    "courseIdsQueried": {"type": "array", "items": {"type": "string"}},
+                    "courseErrors": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
                 },
                 "required": [
                     "columns", "total", "count", "offset", "limit", "hasMore",
@@ -1422,11 +1640,10 @@ async def _dispatch(
     handlers = {
         f"{_TOOL_PREFIX}_list_courses": _list_courses,
         f"{_TOOL_PREFIX}_get_course_contents": _get_course_contents,
-        f"{_TOOL_PREFIX}_get_folder_children": _get_folder_children,
         f"{_TOOL_PREFIX}_search_course_content": _search_course_content,
-        f"{_TOOL_PREFIX}_get_file_download_url": _get_file_download_url,
         f"{_TOOL_PREFIX}_download_file": _download_file,
         f"{_TOOL_PREFIX}_read_file_content": _read_file_content,
+        f"{_TOOL_PREFIX}_get_upcoming": _get_upcoming,
         f"{_TOOL_PREFIX}_get_announcements": _get_announcements,
         f"{_TOOL_PREFIX}_get_gradebook": _get_gradebook,
     }
@@ -1475,6 +1692,39 @@ def _md_content_items(items: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _md_upcoming(
+    items: list[dict[str, Any]],
+    meta: dict[str, Any],
+    course_errors: dict[str, str],
+) -> str:
+    lines = [f"# Upcoming ({meta['total']} total)", ""]
+    if course_errors:
+        lines.append(
+            f"_Note: {len(course_errors)} course(s) returned errors and were skipped._"
+        )
+        lines.append("")
+    if not items:
+        lines.append("_Nothing scheduled in the window._")
+    else:
+        lines.append("| When | Title | Type | Course | Gradable |")
+        lines.append("|---|---|---|---|---|")
+        for it in items:
+            start = it.get("start") or "—"
+            end = it.get("end")
+            when = f"{start} → {end}" if end and end != start else start
+            gradable = it.get("gradable")
+            gradable_str = "Yes" if gradable else ("No" if gradable is False else "—")
+            lines.append(
+                f"| {when} "
+                f"| {it.get('title') or '?'} "
+                f"| {it.get('type') or '—'} "
+                f"| {it.get('courseId') or '—'} "
+                f"| {gradable_str} |"
+            )
+    lines.append(_md_pagination_footer(meta))
+    return "\n".join(lines)
+
+
 def _md_announcements(items: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     lines = [f"# Announcements ({meta['total']} total)", ""]
     if not items:
@@ -1482,7 +1732,11 @@ def _md_announcements(items: list[dict[str, Any]], meta: dict[str, Any]) -> str:
     else:
         for a in items:
             created = a.get("created") or "—"
-            lines.append(f"## {a.get('title', '?')}  ·  {created}")
+            course_id = a.get("courseId")
+            header = f"## {a.get('title', '?')}  ·  {created}"
+            if course_id:
+                header += f"  ·  `{course_id}`"
+            lines.append(header)
             body = (a.get("body") or "").strip()
             lines.append(body if body else "_(no body)_")
             lines.append("")
@@ -1498,10 +1752,11 @@ def _md_gradebook(columns: list[dict[str, Any]], meta: dict[str, Any], grades_av
     if not columns:
         lines.append("_No columns._")
     else:
-        lines.append("| Column | Possible | Score | Grade | Status |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Course | Column | Possible | Score | Grade | Status |")
+        lines.append("|---|---|---|---|---|---|")
         for c in columns:
             lines.append(
+                f"| `{c.get('courseId', '—')}` "
                 f"| {c.get('displayName') or c.get('name') or '?'} "
                 f"| {c.get('possible', '—')} "
                 f"| {c.get('score', '—')} "
@@ -1621,26 +1876,14 @@ async def _get_course_contents(
     client: NTULearnClient, args: dict[str, Any]
 ) -> tuple[list[TextContent], dict[str, Any]]:
     course_id = args["course_id"]
+    parent_id = args.get("parent_id")
     offset, limit = _resolve_pagination_args(args)
     fmt = _resolve_response_format(args)
 
-    items = await client.get_course_contents(course_id)
-    stripped = [_strip_content(item) for item in items]
-    page, meta = _slice_with_pagination(stripped, offset, limit)
-    payload = {"items": page, **meta}
-    text = _md_content_items(page, meta) if fmt == "markdown" else None
-    return _emit(payload, text)
-
-
-async def _get_folder_children(
-    client: NTULearnClient, args: dict[str, Any]
-) -> tuple[list[TextContent], dict[str, Any]]:
-    course_id = args["course_id"]
-    content_id = args["content_id"]
-    offset, limit = _resolve_pagination_args(args)
-    fmt = _resolve_response_format(args)
-
-    items = await client.get_content_children(course_id, content_id)
+    if parent_id:
+        items = await client.get_content_children(course_id, str(parent_id))
+    else:
+        items = await client.get_course_contents(course_id)
     stripped = [_strip_content(item) for item in items]
     page, meta = _slice_with_pagination(stripped, offset, limit)
     payload = {"items": page, **meta}
@@ -1712,65 +1955,13 @@ async def _search_course_content(
     return _emit(payload, text)
 
 
-async def _get_file_download_url(
-    client: NTULearnClient, args: dict[str, Any]
-) -> tuple[list[TextContent], dict[str, Any]]:
-    course_id = args["course_id"]
-    content_id = args["content_id"]
-    fmt = _resolve_response_format(args)
-
-    item = await client.get_content_item(course_id, content_id)
-    handler_id = (item.get("contentHandler") or {}).get("id")
-
-    if handler_id == "resource/x-bb-file":
-        attachments = await client.get_attachments(course_id, content_id)
-        files = []
-        for att in attachments:
-            url = await client.get_attachment_download_url(course_id, content_id, att["id"])
-            files.append({
-                "url": url,
-                "filename": att.get("fileName"),
-                "mimeType": att.get("mimeType"),
-                "link_text": None,
-            })
-    else:
-        body = item.get("body") or ""
-        files = extract_all_files(body)
-        if not files:
-            desc = item.get("description") or {}
-            body2 = (desc.get("rawText") if isinstance(desc, dict) else desc) or ""
-            files = extract_all_files(body2)
-
-    if not files:
-        payload = {
-            "contentId": content_id,
-            "title": item.get("title"),
-            "contentHandlerId": handler_id,
-            "files": [],
-            "error": "No download URL found. Content handler type may not be supported.",
-        }
-        text = (
-            f"# No files\n\nItem **{item.get('title', '?')}** "
-            f"(handler `{handler_id}`) has no resolvable file links."
-        ) if fmt == "markdown" else None
-        return _emit(payload, text)
-
-    payload = {
-        "contentId": content_id,
-        "title": item.get("title"),
-        "contentHandlerId": handler_id,
-        "files": files,
-    }
-    text = _md_files(payload, "File download URLs") if fmt == "markdown" else None
-    return _emit(payload, text)
-
-
 async def _download_file(
     client: NTULearnClient, args: dict[str, Any]
 ) -> tuple[list[TextContent], dict[str, Any]]:
     course_id = args["course_id"]
     content_id = args["content_id"]
     fmt = _resolve_response_format(args)
+    dest_dir = _resolve_destination_dir(args.get("destination_dir"))
 
     item, handler_id, pairs = await _resolve_content_files(client, course_id, content_id)
 
@@ -1780,6 +1971,7 @@ async def _download_file(
             "title": item.get("title"),
             "contentHandlerId": handler_id,
             "files": [],
+            "destinationDir": str(dest_dir),
             "error": "No download URL found. Content handler type may not be supported.",
         }
         text = (
@@ -1788,7 +1980,7 @@ async def _download_file(
         ) if fmt == "markdown" else None
         return _emit(payload, text)
 
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
     def _sanitize(name: str) -> str:
         return re.sub(r'[\\/*?:"<>|]', "_", name)
@@ -1799,7 +1991,7 @@ async def _download_file(
         base = stem if dot else name
         suffix = ext if dot else ""
         n = 2
-        while candidate in used_names or (DOWNLOAD_DIR / candidate).exists():
+        while candidate in used_names or (dest_dir / candidate).exists():
             candidate = f"{base} ({n}).{suffix}" if suffix else f"{base} ({n})"
             n += 1
         return candidate
@@ -1816,7 +2008,7 @@ async def _download_file(
         filename = _deduplicate(filename)
         used_names.add(filename)
 
-        dest = DOWNLOAD_DIR / filename
+        dest = dest_dir / filename
         try:
             content_bytes, _ = await client.download_bytes(url)
         except BbRouterExpiredError:
@@ -1834,9 +2026,34 @@ async def _download_file(
         "contentId": content_id,
         "title": item.get("title"),
         "files": saved,
+        "destinationDir": str(dest_dir.resolve()),
     }
     text = _md_files(payload, "Files downloaded") if fmt == "markdown" else None
     return _emit(payload, text)
+
+
+def _resolve_destination_dir(raw: Any) -> Path:
+    """Resolve the download destination directory.
+
+    Precedence: explicit `destination_dir` arg → `NTULEARN_DOWNLOAD_DIR` env →
+    `DOWNLOAD_DIR` module default (`./downloads/`).
+
+    Accepts absolute paths or `~`-prefixed paths. Relative paths are resolved
+    against `DOWNLOAD_DIR.parent` (the server's CWD by default) so the model
+    cannot accidentally write outside the user's intended root by passing
+    `subdir/foo`.
+    """
+    if raw is not None:
+        if not isinstance(raw, str):
+            raise ValueError("destination_dir must be a string")
+        candidate = raw.strip()
+        if not candidate:
+            raise ValueError("destination_dir cannot be empty")
+        return Path(candidate).expanduser()
+    env_val = os.environ.get("NTULEARN_DOWNLOAD_DIR")
+    if env_val:
+        return Path(env_val).expanduser()
+    return DOWNLOAD_DIR
 
 
 async def _read_file_content(
@@ -1927,7 +2144,7 @@ async def _read_file_content(
             continue
 
         total_bytes += size
-        if _classify_kind(filename, content_type) == "pdf" and pdf_mode == "auto":
+        if _classify_kind(filename, content_type) == "pdf" and pdf_mode == "vision":
             entry = _extract_pdf_vision(
                 filename, content_type, content_bytes, size, pages_filter
             )
@@ -1966,33 +2183,164 @@ async def _read_file_content(
     return [*text_blocks, *image_blocks], structured
 
 
-async def _get_announcements(
+async def _resolve_enrolled_course_ids(
+    client: NTULearnClient, *, include_disabled: bool = False
+) -> list[str]:
+    """Return the list of course IDs the current user is enrolled in.
+
+    Used by cross-course aggregators (get_upcoming, get_announcements,
+    get_gradebook) when no explicit course_ids list is supplied. By default
+    excludes courses where availability is not 'Yes' so the fan-out doesn't
+    spend requests on disabled / archived terms.
+    """
+    enrollments = await client.get_my_enrollments()
+    if not include_disabled:
+        enrollments = [
+            e for e in enrollments
+            if (e.get("availability") or {}).get("available") == "Yes"
+        ]
+    return [e["courseId"] for e in enrollments if e.get("courseId")]
+
+
+async def _get_upcoming(
     client: NTULearnClient, args: dict[str, Any]
 ) -> tuple[list[TextContent], dict[str, Any]]:
-    course_id = args["course_id"]
+    raw_since = args.get("since")
+    raw_until = args.get("until")
+    since = _validate_iso8601(raw_since, name="since") if raw_since is not None else None
+    until = _validate_iso8601(raw_until, name="until") if raw_until is not None else None
+
+    item_type = args.get("type")
+    if item_type is not None and item_type not in _CALENDAR_ITEM_TYPES:
+        raise ValueError(
+            f"type must be one of {list(_CALENDAR_ITEM_TYPES)}; got {item_type!r}"
+        )
+
+    raw_course_ids = args.get("course_ids")
+    if raw_course_ids is None or (
+        isinstance(raw_course_ids, list) and not raw_course_ids
+    ):
+        course_ids = await _resolve_enrolled_course_ids(client)
+    else:
+        if not isinstance(raw_course_ids, list):
+            raise ValueError("course_ids must be a list of strings")
+        course_ids = [str(cid) for cid in raw_course_ids]
+
     offset, limit = _resolve_pagination_args(args)
     fmt = _resolve_response_format(args)
 
-    announcements = await client.get_announcements(course_id)
+    if not course_ids:
+        _, meta = _slice_with_pagination([], offset, limit)
+        payload = {
+            "items": [],
+            **meta,
+            "courseIdsQueried": [],
+            "courseErrors": {},
+        }
+        text = _md_upcoming([], meta, {}) if fmt == "markdown" else None
+        return _emit(payload, text)
 
-    rows = []
-    for a in announcements:
-        body_raw = a.get("body") or {}
-        # Blackboard stores announcement bodies as HTML in `body.rawText`. Strip
-        # tags so callers see plain text, matching how the HTML file path in
-        # _extract_content already behaves.
-        body_html = body_raw.get("rawText") if isinstance(body_raw, dict) else body_raw
-        rows.append({
-            "id": a.get("id"),
-            "title": a.get("title"),
-            "body": _strip_html(body_html),
-            "created": a.get("created"),
-            "modified": a.get("modified"),
-            "available": (a.get("availability") or {}).get("available"),
-        })
+    tasks = [
+        client.get_calendar_items(
+            course_id=cid, since=since, until=until, item_type=item_type
+        )
+        for cid in course_ids
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    items: list[dict[str, Any]] = []
+    course_errors: dict[str, str] = {}
+    for cid, result in zip(course_ids, results):
+        if isinstance(result, BbRouterExpiredError):
+            raise result
+        if isinstance(result, Exception):
+            course_errors[cid] = str(result)
+            continue
+        for raw in result:
+            items.append(_strip_calendar_item(raw, cid))
+
+    items.sort(key=lambda x: x.get("start") or "￿")
+
+    page, meta = _slice_with_pagination(items, offset, limit)
+    payload: dict[str, Any] = {
+        "items": page,
+        **meta,
+        "courseIdsQueried": course_ids,
+        "courseErrors": course_errors,
+    }
+    text = _md_upcoming(page, meta, course_errors) if fmt == "markdown" else None
+    return _emit(payload, text)
+
+
+async def _get_announcements(
+    client: NTULearnClient, args: dict[str, Any]
+) -> tuple[list[TextContent], dict[str, Any]]:
+    raw_since = args.get("since")
+    since = _validate_iso8601(raw_since, name="since") if raw_since is not None else None
+
+    raw_course_ids = args.get("course_ids")
+    if raw_course_ids is None or (
+        isinstance(raw_course_ids, list) and not raw_course_ids
+    ):
+        course_ids = await _resolve_enrolled_course_ids(client)
+    else:
+        if not isinstance(raw_course_ids, list):
+            raise ValueError("course_ids must be a list of strings")
+        course_ids = [str(cid) for cid in raw_course_ids]
+
+    offset, limit = _resolve_pagination_args(args)
+    fmt = _resolve_response_format(args)
+
+    if not course_ids:
+        _, meta = _slice_with_pagination([], offset, limit)
+        payload = {
+            "announcements": [],
+            **meta,
+            "courseIdsQueried": [],
+            "courseErrors": {},
+        }
+        text = _md_announcements([], meta) if fmt == "markdown" else None
+        return _emit(payload, text)
+
+    tasks = [client.get_announcements(cid) for cid in course_ids]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    rows: list[dict[str, Any]] = []
+    course_errors: dict[str, str] = {}
+    for cid, result in zip(course_ids, results):
+        if isinstance(result, BbRouterExpiredError):
+            raise result
+        if isinstance(result, Exception):
+            course_errors[cid] = str(result)
+            continue
+        for a in result:
+            body_raw = a.get("body") or {}
+            # Blackboard stores announcement bodies as HTML in `body.rawText`. Strip
+            # tags so callers see plain text, matching how the HTML file path in
+            # _extract_content already behaves.
+            body_html = body_raw.get("rawText") if isinstance(body_raw, dict) else body_raw
+            created = a.get("created")
+            if since is not None and created is not None and created < since:
+                continue
+            rows.append({
+                "id": a.get("id"),
+                "courseId": cid,
+                "title": a.get("title"),
+                "body": _strip_html(body_html),
+                "created": created,
+                "modified": a.get("modified"),
+                "available": (a.get("availability") or {}).get("available"),
+            })
+
+    rows.sort(key=lambda r: r.get("created") or "", reverse=True)
 
     page, meta = _slice_with_pagination(rows, offset, limit)
-    payload = {"announcements": page, **meta}
+    payload = {
+        "announcements": page,
+        **meta,
+        "courseIdsQueried": course_ids,
+        "courseErrors": course_errors,
+    }
     text = _md_announcements(page, meta) if fmt == "markdown" else None
     return _emit(payload, text)
 
@@ -2000,47 +2348,113 @@ async def _get_announcements(
 async def _get_gradebook(
     client: NTULearnClient, args: dict[str, Any]
 ) -> tuple[list[TextContent], dict[str, Any]]:
-    course_id = args["course_id"]
+    raw_course_ids = args.get("course_ids")
+    if raw_course_ids is None or (
+        isinstance(raw_course_ids, list) and not raw_course_ids
+    ):
+        course_ids = await _resolve_enrolled_course_ids(client)
+    else:
+        if not isinstance(raw_course_ids, list):
+            raise ValueError("course_ids must be a list of strings")
+        course_ids = [str(cid) for cid in raw_course_ids]
+
     offset, limit = _resolve_pagination_args(args)
     fmt = _resolve_response_format(args)
 
-    columns = await client.get_gradebook_columns(course_id)
     grades_available = True
     grade_fetch_error: str | None = None
-
+    user_id: str | None = None
     try:
         user_id = await client.get_my_user_id()
-        grades_raw = await client.get_user_grades(course_id, user_id)
     except BbRouterExpiredError:
         raise
     except Exception as e:
         grades_available = False
         grade_fetch_error = str(e)
-        grades_raw = []
 
-    if grades_available:
+    if not course_ids:
+        _, meta = _slice_with_pagination([], offset, limit)
+        payload = {
+            "columns": [],
+            **meta,
+            "gradesAvailable": grades_available,
+            "gradeFetchError": grade_fetch_error,
+            "courseIdsQueried": [],
+            "courseErrors": {},
+        }
+        text = (
+            _md_gradebook([], meta, grades_available, grade_fetch_error)
+            if fmt == "markdown"
+            else None
+        )
+        return _emit(payload, text)
+
+    async def fetch_one(
+        cid: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+        """Per-course fetch. Returns (columns, grades, grade_error).
+
+        Column fetch failures propagate (caught in the gather aggregation).
+        Grade fetch failures are reported per-course rather than failing the
+        whole call — the columns themselves are still useful, and only some
+        courses may have grading enabled.
+        """
+        columns = await client.get_gradebook_columns(cid)
+        if user_id is None:
+            return columns, [], grade_fetch_error
+        try:
+            grades = await client.get_user_grades(cid, user_id)
+            return columns, grades, None
+        except BbRouterExpiredError:
+            raise
+        except Exception as e:
+            return columns, [], str(e)
+
+    results = await asyncio.gather(
+        *(fetch_one(cid) for cid in course_ids), return_exceptions=True
+    )
+
+    columns_result: list[dict[str, Any]] = []
+    course_errors: dict[str, str] = {}
+    grade_errors: list[str] = []
+    if grade_fetch_error:
+        grade_errors.append(grade_fetch_error)
+    for cid, result in zip(course_ids, results):
+        if isinstance(result, BbRouterExpiredError):
+            raise result
+        if isinstance(result, Exception):
+            course_errors[cid] = str(result)
+            continue
+        columns, grades_raw, per_course_grade_error = result
+        if per_course_grade_error:
+            grade_errors.append(per_course_grade_error)
         grade_map: dict[str, dict[str, Any]] = {
             g["columnId"]: g for g in grades_raw if "columnId" in g
         }
-    else:
-        grade_map = {}
+        for col in columns:
+            col_id = col.get("id")
+            score = col.get("score") or {}
+            grade_entry = grade_map.get(col_id, {})
+            columns_result.append({
+                "id": col_id,
+                "courseId": cid,
+                "name": col.get("name"),
+                "displayName": col.get("displayName"),
+                "possible": score.get("possible"),
+                "available": (col.get("availability") or {}).get("available"),
+                "contentId": col.get("contentId"),
+                "score": grade_entry.get("score"),
+                "grade": grade_entry.get("grade"),
+                "status": grade_entry.get("status"),
+            })
 
-    columns_result = []
-    for col in columns:
-        col_id = col.get("id")
-        score = col.get("score") or {}
-        grade_entry = grade_map.get(col_id, {})
-        columns_result.append({
-            "id": col_id,
-            "name": col.get("name"),
-            "displayName": col.get("displayName"),
-            "possible": score.get("possible"),
-            "available": (col.get("availability") or {}).get("available"),
-            "contentId": col.get("contentId"),
-            "score": grade_entry.get("score"),
-            "grade": grade_entry.get("grade"),
-            "status": grade_entry.get("status"),
-        })
+    if grade_errors:
+        # Any course-level grade fetch failure flips gradesAvailable to False
+        # to match the v0.1.x single-course contract: callers checked this
+        # flag to know whether `score`/`grade` fields are reliable.
+        grades_available = False
+        if grade_fetch_error is None:
+            grade_fetch_error = "; ".join(dict.fromkeys(grade_errors))
 
     page, meta = _slice_with_pagination(columns_result, offset, limit)
     payload = {
@@ -2048,6 +2462,8 @@ async def _get_gradebook(
         **meta,
         "gradesAvailable": grades_available,
         "gradeFetchError": grade_fetch_error,
+        "courseIdsQueried": course_ids,
+        "courseErrors": course_errors,
     }
     text = (
         _md_gradebook(page, meta, grades_available, grade_fetch_error)
