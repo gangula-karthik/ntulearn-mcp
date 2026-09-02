@@ -97,7 +97,7 @@ const FIELDS: &[(&str, &str)] = &[
     ("announcements", "id,title,body,created,modified,availability"),
     ("grade_columns", "id,name,displayName,score,availability,contentId"),
     ("user_grades", "columnId,score,status,gradingStatus"),
-    ("course_users", "id,userName,name,courseRoleId,availability"),
+    ("course_users", "userId,user.userName,user.name.given,user.name.family,courseRoleId,availability"),
     ("groups", "id,name,description,availability"),
     ("messages", "id,subject,body,created,read,folder,fromUserId"),
     ("attempts", "id,userId,status,score,cumulatedScore,feedback,created,updated"),

@@ -809,6 +809,34 @@ fn user_role(user: &Value) -> String {
         .to_string()
 }
 
+/// Render one user row for `list_course_users`. The Blackboard API nests
+/// `userName` / `name` under a `user` object; the reference Python server
+/// requested flat fields (`userName,name`) that the API silently drops, so
+/// names came back empty. We request `user.*` fields and map from the nested
+/// object, falling back to the flat shape for compatibility.
+fn render_user_row(u: &Value) -> Value {
+    let nested = u.get("user");
+    let uname = u
+        .get("userName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            nested
+                .and_then(|v| v.get("userName"))
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
+    let name = nested.map(|v| user_name(v)).unwrap_or_else(|| user_name(u));
+    let role = user_role(u);
+    let uid = u
+        .get("userId")
+        .or_else(|| u.get("id"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    json!({ "id": uid, "userName": uname, "name": name, "role": role })
+}
+
 /// server._strip_content — reduce a raw content item.
 fn strip_content(item: &Value) -> Value {
     let handler = item.get("contentHandler");
@@ -2477,18 +2505,20 @@ async fn h_read_message(state: &AppState, args: &Value) -> Result<Value, String>
     payload.insert("senderId".to_string(), Value::String(sender_id.clone()));
     match message_participants(&state.client, &message_id).await {
         Ok(participants) => {
-            let recipients: Vec<Value> = participants
-                .iter()
-                .map(|p| json!({
-                    "id": p.get("id"),
-                    "name": user_name(p),
-                    "role": user_role(p),
-                }))
-                .collect();
+            let recipients: Vec<Value> = participants.iter().map(|p| {
+                let row = render_user_row(p);
+                let id = row.get("id").cloned().unwrap_or(Value::Null);
+                json!({ "id": id, "name": row.get("name"), "role": row.get("role") })
+            }).collect();
             payload.insert("recipients".to_string(), Value::Array(recipients));
             let sender = participants
                 .iter()
-                .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(sender_id.as_str()));
+                .find(|p| {
+                    p.get("userId")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| p.get("id").and_then(|v| v.as_str()))
+                        == Some(sender_id.as_str())
+                });
             match sender {
                 Some(s) => {
                     payload.insert("senderName".to_string(), Value::String(user_name(s)));
@@ -2514,15 +2544,7 @@ async fn h_list_course_users(state: &AppState, args: &Value) -> Result<Value, St
     let _fmt = response_format(args)?;
     let users = course_users(&state.client, &course_id).await?;
     let (page, meta) = slice_with_pagination(&users, offset, limit);
-    let rendered: Vec<Value> = page
-        .iter()
-        .map(|u| json!({
-            "id": u.get("id"),
-            "userName": u.get("userName").and_then(|v| v.as_str()).unwrap_or(""),
-            "name": user_name(u),
-            "role": user_role(u),
-        }))
-        .collect();
+    let rendered: Vec<Value> = page.iter().map(render_user_row).collect();
     let mut payload = Map::new();
     payload.insert("courseId".to_string(), Value::String(course_id));
     payload.insert("users".to_string(), Value::Array(rendered));
@@ -2584,15 +2606,7 @@ async fn h_get_group_members(state: &AppState, args: &Value) -> Result<Value, St
     let _fmt = response_format(args)?;
     let users = group_users(&state.client, &course_id, &group_id).await?;
     let (page, meta) = slice_with_pagination(&users, offset, limit);
-    let rendered: Vec<Value> = page
-        .iter()
-        .map(|u| json!({
-            "id": u.get("id"),
-            "userName": u.get("userName").and_then(|v| v.as_str()).unwrap_or(""),
-            "name": user_name(u),
-            "role": user_role(u),
-        }))
-        .collect();
+    let rendered: Vec<Value> = page.iter().map(render_user_row).collect();
     let mut payload = Map::new();
     payload.insert("courseId".to_string(), Value::String(course_id));
     payload.insert("groupId".to_string(), Value::String(group_id));
@@ -3175,5 +3189,44 @@ mod args_guard_tests {
         assert_eq!(str_arg(&args, "type"), Some("GradebookColumn"));
         assert_eq!(str_arg(&args, "user_id"), Some("user-1"));
         assert_eq!(str_arg(&args, "destination_dir"), Some("/tmp/x"));
+    }
+
+    /// Regression: list_course_users must surface names from the nested
+    /// `user` object the Blackboard API actually returns, not the flat
+    /// `userName`/`name` fields the reference Python server requested
+    /// (which the API silently drops, leaving names empty).
+    #[test]
+    fn render_user_row_reads_nested_user_object() {
+        use serde_json::json;
+        let row = render_user_row(&json!({
+            "userId": "_2275684_1",
+            "user": {
+                "userName": "junrong001",
+                "name": {"given": "CCDS", "family": "LIM JUN RONG"}
+            },
+            "availability": {"available": "Yes"},
+            "courseRoleId": "TeachingAssistant"
+        }));
+        assert_eq!(row["id"], json!("_2275684_1"));
+        assert_eq!(row["userName"], json!("junrong001"));
+        assert_eq!(row["name"], json!("CCDS LIM JUN RONG"));
+        assert_eq!(row["role"], json!("TeachingAssistant"));
+    }
+
+    #[test]
+    fn render_user_row_falls_back_to_flat_shape() {
+        use serde_json::json;
+        let row = render_user_row(&json!({
+            "id": "_old_1",
+            "userName": "flatuser",
+            "name": "Flat User",
+            "courseRoleId": "Student"
+        }));
+        assert_eq!(row["id"], json!("_old_1"));
+        assert_eq!(row["userName"], json!("flatuser"));
+        // user_name() on a string `name` falls back to userName (parity with
+        // the Python `_user_name` helper).
+        assert_eq!(row["name"], json!("flatuser"));
+        assert_eq!(row["role"], json!("Student"));
     }
 }
