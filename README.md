@@ -351,10 +351,17 @@ ntulearn-mcp refresh    # on-demand cookie refresh + re-validate
 ```
 
 - `setup` first looks for a cookie you already have (env var, config file,
-  Firefox), and validates it live against the API. If none is found it opens
-  the NTULearn login page in your default browser and accepts a one-time paste
-  of the `BbRouter` value (or full `Cookie` header), validates it, and saves it
-  to the config file (`<config>/ntulearn-mcp/cookie`).
+  Firefox), and validates it live against the API. If none is found, it tries
+  **fully-automatic capture**: on macOS/Linux it launches Chrome (or Arc,
+  Brave, Edge, Chromium) in a throwaway profile with a local debugging port,
+  opens NTULearn, and watches the browser's DevTools channel for the `BbRouter`
+  session cookie. The user only has to log in in the window that opens — no
+  copy-and-paste, no devtools, no keychain access. The captured value is
+  validated live against the API before being saved to the config file
+  (`<config>/ntulearn-mcp/cookie`), and the throwaway window/profile is closed
+  automatically. If no supported browser is found (e.g. headless server), it
+  falls back to opening the login page and accepting a one-time paste of the
+  `BbRouter` value (or full `Cookie` header).
 - `check` reports where the current cookie came from, how long it is valid (if
   expiry is embedded), and whether it still works live — without changing anything.
 - `refresh` re-resolves the cookie from all sources and re-validates it, and

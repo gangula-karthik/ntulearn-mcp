@@ -28,4 +28,6 @@ sha2 = { version = "0.10", features = ["std"] }
 csv = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
 ultrafast-mcp = { version = "202506018.1.0", features = ["http"] }

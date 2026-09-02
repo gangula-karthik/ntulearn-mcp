@@ -8,6 +8,7 @@
 #![allow(dead_code)]
 
 mod cache;
+mod capture;
 mod client;
 mod cookie;
 mod handlers;
@@ -61,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
             println!();
             println!("subcommands:");
             println!("  ntulearn-mcp            run the MCP server over stdio");
-            println!("  ntulearn-mcp setup      one-time interactive cookie setup");
+            println!("  ntulearn-mcp setup      acquire a cookie (auto-login capture, or paste)");
             println!("  ntulearn-mcp check      show cookie state (source, expiry, validity)");
             println!("  ntulearn-mcp refresh    on-demand cookie refresh + re-validate");
             println!("  ntulearn-mcp help       this help");

@@ -19,7 +19,7 @@ const DEFAULT_BASE: &str = "https://ntulearn.ntu.edu.sg";
 
 /// Live validity check: `GET {base}/learn/api/public/v1/users/me` with the given cookie.
 /// Returns Ok(true) on 200, Ok(false) on 401, Err on network/other.
-async fn validates_live(base: &str, value: &str) -> Result<bool, String> {
+pub(crate) async fn validates_live(base: &str, value: &str) -> Result<bool, String> {
     let url = format!(
         "{}/learn/api/public/v1/users/me",
         base.trim_end_matches('/')
@@ -132,8 +132,19 @@ pub async fn run_setup() -> i32 {
         }
     }
 
-    // Pass 2: walk the user through getting a fresh cookie.
+    // Pass 2: try the fully-automatic capture first (Chromium CDP). The user
+    // only logs in; we never need a paste.
     println!("No valid working cookie yet.");
+    if let Ok((val, browser)) = crate::capture::capture_cookie(&base).await {
+        persist(&val);
+        println!("Auto-captured a live session cookie via {browser} and saved it.");
+        println!();
+        println!("You are ready to use ntulearn-mcp (no changes needed).");
+        return 0;
+    }
+    println!("Automatic capture was not available; falling back to manual paste.\n");
+
+    // Pass 2b: walk the user through getting a fresh cookie by hand.
     println!("How to get one quickly:");
     println!("  1. If you use Firefox: log into {base} there, then re-run `setup`.")
     ;
