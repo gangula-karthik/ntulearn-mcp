@@ -116,11 +116,15 @@ human-readable summary. List-returning tools accept `limit`/`offset` pagination.
 
 ### Known environment limits (observed on real NTULearn)
 
-- **`list_messages` / `read_message`** → Blackboard `/users/me/messages` returns **404 "API is not
-  found"** on this NTU instance. The Messages REST API is not exposed; the tool returns a clean
-  error (identical to the reference Python server). The tools remain for parity.
-- **`get_group_members`** → returns 403 for student accounts unless the course exposes the data; an
-  empty/error result is surfaced cleanly.
+- **`list_messages` / `read_message`** — the public `/users/me/messages` REST API is not exposed
+  on this NTU instance (404), so the Rust client instead walks the internal v1 conversation API
+  (one cached mailbox flatten → per-course `conversations`), which returns the same parity-shaped
+  message objects. Recipients are derived from the conversation (`includesAllMembers`, member
+  groups, and resolved participant ids). The `sent` folder is inferred from the sender being you.
+- **`get_group_members`** — the public `/courses/{id}/groups/{id}/users` endpoint returns 403 for
+  student accounts, so the client uses the internal v1 `memberships?groupId=…&expand=user,courseRole`
+  endpoint (accessible to students); member names and full role names (S→Student, T→TA, P→Primary
+  instructor, …) are rendered from the expanded `user` objects.
 - **Calendar/upcoming windows** wider than ~16 weeks → NTULearn rejects with a 400 `courseErrors`
   entry; keep `since`/`until` within a semester.
 - **`read_file_content`** extracts text from simple documents; for large/graphical PDFs prefer

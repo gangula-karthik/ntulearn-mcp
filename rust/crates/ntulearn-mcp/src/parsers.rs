@@ -121,18 +121,18 @@ pub fn extract_file_links(html: &str) -> Vec<(String, String)> {
 
 /// All text nodes under the document body, flattened.
 fn body_text_parts(html: &str) -> Vec<String> {
+    // Match the reference client's BeautifulSoup get_text(separator="\n"):
+    // walk the root element's text nodes in document order, each node
+    // emitted exactly once. (A "*"-selector loop would emit every text node
+    // once per ancestor element, tripling body text.)
     let doc = Html::parse_fragment(html);
-    // Best effort: walk every element's text iterator; joining text nodes
-    // with "\n" approximates BeautifulSoup's get_text(separator="\n").
-    let sel = Selector::parse("*").unwrap();
+    let root = doc.root_element();
     let mut parts: Vec<String> = Vec::new();
-    for el in doc.select(&sel) {
-        for t in el.text() {
-            parts.push(t.to_string());
-        }
+    for t in root.text() {
+        parts.push(t.to_string());
     }
     if parts.is_empty() {
-        // Nothing selectable; fall back to raw text nodes.
+        // Nothing text-y; fall back to raw text nodes.
         let mut collected = Vec::new();
         for node in doc.tree.nodes() {
             if let scraper::Node::Text(t) = node.value() {

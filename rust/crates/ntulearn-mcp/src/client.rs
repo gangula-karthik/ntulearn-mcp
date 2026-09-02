@@ -167,6 +167,67 @@ fn trim_fields(mut items: Vec<Value>, _fields: Option<&str>) -> Value {
     Value::Array(items.drain(..).collect())
 }
 
+/// Best-effort RFC3339/ISO-8601 comparison: `a >= b`. Falls back to string
+/// comparison when either side cannot be parsed (matches Python's string-level
+/// handling of `since`).
+fn iso_iso_ge(a: &str, b: &str) -> bool {
+    let parse = |s: &str| -> Option<i64> {
+        // RFC3339 with offset
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            return Some(dt.timestamp());
+        }
+        // UTC naive datetime (e.g. "2026-05-09T00:00:00")
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+            return Some(dt.and_utc().timestamp());
+        }
+        // date only (e.g. "2026-05-09")
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            return d.and_hms_opt(0, 0, 0).map(|t| t.and_utc().timestamp());
+        }
+        None
+    };
+    match (parse(a), parse(b)) {
+        (Some(x), Some(y)) => x >= y,
+        (Some(_), None) => true,
+        (None, _) => a >= b,
+    }
+}
+
+/// Render a Blackboard user object's display name. Accepts both the public
+/// REST `name: {given, family}` shape and the internal v1 flat
+/// `givenName`/`familyName` fields, falling back to `userName`.
+fn user_display_name(user: &Value) -> String {
+    if let Some(name) = user.get("name") {
+        if let Some(o) = name.as_object() {
+            let given = o.get("given").and_then(|v| v.as_str()).unwrap_or("");
+            let family = o.get("family").and_then(|v| v.as_str()).unwrap_or("");
+            let mut parts = Vec::new();
+            if !given.is_empty() {
+                parts.push(given);
+            }
+            if !family.is_empty() {
+                parts.push(family);
+            }
+            if !parts.is_empty() {
+                return parts.join(" ");
+            }
+        }
+    }
+    let given = user.get("givenName").and_then(|v| v.as_str()).unwrap_or("");
+    let family = user.get("familyName").and_then(|v| v.as_str()).unwrap_or("");
+    let mut parts = Vec::new();
+    if !given.is_empty() {
+        parts.push(given);
+    }
+    if !family.is_empty() {
+        parts.push(family);
+    }
+    if !parts.is_empty() {
+        return parts.join(" ");
+    }
+    user.get("userName").and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
 struct RawResp {
     status: u16,
     headers: reqwest::header::HeaderMap,
@@ -622,29 +683,236 @@ impl NTULearnClient {
         &self,
         folder: Option<&str>,
         unread_only: bool,
-        _since: Option<&str>,
+        since: Option<&str>,
         cache: Option<f64>,
     ) -> ClientResult<Value> {
-        let path = "/learn/api/public/v1/users/me/messages";
-        let mut params: Vec<(&str, &str)> = Vec::new();
-        if let Some(f) = folder { params.push(("folder", f)); }
-        if unread_only { params.push(("unreadOnly", "true")); }
-        if let Some(s) = _since { params.push(("since", s)); }
-        let fields = default_fields("messages");
-        self.list_with_cache("get_messages", path, &params, fields, cache).await
+        let want = folder.unwrap_or("inbox").to_lowercase();
+        let all = self.mailbox_messages(cache).await?;
+        let arr = all.as_array().cloned().unwrap_or_default();
+        let filtered: Vec<Value> = arr
+            .into_iter()
+            .filter(|m| {
+                let folder = m.get("folder").and_then(|v| v.as_str()).unwrap_or("inbox");
+                let in_sent = folder == "sent";
+                if (want == "sent") != in_sent {
+                    return false;
+                }
+                if unread_only && m.get("read").and_then(|v| v.as_bool()) != Some(false) {
+                    return false;
+                }
+                if let Some(s) = since {
+                    let created = m.get("created").and_then(|v| v.as_str()).unwrap_or("");
+                    if !iso_iso_ge(created, s) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+        Ok(Value::Array(filtered))
     }
 
     pub async fn get_message(&self, message_id: &str, cache: Option<f64>) -> ClientResult<Value> {
-        let path = format!("/learn/api/public/v1/users/me/messages/{message_id}");
-        let fields = default_fields("messages");
-        self.object_with_cache("get_message", &path, &[], fields, cache).await
+        // Look the message up through the shared (cached) mailbox flatten; the
+        // found object is cached under this method's namespace so its TTL keeps
+        // parity with the reference client (get_message = 600s).
+        let path = format!("/learn/api/v1/messages/mailbox/{message_id}");
+        if let Some(hit) = self.cache_read("get_message", &path, &[], cache) {
+            return Ok(hit);
+        }
+        let all = self.mailbox_messages(cache).await?;
+        let found = all
+            .as_array()
+            .and_then(|arr| arr.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(message_id)))
+            .cloned();
+        match found {
+            Some(item) => {
+                self.cache_write("get_message", &path, &[], cache, &item);
+                Ok(item)
+            }
+            None => Err(ClientError::Other(format!(
+                "message {message_id} was not found in the NTULearn mailbox"
+            ))),
+        }
     }
 
     pub async fn get_message_participants(&self, message_id: &str, cache: Option<f64>) -> ClientResult<Value> {
-        let path = format!("/learn/api/public/v1/users/me/messages/{message_id}/participants");
-        let fields = default_fields("course_users");
-        self.list_with_cache("get_message_participants", &path, &[], fields, cache).await
+        // Locate the message in the shared flatten to learn its course and
+        // conversation, then read the conversation detail (cached under this
+        // method's 600s namespace) and render participant/groups rows.
+        let all = self.mailbox_messages(cache).await?;
+        let found = all
+            .as_array()
+            .and_then(|arr| arr.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(message_id)))
+            .cloned();
+        let Some(msg) = found else {
+            return Ok(Value::Array(Vec::new()));
+        };
+        let course_id = msg.get("courseId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let conversation_id = msg.get("conversationId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let sender_id = msg.get("senderId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut rows: Vec<Value> = Vec::new();
+        // Sender first so h_read_message can resolve senderName by userId == fromUserId.
+        if let Some(sender) = msg.get("sender").cloned() {
+            if sender.get("userName").is_some()
+                || sender.get("givenName").is_some()
+                || sender.get("familyName").is_some()
+            {
+                let uname = sender.get("userName").and_then(|v| v.as_str()).unwrap_or(sender_id.as_str()).to_string();
+                let given = sender.get("givenName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let family = sender.get("familyName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                rows.push(json!({
+                    "userId": sender_id,
+                    "userName": uname,
+                    "name": { "given": given, "family": family },
+                    "role": "",
+                }));
+            }
+        }
+        if course_id.is_empty() || conversation_id.is_empty() {
+            return Ok(Value::Array(rows));
+        }
+        let conv_path = format!("/learn/api/v1/courses/{course_id}/conversations/{conversation_id}");
+        let conv = match self.object_with_cache("get_message_participants", &conv_path, &[], None, cache).await {
+            Ok(v) => v,
+            Err(_) => return Ok(Value::Array(rows)),
+        };
+        if conv.get("includesAllMembers").and_then(|v| v.as_bool()) == Some(true) {
+            rows.push(json!({
+                "id": course_id,
+                "userName": "All course members",
+                "name": { "given": "All course members", "family": "" },
+                "role": "course",
+            }));
+        }
+        if let Some(groups) = conv.get("groups").and_then(|v| v.as_array()) {
+            for g in groups.iter().take(200) {
+                let gid = g.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let title = g.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if gid.is_empty() {
+                    continue;
+                }
+                rows.push(json!({
+                    "id": gid,
+                    "userName": title,
+                    "name": { "given": title, "family": "" },
+                    "role": "group",
+                }));
+            }
+        }
+        // Resolve individual participants (excluding the sender) by id; cap fan-out.
+        if let Some(pids) = conv.get("participantIds").and_then(|v| v.as_array()) {
+            for pid in pids.iter().take(100) {
+                let uid = pid.as_str().unwrap_or("");
+                if uid.is_empty() || uid == sender_id {
+                    continue;
+                }
+                let upath = format!("/learn/api/v1/users/{uid}");
+                let user = match self.object_with_cache("get_user", &upath, &[], None, cache).await {
+                    Ok(u) => u,
+                    Err(_) => continue,
+                };
+                let uname = user.get("userName").and_then(|v| v.as_str()).unwrap_or(uid).to_string();
+                let given = user.get("givenName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let family = user.get("familyName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                rows.push(json!({
+                    "userId": uid,
+                    "userName": uname,
+                    "name": { "given": given, "family": family },
+                    "role": "",
+                }));
+            }
+        }
+        Ok(Value::Array(rows))
     }
+
+    /// Flatten the user's NTULearn mailbox into parity-shaped message objects.
+    ///
+    /// The public REST mailbox endpoints (`/learn/api/public/v1/users/me/messages`)
+    /// return 404 on this instance, and the internal v1 API models mail as
+    /// per-course *conversations*. We walk the internal endpoints:
+    ///   `messages/summary` (course list) -> `courses/{id}/conversations`
+    /// (both paginated), and flatten every conversation's inline `messages[]`
+    /// into one array of message objects carrying the field aliases the
+    /// handlers expect (`id`, `subject`, `body`, `senderId`, `senderName`,
+    /// `created`, `read`, `folder`, `fromUserId`). The result is cached under
+    /// the `get_messages` namespace (60s), so the three message methods share
+    /// a single fetch.
+    async fn mailbox_messages(&self, cache: Option<f64>) -> ClientResult<Value> {
+        const NS: &str = "get_messages";
+        const PATH: &str = "/learn/api/v1/messages/mailbox";
+        let empty: [(&str, &str); 0] = [];
+        if let Some(hit) = self.cache_read(NS, PATH, &empty, cache) {
+            return Ok(hit);
+        }
+        // Determine the sender id once: `folder == sent` == senderId == me.
+        let my_id = self.get_my_user_id().await?;
+        let mut flat: Vec<Value> = Vec::new();
+        // 401-refresh mutates the shared cookie; sequence the per-course fetches
+        // so one refresh cannot race the other course walks.
+        let summaries = self.paginated("/learn/api/v1/messages/summary", &[], None).await?;
+        for course in &summaries {
+            let course_id = course.get("courseId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if course_id.is_empty() {
+                continue;
+            }
+            if course.get("isCourseMessagesEnabled").and_then(|v| v.as_bool()) == Some(false) {
+                continue;
+            }
+            let course_name = course.get("courseName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let conv_path = format!("/learn/api/v1/courses/{course_id}/conversations");
+            let convs = match self.paginated(&conv_path, &[], None).await {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for conv in &convs {
+                let conversation_id = conv.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if conversation_id.is_empty() {
+                    continue;
+                }
+                let msgs = conv.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                for m in msgs {
+                    let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    let sender = m.get("sender").cloned().unwrap_or(Value::Null);
+                    let sender_id = m
+                        .get("senderId")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| sender.get("id").and_then(|v| v.as_str()))
+                        .unwrap_or("")
+                        .to_string();
+                    let sender_name = user_display_name(&sender);
+                    let created = m.get("postDate").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let read = m.get("isRead").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let folder = if !my_id.is_empty() && sender_id == my_id { "sent" } else { "inbox" };
+                    flat.push(json!({
+                        "id": id,
+                        "conversationId": conversation_id,
+                        "courseId": course_id,
+                        "courseName": course_name,
+                        "subject": "",
+                        "body": m.get("body").cloned().unwrap_or(Value::Null),
+                        "senderId": sender_id,
+                        "senderName": sender_name,
+                        "sender": sender,
+                        "createdAt": created,
+                        "created": created,
+                        "postDate": created,
+                        "read": read,
+                        "isRead": read,
+                        "folder": folder,
+                        "fromUserId": sender_id,
+                    }));
+                }
+            }
+        }
+        let value = Value::Array(flat);
+        self.cache_write(NS, PATH, &empty, cache, &value);
+        Ok(value)
+    }
+
 
     // ==========================================================================
     // Course users & groups
@@ -663,9 +931,18 @@ impl NTULearnClient {
     }
 
     pub async fn get_group_users(&self, course_id: &str, group_id: &str, cache: Option<f64>) -> ClientResult<Value> {
-        let path = format!("/learn/api/public/v1/courses/{course_id}/groups/{group_id}/users");
-        let fields = default_fields("course_users");
-        self.list_with_cache("get_group_users", &path, &[], fields, cache).await
+        // The public REST group-users endpoint returns 403 for students on the
+        // NTU instance; the internal v1 memberships endpoint is reachable and
+        // returns the group's members (with names) via `expand=user,courseRole`.
+        // Internal v1 uses `expand=...` (not `fields=...`), so pass fields=None
+        // to keep the `fields` query param off this path.
+        let path = format!("/learn/api/v1/courses/{course_id}/memberships");
+        let params: [(&str, &str); 3] = [
+            ("groupId", group_id),
+            ("expand", "user,courseRole"),
+            ("includeCount", "true"),
+        ];
+        self.list_with_cache("get_group_users", &path, &params, None, cache).await
     }
 
     // ==========================================================================
@@ -930,5 +1207,46 @@ mod tests {
             c.url("/learn/api/public/v1/courses"),
             "https://ntulearn.ntu.edu.sg/learn/api/public/v1/courses"
         );
+    }
+
+    #[test]
+    fn iso_iso_ge_compares_rfc3339_cutoffs() {
+        // created >= since
+        assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-05-09T00:00:00Z"));
+        assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-08-29T04:15:00.000Z"));
+        assert!(!iso_iso_ge("2026-05-09T00:00:00Z", "2026-08-29T04:15:00.000Z"));
+        // naive ISO datetime and date-only forms
+        assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-05-09"));
+        assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-08-29"));
+        // fallback: unparseable compares as strings
+        assert!(iso_iso_ge("zz", "aa"));
+        assert!(!iso_iso_ge("aa", "zz"));
+    }
+
+    #[test]
+    fn user_display_name_handles_nested_and_flat() {
+        use serde_json::json;
+        // public REST nested name object
+        assert_eq!(
+            user_display_name(&json!({"name": {"given": "Alex", "family": "Tan"}})),
+            "Alex Tan"
+        );
+        // internal v1 flat givenName/familyName (no nested `name`)
+        assert_eq!(
+            user_display_name(&json!({"givenName": "Fennec", "familyName": "Twobyte"})),
+            "Fennec Twobyte"
+        );
+        // mixed flat + nested -> nested wins
+        assert_eq!(
+            user_display_name(&json!({"name": {"given": "A", "family": "B"}, "givenName": "X", "familyName": "Y"})),
+            "A B"
+        );
+        // empty names fall back to userName
+        assert_eq!(
+            user_display_name(&json!({"userName": "flatuser"})),
+            "flatuser"
+        );
+        // bare id with no name fields -> empty string
+        assert_eq!(user_display_name(&json!({"id": "_x_1"})), "");
     }
 }

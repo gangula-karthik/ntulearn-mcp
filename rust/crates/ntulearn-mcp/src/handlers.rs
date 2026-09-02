@@ -798,15 +798,46 @@ fn user_name(user: &Value) -> String {
             return parts.join(" ");
         }
     }
+    // Internal v1 user objects use flat givenName/familyName (no nested `name`).
+    let given = user.get("givenName").and_then(|v| v.as_str()).unwrap_or("");
+    let family = user.get("familyName").and_then(|v| v.as_str()).unwrap_or("");
+    if !given.is_empty() || !family.is_empty() {
+        let mut parts = Vec::new();
+        if !given.is_empty() {
+            parts.push(given);
+        }
+        if !family.is_empty() {
+            parts.push(family);
+        }
+        return parts.join(" ");
+    }
     user.get("userName").and_then(|v| v.as_str()).unwrap_or("").to_string()
 }
 
 fn user_role(user: &Value) -> String {
-    user.get("courseRoleId")
+    let raw = user
+        .get("courseRoleId")
         .and_then(|v| v.as_str())
         .or_else(|| user.get("role").and_then(|v| v.as_str()))
+        .or_else(|| {
+            user.get("courseRole")
+                .and_then(|v| v.get("identifier"))
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or("")
-        .to_string()
+        .to_string();
+    // Internal v1 memberships use single-letter role codes like "S"; map them
+    // to the full names that the public REST courseRoleId uses (and that the
+    // INSTRUCTOR_ROLES set expects). Longer values pass through unchanged.
+    match raw.as_str() {
+        "S" => "Student".to_string(),
+        "T" => "TeachingAssistant".to_string(),
+        "P" => "PrimaryInstructor".to_string(),
+        "I" => "Instructor".to_string(),
+        "G" => "Grader".to_string(),
+        "O" => "Observer".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Render one user row for `list_course_users`. The Blackboard API nests
@@ -3228,5 +3259,46 @@ mod args_guard_tests {
         // the Python `_user_name` helper).
         assert_eq!(row["name"], json!("flatuser"));
         assert_eq!(row["role"], json!("Student"));
+    }
+
+    #[test]
+    fn user_role_maps_internal_single_letter_codes() {
+        use serde_json::json;
+        // single-letter internal role codes -> full public REST names
+        assert_eq!(user_role(&json!({"role": "S"})), "Student");
+        assert_eq!(user_role(&json!({"role": "T"})), "TeachingAssistant");
+        assert_eq!(user_role(&json!({"role": "P"})), "PrimaryInstructor");
+        assert_eq!(user_role(&json!({"role": "I"})), "Instructor");
+        assert_eq!(user_role(&json!({"role": "G"})), "Grader");
+        assert_eq!(user_role(&json!({"role": "O"})), "Observer");
+        // courseRole.identifier is used as a fallback
+        assert_eq!(
+            user_role(&json!({"courseRole": {"identifier": "S"}})),
+            "Student"
+        );
+        // full names pass through unchanged (public REST courseRoleId)
+        assert_eq!(user_role(&json!({"courseRoleId": "Student"})), "Student");
+        assert_eq!(user_role(&json!({"courseRoleId": "TeachingAssistant"})), "TeachingAssistant");
+        // unhandled longer values pass through
+        assert_eq!(user_role(&json!({"role": "BB_SPECTATOR"})), "BB_SPECTATOR");
+        // empty
+        assert_eq!(user_role(&json!({})), "");
+    }
+
+    #[test]
+    fn user_name_reads_internal_flat_given_family() {
+        use serde_json::json;
+        // internal v1 user object: flat givenName/familyName, no nested `name`
+        assert_eq!(
+            user_name(&json!({"id": "_7770000_1", "userName": "fennec42", "givenName": "Fennec", "familyName": "Twobyte"})),
+            "Fennec Twobyte"
+        );
+        // nested name object still wins
+        assert_eq!(
+            user_name(&json!({"userName": "ju", "name": {"given": "Alex", "family": "Tan"}})),
+            "Alex Tan"
+        );
+        // string `name` falls back to userName then flat
+        assert_eq!(user_name(&json!({"userName": "ju", "name": "plain"})), "ju");
     }
 }
