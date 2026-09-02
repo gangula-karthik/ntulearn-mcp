@@ -32,8 +32,8 @@ const DEVTOOLS_UP_TIMEOUT: Duration = Duration::from_secs(30);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Ordered candidate Chromium browser executables to try, keyed by label.
-fn browser_candidates() -> Vec<(&'static str, &'static str)> {
-    let mut v: Vec<(&'static str, &'static str)> = Vec::new();
+fn browser_candidates() -> Vec<(String, PathBuf)> {
+    let mut v: Vec<(String, PathBuf)> = Vec::new();
     #[cfg(target_os = "macos")]
     v.extend([
         ("Chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
@@ -41,8 +41,7 @@ fn browser_candidates() -> Vec<(&'static str, &'static str)> {
         ("Brave", "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
         ("Chromium", "/Applications/Chromium.app/Contents/MacOS/Chromium"),
         ("Microsoft Edge", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
-        ("Firefox", "/Applications/Firefox.app/Contents/MacOS/firefox"), // no CDP; unused
-    ]);
+    ].into_iter().map(|(l, p)| (l.to_string(), PathBuf::from(p))));
     #[cfg(target_os = "linux")]
     v.extend([
         ("google-chrome", "/usr/bin/google-chrome"),
@@ -51,16 +50,22 @@ fn browser_candidates() -> Vec<(&'static str, &'static str)> {
         ("chromium-browser", "/usr/bin/chromium-browser"),
         ("brave", "/usr/bin/brave-browser"),
         ("microsoft-edge", "/usr/bin/microsoft-edge"),
-    ]);
+    ].into_iter().map(|(l, p)| (l.to_string(), PathBuf::from(p))));
     #[cfg(target_os = "windows")]
     {
+        // Program-Files installs (system-wide).
         if let Ok(p) = std::env::var("PROGRAMFILES") {
-            v.push(("Chrome", &format!("{p}\\Google\\Chrome\\Application\\chrome.exe")));
+            v.push(("Chrome", PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
         }
         if let Ok(p) = std::env::var("PROGRAMFILES(X86)") {
-            v.push(("Chrome x86", &format!("{p}\\Google\\Chrome\\Application\\chrome.exe")));
-            v.push(("Edge", &format!("{p}\\Microsoft\\Edge\\Application\\msedge.exe")));
-            v.push(("Brave", &format!("{p}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
+            v.push(("Chrome x86", PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
+            v.push(("Edge", PathBuf::from(p).join("Microsoft\\Edge\\Application\\msedge.exe")));
+            v.push(("Brave", PathBuf::from(p).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
+        }
+        // Per-user installs (the default for Chrome/Brave on Windows).
+        if let Ok(p) = std::env::var("LOCALAPPDATA") {
+            v.push(("Chrome per-user", PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
+            v.push(("Brave per-user", PathBuf::from(p).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
         }
     }
     v.into_iter().filter(|(_, p)| PathBuf::from(p).exists()).collect()
@@ -279,7 +284,8 @@ pub async fn capture_cookie(base: &str) -> Result<(String, String), String> {
             }
         }
         if last_note.elapsed() >= Duration::from_secs(20) {
-            println!("  … still waiting for the logged-in session cookie");
+            let remain = deadline.saturating_duration_since(std::time::Instant::now()).as_secs();
+            println!("  … still waiting for the logged-in session cookie ({}m {}s left, then falls back to paste)", remain / 60, remain % 60);
             last_note = std::time::Instant::now();
         }
         tokio::time::sleep(Duration::from_millis(POLL_EVERY_MS)).await;

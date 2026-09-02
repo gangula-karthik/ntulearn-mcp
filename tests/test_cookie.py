@@ -8,6 +8,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tests"))  # keychain guard, must precede ntulearn_mcp imports
+import _keychain_guard  # noqa: E402,F401  hard no-keychain rule
 
 from ntulearn_mcp.cookie import read_bbrouter_cookie
 

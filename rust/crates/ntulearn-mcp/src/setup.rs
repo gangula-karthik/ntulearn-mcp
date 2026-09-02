@@ -75,8 +75,21 @@ fn read_line_trim(prompt: &str) -> Option<String> {
 /// Normalize a pasted value: strip `BbRouter=` and any leading/trailing quotes.
 fn normalize_paste(v: &str) -> String {
     let mut t = v.trim().to_string();
+    // Accept a full `Cookie: ...` header: take the trailing BbRouter=... part.
+    if let Some(rest) = t.strip_prefix("Cookie:") {
+        t = rest.trim().to_string();
+    }
     if let Some(rest) = t.strip_prefix("BbRouter=") {
         t = rest.to_string();
+    }
+    // Drop any other cookies preceding BbRouter in a multi-cookie header.
+    if let Some(rest) = t.find("BbRouter=") {
+        t = t[rest + "BbRouter=".len()..].to_string();
+    }
+    // Truncate at a `;` — the cookie-name separator in a `Cookie:` header.
+    // BbRouter values themselves use commas and never contain `;`.
+    if let Some(sc) = t.find(';') {
+        t.truncate(sc);
     }
     t = t.trim_matches(|ch| ch == '"' || ch == '\'').to_string();
     t.trim().to_string()
@@ -105,6 +118,18 @@ fn persist(value: &str) {
 
 /// `ntulearn-mcp setup`
 pub async fn run_setup() -> i32 {
+    // Ctrl+C during capture cancels the in-flight capture future, which drops
+    // `Launched` (RAII) and cleans up the throwaway browser + temp profile.
+    tokio::select! {
+        code = run_setup_inner() => code,
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("\nInterrupted. Cancelling capture and cleaning up.\nYou can run `ntulearn-mcp setup` again anytime.");
+            130
+        }
+    }
+}
+
+async fn run_setup_inner() -> i32 {
     let base = std::env::var("NTULEARN_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE.to_string());
     println!("NTULearn MCP — cookie setup");
     println!("Base URL: {base}\n");
@@ -198,8 +223,12 @@ pub async fn run_check() -> i32 {
         Some(val) => {
             println!("Cookie source : {}", source.as_str());
             if let Some(secs) = cookie::seconds_remaining(val) {
-                println!("Expires in    : {} sec ({:.1} days)",
-                    secs, secs as f64 / 86400.0);
+                let days = secs as f64 / 86400.0;
+                let label = if secs <= 0 { "EXPIRED".to_string() } else { "valid".to_string() };
+                println!(
+                    "Expires in    : {} ({label})",
+                    if days >= 1.0 { format!("{days:.1} days") } else { format!("{secs} seconds") }
+                );
             } else {
                 println!("Expires in    : unknown (session cookie)");
             }
@@ -232,8 +261,8 @@ pub async fn run_refresh() -> i32 {
                 Ok(false) => {
                     println!("Current cookie is expired (401). No newer one available from \
                               env / config file / Firefox.");
-                    println!("Log into NTULearn in Firefox (or refresh NTULEARN_COOKIE), then \
-                              run `refresh` again or `setup`.");
+                    println!("Run `ntulearn-mcp setup` to re-capture a fresh cookie (auto-login \
+                              browser, or paste). Or set a fresh NTULEARN_COOKIE and run `refresh` again.");
                     1
                 }
                 Err(e) => {
@@ -242,5 +271,33 @@ pub async fn run_refresh() -> i32 {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paste_normalizes_plain_value() {
+        assert_eq!(normalize_paste("expires:1788,id:ABC"), "expires:1788,id:ABC");
+    }
+
+    #[test]
+    fn paste_normalizes_brouter_prefix() {
+        assert_eq!(normalize_paste("BbRouter=expires:1788,id:ABC"), "expires:1788,id:ABC");
+    }
+
+    #[test]
+    fn paste_normalizes_full_cookie_header() {
+        // A whole `Cookie:` header pasted verbatim must still yield the BbRouter value.
+        let hdr = "Cookie: bbsession=xxx; bb_session_id=yyy; BbRouter=expires:1788,id:ABC; foo=1";
+        assert_eq!(normalize_paste(hdr), "expires:1788,id:ABC");
+    }
+
+    #[test]
+    fn paste_strips_quotes() {
+        assert_eq!(normalize_paste("\"expires:1788,id:ABC\""), "expires:1788,id:ABC");
     }
 }

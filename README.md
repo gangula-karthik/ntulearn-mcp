@@ -10,7 +10,63 @@ announcements, calendar, and grades — and organise course files into a folder 
 
 ---
 
+---
+
+## Using the Rust server (recommended)
+
+This repo's **shipped server is the Rust binary** (an ultrafast-mcp rewrite of the same 21 tools,
+with identical tool names and prompts). New installations should use it — skip the Python sections
+and start here.
+
+```bash
+cd rust
+cargo build --release
+# binary: target/release/ntulearn-mcp
+```
+
+One-time cookie setup — just log in:
+
+```bash
+./target/release/ntulearn-mcp setup
+```
+
+`setup` launches a throwaway-profile browser (Chrome, Arc, Brave, Edge, or Chromium), opens
+NTULearn for you, detects your `BbRouter` session cookie, validates it live, and saves it to
+`<config>/ntulearn-mcp/cookie`. You only need to log in in the window that opens. No copy-paste,
+no devtools, no OS-keychain prompts. If no supported browser is found (headless server), it falls
+back to a manual paste flow.
+
+Then register the **Rust binary** with your MCP host (adjust the path):
+
+```bash
+# e.g. Claude Code / Cursor / Cline — point the command at the Rust binary:
+"/Users/you/ntulearn-mcp/rust/target/release/ntulearn-mcp"
+```
+
+Verify:
+
+```bash
+./target/release/ntulearn-mcp check   # expect: Cookie source + Live validity : OK (200)
+```
+
+Cookie refresh is on-demand and reuses the same capture flow:
+
+```bash
+./target/release/ntulearn-mcp refresh
+```
+
+> The Rust server never reads your OS keychain. It resolves the cookie only from
+> `NTULEARN_COOKIE` env → config file → read-only Firefox `cookies.sqlite`, and the `setup`
+> command acquires cookie values via your browser's own debugging channel (a throwaway profile), so
+> no keychain access is needed or attempted.
+>
+> The Python implementation below remains fully supported as an alternative (same tools), if you
+> prefer running it from source.
+
+---
+
 ## Agent setup playbook
+
 
 Prerequisites: **Python 3.12+**, [`uv`](https://docs.astral.sh/uv/), and a logged-in NTULearn session
 in **Chrome, Edge, Firefox, or Brave**.
@@ -336,7 +392,7 @@ names, prompts, and resource template.
 ```bash
 cd rust
 cargo build --release          # binary at target/release/ntulearn-mcp
-cargo test                     # 23 unit tests (cache, client, cookie)
+cargo test                     # 26 unit tests (cache, client, cookie, capture)
 target/release/ntulearn-mcp    # serve over stdio
 ```
 
