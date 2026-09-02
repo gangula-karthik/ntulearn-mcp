@@ -56,7 +56,10 @@ class ToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_only_download_file_is_non_read_only(self) -> None:
         non_read_only = [t.name for t in self._tools if t.annotations and not t.annotations.readOnlyHint]
-        self.assertEqual(non_read_only, ["ntulearn_download_file"])
+        self.assertEqual(
+            non_read_only,
+            ["ntulearn_download_file", "ntulearn_download_course"],
+        )
 
     def test_pagination_params_on_list_tools(self) -> None:
         for tname in (

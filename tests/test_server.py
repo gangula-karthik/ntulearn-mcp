@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,12 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mcp.types import ImageContent, TextContent
+from mcp.types import (
+    GetPromptResult,
+    ImageContent,
+    ReadResourceResult,
+    TextContent,
+)
 
 from ntulearn_mcp import server
 from ntulearn_mcp.client import BbRouterExpiredError, NTULearnClient
@@ -1725,6 +1731,240 @@ class PDFStdoutProtectionTests(unittest.IsolatedAsyncioTestCase):
             os.close(r_fd)
 
         self.assertEqual(captured, b"")
+
+
+
+# ---------------------------------------------------------------------------
+# v0.3 server surface: new tools, resources, prompts, lazy handlers
+# ---------------------------------------------------------------------------
+
+_NEW_TOOL_NAMES = [
+    "ntulearn_list_messages",
+    "ntulearn_read_message",
+    "ntulearn_list_course_users",
+    "ntulearn_list_course_groups",
+    "ntulearn_get_group_members",
+    "ntulearn_get_gradebook_attempts",
+    "ntulearn_search_all_courses",
+    "ntulearn_get_content_tree",
+    "ntulearn_download_course",
+    "ntulearn_whats_new",
+    "ntulearn_export_calendar_ics",
+    "ntulearn_export_gradebook_csv",
+    "ntulearn_summarize_course",
+]
+
+
+class NewToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
+    """The 13 v0.3 tools are registered with schemas/annotations."""
+
+    async def asyncSetUp(self) -> None:
+        self._tools = await server.list_tools()
+        self._by_name = {t.name: t for t in self._tools}
+
+    def test_13_new_tools_present(self) -> None:
+        for tname in _NEW_TOOL_NAMES:
+            self.assertIn(tname, self._by_name, tname)
+        # Total surface is 8 existing + 13 new.
+        self.assertEqual(len(self._tools), 21)
+
+    def test_new_tools_have_annotations(self) -> None:
+        for tname in _NEW_TOOL_NAMES:
+            ann = self._by_name[tname].annotations
+            self.assertIsNotNone(ann, tname)
+            self.assertFalse(ann.destructiveHint, tname)
+            # Only ntulearn_download_course is a write tool among the new set.
+            if tname == "ntulearn_download_course":
+                self.assertFalse(ann.readOnlyHint, tname)
+            else:
+                self.assertTrue(ann.readOnlyHint, tname)
+
+    def test_only_download_tools_are_non_read_only(self) -> None:
+        non_read_only = [
+            t.name for t in self._tools
+            if t.annotations and not t.annotations.readOnlyHint
+        ]
+        self.assertEqual(
+            non_read_only,
+            ["ntulearn_download_file", "ntulearn_download_course"],
+        )
+
+    def test_new_list_tools_carry_pagination_and_response_format(self) -> None:
+        for tname in (
+            "ntulearn_list_messages",
+            "ntulearn_list_course_users",
+            "ntulearn_list_course_groups",
+            "ntulearn_get_gradebook_attempts",
+        ):
+            schema = self._by_name[tname].inputSchema
+            self.assertIn("limit", schema["properties"], tname)
+            self.assertIn("offset", schema["properties"], tname)
+            self.assertIn("response_format", schema["properties"], tname)
+
+    def test_new_tools_have_output_schemas(self) -> None:
+        for tname in _NEW_TOOL_NAMES:
+            self.assertIsNotNone(self._by_name[tname].outputSchema, tname)
+
+    def test_download_course_input_schema(self) -> None:
+        schema = self._by_name["ntulearn_download_course"].inputSchema
+        self.assertIn("course_id", schema["required"])
+        self.assertIn("parallel", schema["properties"])
+        self.assertEqual(schema["properties"]["parallel"]["maximum"], 16)
+        self.assertIn("skip_existing", schema["properties"])
+
+
+class FakeEnrollmentsClient:
+    """Minimal client for list_resources / get_client mocking."""
+
+    def __init__(self, enrollments):
+        self._enrollments = enrollments
+
+    async def get_my_enrollments(self):
+        return self._enrollments
+
+
+class ResourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_resource_templates_exposes_course_pattern(self) -> None:
+        templates = await server.list_resource_templates()
+        self.assertEqual(len(templates), 1)
+        tpl = templates[0]
+        self.assertEqual(tpl.uriTemplate, "ntulearn://courses/{course_id}")
+        self.assertIsNotNone(tpl.name)
+
+    async def test_list_resources_returns_enrolled_course_resources(self) -> None:
+        fake = FakeEnrollmentsClient([
+            {"courseId": "_111_1", "title": "A"},
+            {"courseId": "_222_1", "title": "B"},
+        ])
+        with mock.patch.object(server, "get_client", return_value=fake):
+            resources = await server.list_resources()
+        self.assertEqual(len(resources), 2)
+        uris = {str(r.uri) for r in resources}
+        self.assertEqual(uris, {"ntulearn://courses/_111_1", "ntulearn://courses/_222_1"})
+
+    async def test_list_resources_degrades_to_empty_without_cookie(self) -> None:
+        def boom():
+            raise RuntimeError("No cookie")
+        with mock.patch.object(server, "get_client", side_effect=boom):
+            resources = await server.list_resources()
+        self.assertEqual(resources, [])
+
+    async def test_read_resource_rejects_unknown_uri(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            await server.read_resource("ntulearn://nonsense/x")
+        self.assertIn("Unsupported resource URI", str(ctx.exception))
+
+    async def test_read_resource_requires_course_id(self) -> None:
+        with self.assertRaises(ValueError):
+            await server.read_resource("ntulearn://courses/")
+
+    async def test_read_resource_serves_briefing_via_lazy_handlers(self) -> None:
+        async def fake_summarize(client, args):
+            return ([], {"courseId": args["course_id"], "title": "Brief"})
+
+        await self._run_with_fake_handlers(fake_summarize)
+
+    async def _run_with_fake_handlers(self, fake_summarize) -> None:
+        fake_handlers = types.SimpleNamespace(handle_summarize_course=fake_summarize)
+        fake_client = object()
+        with mock.patch.dict(sys.modules, {"ntulearn_mcp.handlers": fake_handlers}):
+            with mock.patch.object(server, "get_client", return_value=fake_client):
+                result = await server.read_resource("ntulearn://courses/_123_1")
+        self.assertIsInstance(result, ReadResourceResult)
+        self.assertEqual(len(result.contents), 1)
+        content = result.contents[0]
+        self.assertEqual(str(content.uri), "ntulearn://courses/_123_1")
+        self.assertIn('"courseId": "_123_1"', content.text)
+
+    async def test_read_resource_raises_clear_error_without_handlers(self) -> None:
+        # handlers.py does not exist in this worktree (WT-B owns it) — the
+        # lazy import must surface an actionable error, not an ImportError.
+        with self.assertRaises(RuntimeError) as ctx:
+            await server.read_resource("ntulearn://courses/_123_1")
+        self.assertIn("ntulearn_mcp.handlers", str(ctx.exception))
+
+
+class PromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_prompts_registers_both_templates(self) -> None:
+        prompts = await server.list_prompts()
+        names = {p.name for p in prompts}
+        self.assertEqual(names, {"ntulearn-weekly-brief", "ntulearn-assignment-triage"})
+        for p in prompts:
+            self.assertIsNotNone(p.description)
+            self.assertTrue(p.arguments)
+
+    async def test_get_prompt_weekly_brief_defaults_to_7_days(self) -> None:
+        result = await server.get_prompt("ntulearn-weekly-brief", {})
+        self.assertIsInstance(result, GetPromptResult)
+        self.assertEqual(len(result.messages), 1)
+        text = result.messages[0].content.text
+        self.assertIn("ntulearn_get_announcements", text)
+        self.assertIn("ntulearn_get_upcoming", text)
+        self.assertRegex(text, r"since='\d{4}-")
+
+    async def test_get_prompt_assignment_triage_defaults_to_14_days(self) -> None:
+        result = await server.get_prompt("ntulearn-assignment-triage", {"days": 14})
+        text = result.messages[0].content.text
+        self.assertIn("GradebookColumn", text)
+        self.assertIn("ntulearn_get_upcoming", text)
+
+    async def test_get_prompt_accepts_courses_arg(self) -> None:
+        result = await server.get_prompt(
+            "ntulearn-weekly-brief", {"courses": "_111_1,_222_1", "days": 3}
+        )
+        text = result.messages[0].content.text
+        self.assertIn("_111_1", text)
+        self.assertIn("_222_1", text)
+
+    async def test_get_prompt_unknown_prompt_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            await server.get_prompt("not-a-prompt", {})
+
+    async def test_get_prompt_rejects_bad_days(self) -> None:
+        with self.assertRaises(ValueError):
+            await server.get_prompt("ntulearn-weekly-brief", {"days": "abc"})
+
+
+class LazyHandlerDispatchTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
+    """Dispatch of the 13 tools without handlers.py present raises clearly."""
+
+    async def test_new_tool_without_handlers_raises_clear_error(self) -> None:
+        os.environ["NTULEARN_COOKIE"] = "expires:1,test:test"
+        server._client = mock.Mock()
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                await server._dispatch("ntulearn_list_messages", {})
+            self.assertIn("ntulearn_mcp.handlers", str(ctx.exception))
+        finally:
+            server._client = None
+
+    async def test_new_tool_with_fake_handlers_dispatches(self) -> None:
+        os.environ["NTULEARN_COOKIE"] = "expires:1,test:test"
+        async def fake_handle(client, args):
+            return ([TextContent(type="text", text="ok")], {"ok": True})
+        fake_handlers = types.SimpleNamespace(
+            handle_list_messages=fake_handle,
+        )
+        server._client = mock.Mock()
+        try:
+            with mock.patch.dict(sys.modules, {"ntulearn_mcp.handlers": fake_handlers}):
+                blocks, payload = await server._dispatch("ntulearn_list_messages", {})
+            self.assertEqual(payload, {"ok": True})
+            self.assertEqual(len(blocks), 1)
+        finally:
+            server._client = None
+
+    async def test_unknown_tool_still_errors(self) -> None:
+        os.environ["NTULEARN_COOKIE"] = "expires:1,test:test"
+        server._client = mock.Mock()
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                await server._dispatch("not_a_real_tool", {})
+            msg = str(ctx.exception)
+            self.assertIn("Unknown tool", msg)
+            self.assertIn("ntulearn_list_courses", msg)
+        finally:
+            server._client = None
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,19 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import ImageContent, TextContent, Tool
+from mcp.types import (
+    GetPromptResult,
+    ImageContent,
+    Prompt,
+    PromptArgument,
+    PromptMessage,
+    ReadResourceResult,
+    Resource,
+    ResourceTemplate,
+    TextContent,
+    TextResourceContents,
+    Tool,
+)
 
 from ntulearn_mcp.cache import (
     delete_cached_cookie,
@@ -1137,6 +1149,112 @@ _FILE_INFO_SCHEMA = {
 }
 
 
+# ---------------------------------------------------------------------------
+# New-tool schema fragments (v0.3) — shared with the tool handlers in
+# ntulearn_mcp.handlers (WT-B). server.py only needs the schemas here to
+# expose the tool surface; the handler bodies are imported lazily at call time
+# so this module imports cleanly before handlers.py lands.
+# ---------------------------------------------------------------------------
+
+_COURSE_IDS_SCHEMA = {
+    "type": "array",
+    "description": (
+        "Optional list of course IDs to scope to. Omit to fan out across all "
+        "available enrolled courses."
+    ),
+    "items": {"type": "string", "pattern": _BB_ID_PATTERN},
+    "maxItems": _MAX_LIMIT,
+}
+
+_MESSAGE_FOLDER_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Mailbox folder to read. Blackboard exposes 'inbox' (received) and "
+        "'sent' (outbox)."
+    ),
+    "enum": ["inbox", "sent"],
+    "default": "inbox",
+}
+
+_SINCE_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Optional ISO-8601 cutoff (e.g. '2026-05-09T00:00:00Z'). Only items "
+        "created on/after this time are included."
+    ),
+}
+
+_UNTIL_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Optional ISO-8601 end of the window (e.g. '2026-05-23T00:00:00Z')."
+    ),
+}
+
+_QUERY_SCHEMA = {
+    "type": "string",
+    "description": "Search term (case-insensitive substring)",
+    "minLength": 1,
+    "maxLength": 200,
+}
+
+_MAX_DEPTH_SCHEMA = {
+    "type": "integer",
+    "description": f"Maximum recursion depth (capped at {_MAX_DEPTH}).",
+    "default": 5,
+    "minimum": 1,
+    "maximum": _MAX_DEPTH,
+}
+
+_MESSAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": ["string", "null"]},
+        "subject": {"type": ["string", "null"]},
+        "body": {"type": ["string", "null"]},
+        "senderName": {"type": ["string", "null"]},
+        "senderId": {"type": ["string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+        "read": {"type": "boolean"},
+        "recipients": {"type": "array", "items": {"type": "object"}},
+    },
+}
+
+_USER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": ["string", "null"]},
+        "name": {"type": ["string", "null"]},
+        "role": {"type": ["string", "null"]},
+        "userName": {"type": ["string", "null"]},
+    },
+}
+
+_GROUP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": ["string", "null"]},
+        "name": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "available": {"type": ["string", "null"]},
+    },
+}
+
+_ATTEMPT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": ["string", "null"]},
+        "userId": {"type": ["string", "null"]},
+        "userName": {"type": ["string", "null"]},
+        "status": {"type": ["string", "null"]},
+        "score": {"type": ["number", "string", "null"]},
+        "feedback": {"type": ["string", "null"]},
+        "cumulatedScore": {"type": ["number", "string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+    },
+}
+
+
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
@@ -1605,6 +1723,605 @@ async def list_tools() -> list[Tool]:
                 ],
             },
         ),
+        # ------------------------------------------------------------------
+        # v0.3 tools — handlers live in ntulearn_mcp.handlers (lazy at call
+        # time). Keep each entry's name/annotations/schema in lockstep with
+        # the Handler contract in DEVELOPMENT-SPEC.md.
+        # ------------------------------------------------------------------
+        Tool(
+            name=f"{_TOOL_PREFIX}_list_messages",
+            description=(
+                "List a user's Blackboard messages (mailbox) on NTULearn. "
+                "Defaults to the inbox; pass folder='sent' for the outbox. "
+                "Optionally filter to unread messages or a since (ISO-8601) "
+                "cutoff. Supports pagination."
+            ),
+            annotations={
+                "title": "List user messages",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "folder": _MESSAGE_FOLDER_SCHEMA,
+                    "unread_only": {
+                        "type": "boolean",
+                        "description": "Return only unread messages when true.",
+                        "default": False,
+                    },
+                    "since": _SINCE_SCHEMA,
+                    "limit": _LIMIT_SCHEMA,
+                    "offset": _OFFSET_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "messages": {"type": "array", "items": _MESSAGE_SCHEMA},
+                    **_PAGINATION_OUTPUT_FIELDS,
+                },
+                "required": ["messages", "total", "count", "offset", "limit", "hasMore"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_read_message",
+            description=(
+                "Read a single Blackboard message by ID, including its subject, "
+                "full body and recipient list. The ID comes from "
+                "ntulearn_list_messages."
+            ),
+            annotations={
+                "title": "Read a user message",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {
+                        "type": "string",
+                        "description": "Blackboard message ID (e.g. _12345_1)",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": _BB_ID_PATTERN,
+                    },
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "message": _MESSAGE_SCHEMA,
+                },
+                "required": ["message"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_list_course_users",
+            description=(
+                "List the users enrolled in a course (instructors, teaching "
+                "staff and students as the API exposes them). Supports "
+                "pagination."
+            ),
+            annotations={
+                "title": "List course users",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "limit": _LIMIT_SCHEMA,
+                    "offset": _OFFSET_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "users": {"type": "array", "items": _USER_SCHEMA},
+                    **_PAGINATION_OUTPUT_FIELDS,
+                },
+                "required": ["users", "total", "count", "offset", "limit", "hasMore"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_list_course_groups",
+            description=(
+                "List the groups defined in a course (e.g. tutorial/lab "
+                "groups). Supports pagination."
+            ),
+            annotations={
+                "title": "List course groups",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "limit": _LIMIT_SCHEMA,
+                    "offset": _OFFSET_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "groups": {"type": "array", "items": _GROUP_SCHEMA},
+                    **_PAGINATION_OUTPUT_FIELDS,
+                },
+                "required": ["groups", "total", "count", "offset", "limit", "hasMore"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_get_group_members",
+            description=(
+                "List the members of a specific course group (e.g. your "
+                "tutorial group's roster)."
+            ),
+            annotations={
+                "title": "Get course group members",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "group_id": {
+                        "type": "string",
+                        "description": "Group ID (e.g. _12345_1)",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": _BB_ID_PATTERN,
+                    },
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id", "group_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "users": {"type": "array", "items": _USER_SCHEMA},
+                    "courseId": {"type": "string"},
+                    "groupId": {"type": "string"},
+                },
+                "required": ["users"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_get_gradebook_attempts",
+            description=(
+                "List submission attempts for a gradebook column (assignment). "
+                "Pass user_id to scope to one student's attempts. "
+                "Supports pagination."
+            ),
+            annotations={
+                "title": "Get gradebook attempts",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "column_id": {
+                        "type": "string",
+                        "description": "Gradebook column ID (e.g. _12345_1)",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": _BB_ID_PATTERN,
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "Optional user ID to scope attempts to one student.",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "pattern": _BB_ID_PATTERN,
+                    },
+                    "limit": _LIMIT_SCHEMA,
+                    "offset": _OFFSET_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id", "column_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "attempts": {"type": "array", "items": _ATTEMPT_SCHEMA},
+                    **_PAGINATION_OUTPUT_FIELDS,
+                },
+                "required": ["attempts", "total", "count", "offset", "limit", "hasMore"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_search_all_courses",
+            description=(
+                "Search across ALL enrolled courses' content trees for items "
+                "matching a query. Like ntulearn_search_course_content but "
+                "scoped to every available course at once, with per-item "
+                "courseId and breadcrumb for attribution."
+            ),
+            annotations={
+                "title": "Search content across all courses",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": _QUERY_SCHEMA,
+                    "course_ids": _COURSE_IDS_SCHEMA,
+                    "max_depth": {
+                        **_MAX_DEPTH_SCHEMA,
+                        "description": f"Maximum recursion depth per course (default 3, capped at {_MAX_DEPTH}).",
+                        "default": 3,
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": f"Maximum number of matching items to return (default 50, capped at {_MAX_LIMIT})",
+                        "default": 50,
+                        "minimum": 1,
+                        "maximum": _MAX_LIMIT,
+                    },
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "matches": {
+                        "type": "array",
+                        "items": {
+                            **_CONTENT_ITEM_SCHEMA,
+                            "properties": {
+                                **_CONTENT_ITEM_SCHEMA["properties"],
+                                "courseId": {"type": ["string", "null"]},
+                                "breadcrumb": {"type": "array", "items": {"type": "string"}},
+                            },
+                        },
+                    },
+                    "count": {"type": "integer"},
+                    "courseIdsQueried": {"type": "array", "items": {"type": "string"}},
+                    "courseErrors": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                "required": ["matches", "count"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_get_content_tree",
+            description=(
+                "Return a course's ENTIRE content tree as nested JSON "
+                "(folders with children), unlike ntulearn_get_course_contents "
+                "which returns one level per call. Use max_depth to bound the "
+                "walk."
+            ),
+            annotations={
+                "title": "Get full course content tree",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "max_depth": _MAX_DEPTH_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "courseId": {"type": "string"},
+                    "tree": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": ["string", "null"]},
+                            "title": {"type": ["string", "null"]},
+                            "hasChildren": {"type": "boolean"},
+                            "children": {"type": "array", "items": {"type": "object"}},
+                        },
+                    },
+                    "count": {"type": "integer"},
+                    "totalNodes": {"type": "integer"},
+                },
+                "required": ["courseId", "tree", "count", "totalNodes"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_download_course",
+            description=(
+                "Recursively download every file in a course's content tree "
+                "to local disk, organised into course/subject folders. "
+                "Skips already-downloaded files by default; pass "
+                "skip_existing=false to re-download. Concurrency is bounded by "
+                "`parallel`. Write tool (saves files on your machine)."
+            ),
+            annotations={
+                "title": "Download an entire course to disk",
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "destination_dir": {
+                        "type": "string",
+                        "description": (
+                            "Target root directory (absolute or ~-prefixed). "
+                            "Defaults to ~/Downloads/NTU/<course>."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 1024,
+                    },
+                    "max_depth": _MAX_DEPTH_SCHEMA,
+                    "include_extensions": {
+                        "type": "string",
+                        "description": (
+                            "Optional comma-separated file extensions to download, "
+                            "e.g. 'pdf,ppt,pptx,docx'. Omit to download all."
+                        ),
+                    },
+                    "skip_existing": {
+                        "type": "boolean",
+                        "description": "Skip files already present at the destination.",
+                        "default": True,
+                    },
+                    "parallel": {
+                        "type": "integer",
+                        "description": "Max concurrent downloads (1-16).",
+                        "default": 4,
+                        "minimum": 1,
+                        "maximum": 16,
+                    },
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "courseId": {"type": "string"},
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "localPath": {"type": "string"},
+                                "filename": {"type": "string"},
+                                "sizeBytes": {"type": "integer"},
+                                "courseFolder": {"type": "string"},
+                            },
+                        },
+                    },
+                    "skipped": {"type": "array", "items": {"type": "object"}},
+                    "totalBytes": {"type": "integer"},
+                    "destinationDir": {"type": "string"},
+                },
+                "required": ["courseId", "files", "totalBytes"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_whats_new",
+            description=(
+                "One-call 'what changed recently' digest: announcements, "
+                "upcoming due dates and a gradebook summary across your "
+                "courses since a cutoff. Defaults to the tracker's last-seen "
+                "time (or the last 7 days). Set update_tracker=true to record "
+                "`since` as the new last-seen for future calls."
+            ),
+            annotations={
+                "title": "What's new across courses",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_ids": _COURSE_IDS_SCHEMA,
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "Optional ISO-8601 cutoff. Defaults to the tracker's "
+                            "last-seen time, or 7 days ago if never set."
+                        ),
+                    },
+                    "update_tracker": {
+                        "type": "boolean",
+                        "description": (
+                            "Persist `since` as the new last-seen marker for "
+                            "future ntulearn_whats_new calls."
+                        ),
+                        "default": False,
+                    },
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "since": {"type": "string"},
+                    "fetchedAt": {"type": "string"},
+                    "announcements": {"type": "array", "items": _ANNOUNCEMENT_SCHEMA},
+                    "upcoming": {"type": "array", "items": _CALENDAR_ITEM_SCHEMA},
+                    "gradebookSummary": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "columnCount": {"type": "integer"},
+                            "columnsWithScore": {"type": "integer"},
+                            "possibleTotal": {"type": ["number", "null"]},
+                        },
+                    },
+                    "courseErrors": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                },
+                "required": ["since", "fetchedAt", "announcements", "upcoming"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_export_calendar_ics",
+            description=(
+                "Export calendar items (including assignment due dates) as an "
+                "iCalendar (.ics) string you can paste into Google Calendar / "
+                "Apple Calendar / Outlook. Optionally scope to course_ids and a "
+                "since/until window."
+            ),
+            annotations={
+                "title": "Export calendar as ICS",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_ids": _COURSE_IDS_SCHEMA,
+                    "since": _SINCE_SCHEMA,
+                    "until": _UNTIL_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "ics": {"type": "string"},
+                    "itemCount": {"type": "integer"},
+                    "supported": {"type": "boolean"},
+                },
+                "required": ["ics", "itemCount", "supported"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_export_gradebook_csv",
+            description=(
+                "Export your gradebook columns and scores across courses as a "
+                "CSV string you can paste into a spreadsheet. Header: "
+                "courseId,column,possible,score,grade,status."
+            ),
+            annotations={
+                "title": "Export gradebook as CSV",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_ids": _COURSE_IDS_SCHEMA,
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "csv": {"type": "string"},
+                    "columnCount": {"type": "integer"},
+                    "courseCount": {"type": "integer"},
+                },
+                "required": ["csv", "columnCount", "courseCount"],
+            },
+        ),
+        Tool(
+            name=f"{_TOOL_PREFIX}_summarize_course",
+            description=(
+                "Bite-size briefing of a single course: title, description, "
+                "instructors, enrollment count, upcoming due dates, recent "
+                "announcements, a gradebook summary and the top-level content "
+                "folders. Each sub-section degrades gracefully on error."
+            ),
+            annotations={
+                "title": "Summarize a course",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": True,
+            },
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "course_id": _COURSE_ID_SCHEMA,
+                    "include_contents": {
+                        "type": "boolean",
+                        "description": "Include the top-level content folders in the briefing.",
+                        "default": True,
+                    },
+                    "response_format": _RESPONSE_FORMAT_SCHEMA,
+                },
+                "required": ["course_id"],
+                "additionalProperties": False,
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "courseId": {"type": "string"},
+                    "title": {"type": ["string", "null"]},
+                    "description": {"type": ["string", "null"]},
+                    "instructors": {"type": "array", "items": {"type": "object"}},
+                    "enrollmentCount": {"type": ["integer", "null"]},
+                    "upcoming": {"type": "array", "items": _CALENDAR_ITEM_SCHEMA},
+                    "recentAnnouncements": {"type": "array", "items": _ANNOUNCEMENT_SCHEMA},
+                    "gradeSummary": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "columnCount": {"type": "integer"},
+                            "columnsWithScore": {"type": "integer"},
+                            "possibleTotal": {"type": ["number", "null"]},
+                        },
+                    },
+                    "contentTopFolders": {"type": "array", "items": _CONTENT_ITEM_SCHEMA},
+                },
+                "required": ["courseId"],
+            },
+        ),
     ]
 
 
@@ -1633,6 +2350,53 @@ async def call_tool(
         return await _dispatch(name, arguments)
 
 
+# Tool names implemented in ntulearn_mcp.handlers (WT-B). server.py has their
+# Tool definitions but imports the handler module LAZILY at call time so this
+# module still imports cleanly (and the existing server-local tools keep
+# working) before handlers.py exists in a given build. Do not import handlers
+# at module top.
+_HANDLER_TOOL_NAMES: frozenset[str] = frozenset([
+    f"{_TOOL_PREFIX}_list_messages",
+    f"{_TOOL_PREFIX}_read_message",
+    f"{_TOOL_PREFIX}_list_course_users",
+    f"{_TOOL_PREFIX}_list_course_groups",
+    f"{_TOOL_PREFIX}_get_group_members",
+    f"{_TOOL_PREFIX}_get_gradebook_attempts",
+    f"{_TOOL_PREFIX}_search_all_courses",
+    f"{_TOOL_PREFIX}_get_content_tree",
+    f"{_TOOL_PREFIX}_download_course",
+    f"{_TOOL_PREFIX}_whats_new",
+    f"{_TOOL_PREFIX}_export_calendar_ics",
+    f"{_TOOL_PREFIX}_export_gradebook_csv",
+    f"{_TOOL_PREFIX}_summarize_course",
+])
+
+
+def _load_handler(tool_name: str):
+    """Lazily import ntulearn_mcp.handlers and return handle_<x> for a tool.
+
+    Raises a clear RuntimeError when handlers.py is not present yet, so an MCP
+    host that sees the tool listed gets an actionable error instead of a
+    confusing ImportError/NameError.
+    """
+    try:
+        from ntulearn_mcp import handlers
+    except ImportError as e:
+        raise RuntimeError(
+            f"Tool {tool_name} is registered but its implementation is not "
+            "available: ntulearn_mcp.handlers is missing (ImportError: "
+            f"{e})."
+        ) from e
+    handler_name = "handle_" + tool_name[len(_TOOL_PREFIX) + 1:]
+    handler = getattr(handlers, handler_name, None)
+    if handler is None:
+        raise RuntimeError(
+            f"Tool {tool_name} is registered but handlers.{handler_name} "
+            "was not found in ntulearn_mcp.handlers."
+        )
+    return handler
+
+
 async def _dispatch(
     name: str, arguments: dict[str, Any]
 ) -> tuple[list[TextContent | ImageContent], dict[str, Any]]:
@@ -1648,12 +2412,271 @@ async def _dispatch(
         f"{_TOOL_PREFIX}_get_gradebook": _get_gradebook,
     }
     handler = handlers.get(name)
-    if handler is None:
-        raise ValueError(
-            f"Unknown tool: {name}. Available: {sorted(handlers.keys())}"
-        )
-    return await handler(client, arguments)
+    if handler is not None:
+        return await handler(client, arguments)
 
+    if name in _HANDLER_TOOL_NAMES:
+        return await _load_handler(name)(client, arguments)
+
+    known = sorted(set(handlers) | set(_HANDLER_TOOL_NAMES))
+    raise ValueError(f"Unknown tool: {name}. Available: {known}")
+
+
+# ---------------------------------------------------------------------------
+# MCP resources (course briefings) + prompts (v0.3)
+# ---------------------------------------------------------------------------
+
+_RESOURCE_URI_PREFIX = "ntulearn://courses/"
+
+
+@app.list_resource_templates()
+async def list_resource_templates() -> list[ResourceTemplate]:
+    """Expose the dynamic course-briefing URI template."""
+    return [
+        ResourceTemplate(
+            name="ntulearn-course-briefing",
+            title="NTULearn course briefing",
+            uriTemplate="ntulearn://courses/{course_id}",
+            description=(
+                "JSON course briefing for a single NTULearn course (content "
+                "rebuilt from the ntulearn_summarize_course tool). Replace "
+                "{course_id} with a Blackboard course ID such as _12345_1."
+            ),
+            mimeType="application/json",
+        )
+    ]
+
+
+@app.list_resources()
+async def list_resources() -> list[Resource]:
+    """Enumerate concrete course-briefing resources for enrolled courses.
+
+    Returns an empty list when no cookie/client is available (e.g. during
+    first-run inspection) — the URI is still resolvable through the template
+    above, which is the primary discovery path for dynamic resources.
+    """
+    try:
+        client = get_client()
+    except Exception:
+        return []
+    try:
+        enrollments = await client.get_my_enrollments()
+    except Exception:
+        return []
+    resources = []
+    for enrollment in enrollments:
+        course_id = enrollment.get("courseId")
+        if not course_id:
+            continue
+        resources.append(
+            Resource(
+                name=f"ntulearn-course-{course_id}",
+                title=f"NTULearn course briefing: {course_id}",
+                uri=f"{_RESOURCE_URI_PREFIX}{course_id}",
+                description="JSON course briefing.",
+                mimeType="application/json",
+            )
+        )
+    return resources
+
+
+@app.read_resource()
+async def read_resource(uri: Any) -> ReadResourceResult:
+    """Serve ntulearn://courses/{course_id} with a JSON course briefing.
+
+    The briefing is produced by lazily importing ntulearn_mcp.handlers and
+    calling handle_summarize_course — the same logic the tool runs — and
+    embedding its payload as the resource's text content.
+    """
+    raw = str(uri)
+    if not raw.startswith(_RESOURCE_URI_PREFIX):
+        raise ValueError(
+            f"Unsupported resource URI: {raw}. Expected "
+            f"{_RESOURCE_URI_PREFIX}{{course_id}}"
+        )
+    course_id = raw[len(_RESOURCE_URI_PREFIX):].rstrip("/")
+    if not course_id:
+        raise ValueError(
+            f"Missing course_id in resource URI: {raw}. Expected "
+            f"{_RESOURCE_URI_PREFIX}{{course_id}}"
+        )
+    if not re.match(_BB_ID_PATTERN, course_id):
+        raise ValueError(
+            f"Invalid course_id {course_id!r} in resource URI {raw}."
+        )
+
+    try:
+        from ntulearn_mcp import handlers
+    except ImportError as e:
+        raise RuntimeError(
+            f"Cannot read resource {raw}: ntulearn_mcp.handlers is missing "
+            f"(ImportError: {e})."
+        ) from e
+
+    _, payload = await handlers.handle_summarize_course(
+        get_client(), {"course_id": course_id, "response_format": "json"}
+    )
+    if "courseErrors" in payload:
+        raise ValueError(
+            f"Course {course_id} could not be summarised: {payload['courseErrors']}"
+        )
+    return ReadResourceResult(
+        contents=[
+            TextResourceContents(
+                uri=raw,
+                mimeType="application/json",
+                text=json.dumps(payload, indent=2),
+            )
+        ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prompt helpers
+# ---------------------------------------------------------------------------
+
+def _iso_cutoff(days_ago: int) -> str:
+    """Return a UTC ISO-8601 timestamp `days_ago` from now, e.g. 2026-05-09T12:00:00Z."""
+    stamp = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _iso_future(days_ahead: int) -> str:
+    """Return a UTC ISO-8601 timestamp `days_ahead` from now, e.g. 2026-05-16T12:00:00Z."""
+    stamp = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _prompt_course_arg(courses: str | None) -> str:
+    """Render the course_ids tool argument from a user-supplied courses string."""
+    if not courses:
+        return ""
+    ids = [c.strip() for c in str(courses).split(",") if c.strip()]
+    if not ids:
+        return ""
+    return f", course_ids={ids!r}"
+
+
+@app.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """Advertise the two built-in prompt templates."""
+    return [
+        Prompt(
+            name="ntulearn-weekly-brief",
+            title="Weekly NTULearn brief",
+            description=(
+                "Generate a weekly digest of announcements and upcoming due "
+                "dates across your courses. Chains ntulearn_get_announcements "
+                "and ntulearn_get_upcoming with a computed since/until window."
+            ),
+            arguments=[
+                PromptArgument(
+                    name="courses",
+                    description=(
+                        "Optional comma-separated course IDs to scope to. "
+                        "Omit for all enrolled courses."
+                    ),
+                    required=False,
+                ),
+                PromptArgument(
+                    name="days",
+                    description="Days back/forward in the window (default 7).",
+                    required=False,
+                ),
+            ],
+        ),
+        Prompt(
+            name="ntulearn-assignment-triage",
+            title="NTULearn assignment triage",
+            description=(
+                "Prioritise your upcoming assignment due dates over the next "
+                "N days. Chains ntulearn_get_upcoming (type='GradebookColumn') "
+                "plus a grades lookup to suggest what to tackle first."
+            ),
+            arguments=[
+                PromptArgument(
+                    name="courses",
+                    description=(
+                        "Optional comma-separated course IDs to scope to. "
+                        "Omit for all enrolled courses."
+                    ),
+                    required=False,
+                ),
+                PromptArgument(
+                    name="days",
+                    description="How far ahead to look for due dates (default 14).",
+                    required=False,
+                ),
+            ],
+        ),
+    ]
+
+
+@app.get_prompt()
+async def get_prompt(
+    name: str, arguments: dict[str, Any] | None = None
+) -> GetPromptResult:
+    """Return the prompt TEXT for a named template.
+
+    Prompts only instruct the model which tools to chain and with what
+    arguments — no tools are executed here. Recommended calls are embedded
+    so the model has exact since/until values.
+    """
+    args = arguments or {}
+    courses = args.get("courses")
+    if name == "ntulearn-weekly-brief":
+        try:
+            days = int(args.get("days", 7))
+        except (TypeError, ValueError):
+            raise ValueError("days must be an integer") from None
+        if days < 1:
+            raise ValueError("days must be >= 1")
+        since = _iso_cutoff(days)
+        until = _iso_future(0)
+        course_arg = _prompt_course_arg(courses)
+        text = (
+            "Produce a weekly NTULearn brief covering the last/looking "
+            f"{days} days. Run these tools and combine the results:" + "\n"
+            f"1. ntulearn_get_announcements(since='{since}'{course_arg}) "
+            "— recent announcements." + "\n"
+            f"2. ntulearn_get_upcoming(since='{since}', until='{until}'{course_arg})"
+            " — upcoming calendar items and due dates." + "\n"
+            "Summarise: what's new in each course, what's due, and any "
+            "deadlines the user should watch in the next few days."
+        )
+        return GetPromptResult(
+            description="Weekly NTULearn brief",
+            messages=[PromptMessage(role="user", content=TextContent(type="text", text=text))],
+        )
+    if name == "ntulearn-assignment-triage":
+        try:
+            days = int(args.get("days", 14))
+        except (TypeError, ValueError):
+            raise ValueError("days must be an integer") from None
+        if days < 1:
+            raise ValueError("days must be >= 1")
+        until = _iso_future(days)
+        course_arg = _prompt_course_arg(courses)
+        gradebook_arg = ""
+        ids = [c.strip() for c in str(args.get("courses", "")).split(",") if c.strip()]
+        if ids:
+            gradebook_arg = f"course_ids={ids!r}"
+        text = (
+            "Running an assignment triage for the next "
+            f"{days} days. Run these tools and combine the results:" + "\n"
+            f"1. ntulearn_get_upcoming(type='GradebookColumn', until='{until}'{course_arg})"
+            " — assignment due dates." + "\n"
+            "2. ntulearn_get_gradebook(" + gradebook_arg + ") — current scores "
+            "for context." + "\n"
+            "For each due assignment, list: course, title, due date, how much "
+            "time is left, and a recommended order of attack (closest deadline "
+            "first, biggest weight first)."
+        )
+        return GetPromptResult(
+            description="NTULearn assignment triage",
+            messages=[PromptMessage(role="user", content=TextContent(type="text", text=text))],
+        )
+    raise ValueError(f"Unknown prompt: {name}")
 
 # ---------------------------------------------------------------------------
 # Markdown rendering helpers
