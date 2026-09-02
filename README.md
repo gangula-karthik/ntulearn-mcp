@@ -33,7 +33,7 @@ in **Chrome, Edge, Firefox, or Brave**.
 From this repository (most reliable for agents):
 
 ```bash
-git clone https://github.com/kingdonkatsu/ntulearn-mcp.git
+git clone https://github.com/gangula-karthik/ntulearn-mcp.git
 cd ntulearn-mcp
 uv sync                                        # creates .venv with all deps
 ```
@@ -300,7 +300,7 @@ Set these in your MCP host's `env` block (same place as `NTULEARN_COOKIE` above)
 ## Development
 
 ```bash
-git clone https://github.com/kingdonkatsu/ntulearn-mcp.git
+git clone https://github.com/gangula-karthik/ntulearn-mcp.git
 cd ntulearn-mcp
 uv sync                                          # install deps incl. dev
 .venv/bin/python -m unittest discover -s tests   # run tests (expect 274 OK)
