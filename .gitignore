@@ -1,23 +1,18 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
-
-# Project-specific
-.env
-downloads/
-.DS_Store
-.Rhistory
-
-# Local tooling / ad-hoc scripts
-.claude/
-scripts/
-
 # Rust build artifacts
-rust/target/
+/rust/target/
+target/
+
+# Secrets — NEVER commit these
+.env
+*.env
+.env.*
+!*.env.example
+downloads/
+cookie
+BbRouter
+
+# Editor / OS junk
+.DS_Store
+*.swp
+.idea/
+.vscode/
