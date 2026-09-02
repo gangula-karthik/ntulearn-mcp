@@ -2516,7 +2516,9 @@ async def read_resource(uri: Any) -> ReadResourceResult:
     _, payload = await handlers.handle_summarize_course(
         get_client(), {"course_id": course_id, "response_format": "json"}
     )
-    if "courseErrors" in payload:
+    # The handler always includes a (possibly empty) courseErrors key; only a
+    # non-empty list is a failure worth surfacing.
+    if payload.get("courseErrors"):
         raise ValueError(
             f"Course {course_id} could not be summarised: {payload['courseErrors']}"
         )

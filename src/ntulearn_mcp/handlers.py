@@ -290,9 +290,12 @@ async def _download_worker(
                 "reason": "extension_filter",
             })
             return
-        if skip_existing and (folder / job.safe_name).exists():
+        # Check the deduplicated *target* name, not the raw safe name: two
+        # jobs with identical raw names run concurrently and would otherwise
+        # race (one writes Syllabus.pdf, the other sees it and skips).
+        if skip_existing and (folder / name).exists():
             skipped.append({
-                "filename": job.safe_name,
+                "filename": name,
                 "courseFolder": str(job.course_folder),
                 "reason": "already_exists",
             })

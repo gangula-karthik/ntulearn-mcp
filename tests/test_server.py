@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from typing import Any
@@ -1813,6 +1812,51 @@ class NewToolSurfaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("skip_existing", schema["properties"])
 
 
+class _BriefingFakeClient:
+    """Minimal client covering every method the real handle_summarize_course
+    touches, so the post-merge briefing path runs end to end."""
+
+    async def get_course(self, course_id):
+        return {
+            "id": course_id,
+            "name": "Algorithms",
+            "displayName": "CS2040S - Algorithms",
+            "termId": "T1",
+            "description": "<p>Design &amp; analysis of algorithms</p>",
+        }
+
+    async def get_term(self, term_id):
+        return {"id": term_id, "name": "AY25/26 Sem 2"}
+
+    async def get_course_users(self, course_id):
+        return []
+
+    async def get_calendar_items(self, course_id=None, since=None, until=None):
+        return []
+
+    async def get_announcements(self, course_id):
+        return []
+
+    async def get_my_user_id(self):
+        return "_2_1"
+
+    async def get_gradebook_columns(self, course_id):
+        return []
+
+    async def get_user_grades(self, course_id, user_id):
+        return []
+
+    async def get_course_contents(self, course_id):
+        return []
+
+
+class _MessagesFakeClient:
+    """Minimal client for the real ntulearn_list_messages dispatch path."""
+
+    async def get_messages(self, folder="inbox", unread_only=False, since=None):
+        return [{"id": "m1", "subject": "Hi"}]
+
+
 class FakeEnrollmentsClient:
     """Minimal client for list_resources / get_client mocking."""
 
@@ -1859,29 +1903,25 @@ class ResourceTests(unittest.IsolatedAsyncioTestCase):
             await server.read_resource("ntulearn://courses/")
 
     async def test_read_resource_serves_briefing_via_lazy_handlers(self) -> None:
-        async def fake_summarize(client, args):
-            return ([], {"courseId": args["course_id"], "title": "Brief"})
+        # Real handlers module is present post-merge; drive it with a fake
+        # client so the briefing path is exercised end to end.
+        result = await self._read_briefing_with_fake_client()
 
-        await self._run_with_fake_handlers(fake_summarize)
+    async def test_read_resource_rejects_malformed_course_id(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            await server.read_resource("ntulearn://courses/bad id")
+        self.assertIn("Invalid course_id", str(ctx.exception))
 
-    async def _run_with_fake_handlers(self, fake_summarize) -> None:
-        fake_handlers = types.SimpleNamespace(handle_summarize_course=fake_summarize)
-        fake_client = object()
-        with mock.patch.dict(sys.modules, {"ntulearn_mcp.handlers": fake_handlers}):
-            with mock.patch.object(server, "get_client", return_value=fake_client):
-                result = await server.read_resource("ntulearn://courses/_123_1")
+    async def _read_briefing_with_fake_client(self) -> None:
+        fake_client = _BriefingFakeClient()
+        with mock.patch.object(server, "get_client", return_value=fake_client):
+            result = await server.read_resource("ntulearn://courses/_123_1")
         self.assertIsInstance(result, ReadResourceResult)
         self.assertEqual(len(result.contents), 1)
         content = result.contents[0]
         self.assertEqual(str(content.uri), "ntulearn://courses/_123_1")
         self.assertIn('"courseId": "_123_1"', content.text)
-
-    async def test_read_resource_raises_clear_error_without_handlers(self) -> None:
-        # handlers.py does not exist in this worktree (WT-B owns it) — the
-        # lazy import must surface an actionable error, not an ImportError.
-        with self.assertRaises(RuntimeError) as ctx:
-            await server.read_resource("ntulearn://courses/_123_1")
-        self.assertIn("ntulearn_mcp.handlers", str(ctx.exception))
+        self.assertIn("Algorithms", content.text)
 
 
 class PromptTests(unittest.IsolatedAsyncioTestCase):
@@ -1928,31 +1968,31 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
 class LazyHandlerDispatchTests(_CookieEnvIsolation, unittest.IsolatedAsyncioTestCase):
     """Dispatch of the 13 tools without handlers.py present raises clearly."""
 
-    async def test_new_tool_without_handlers_raises_clear_error(self) -> None:
+    async def test_new_tool_dispatches_to_real_handler_with_fake_client(self) -> None:
+        # handlers.py is present post-merge — `ntulearn_list_messages` must
+        # run the real handler and return a JSON payload + a text block.
         os.environ["NTULEARN_COOKIE"] = "expires:1,test:test"
-        server._client = mock.Mock()
+        server._client = _MessagesFakeClient()
         try:
-            with self.assertRaises(RuntimeError) as ctx:
-                await server._dispatch("ntulearn_list_messages", {})
-            self.assertIn("ntulearn_mcp.handlers", str(ctx.exception))
+            blocks, payload = await server._dispatch("ntulearn_list_messages", {})
         finally:
             server._client = None
+        self.assertEqual(payload["messages"], [{"id": "m1", "subject": "Hi"}])
+        self.assertTrue(blocks)
+        self.assertIsInstance(blocks[0], TextContent)
+        self.assertIn("m1", blocks[0].text)
 
-    async def test_new_tool_with_fake_handlers_dispatches(self) -> None:
-        os.environ["NTULEARN_COOKIE"] = "expires:1,test:test"
-        async def fake_handle(client, args):
-            return ([TextContent(type="text", text="ok")], {"ok": True})
-        fake_handlers = types.SimpleNamespace(
-            handle_list_messages=fake_handle,
-        )
-        server._client = mock.Mock()
-        try:
-            with mock.patch.dict(sys.modules, {"ntulearn_mcp.handlers": fake_handlers}):
-                blocks, payload = await server._dispatch("ntulearn_list_messages", {})
-            self.assertEqual(payload, {"ok": True})
-            self.assertEqual(len(blocks), 1)
-        finally:
-            server._client = None
+    async def test_new_tools_resolve_to_real_handlers(self) -> None:
+        # Handlers are merged in now: every new tool must resolve through the
+        # server's lazy loader to the same callable the handlers REGISTRY
+        # advertises (the merged integration seam).
+        from ntulearn_mcp import handlers
+
+        for name in _NEW_TOOL_NAMES:
+            short = name[len(server._TOOL_PREFIX) + 1:]
+            fn = server._load_handler(name)
+            self.assertTrue(callable(fn))
+            self.assertIs(fn, handlers.REGISTRY.get(short))
 
     async def test_unknown_tool_still_errors(self) -> None:
         os.environ["NTULEARN_COOKIE"] = "expires:1,test:test"
