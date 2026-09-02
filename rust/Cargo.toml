@@ -24,6 +24,7 @@ ammonia = "4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 dirs = "6"
 percent-encoding = "2"
+sha2 = { version = "0.10", features = ["std"] }
 csv = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

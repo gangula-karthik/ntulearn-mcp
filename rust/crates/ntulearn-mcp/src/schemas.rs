@@ -1,5 +1,5 @@
 // AUTO-GENERATED from the Python manifest (/tmp/tool_manifest.json). Do not edit by hand.
-use serde_json::{json, Value};
+use serde_json::json;
 use ultrafast_mcp::{Tool, ToolAnnotations};
 
 /// All 21 NTULearn tool definitions with their exact input schemas.

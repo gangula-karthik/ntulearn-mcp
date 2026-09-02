@@ -26,6 +26,7 @@ ammonia.workspace = true
 rusqlite.workspace = true
 dirs.workspace = true
 percent-encoding.workspace = true
+sha2.workspace = true
 csv.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
