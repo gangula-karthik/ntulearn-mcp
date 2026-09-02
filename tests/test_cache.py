@@ -166,3 +166,115 @@ class CacheModuleResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DataCacheTests(unittest.TestCase):
+    """Unit tests for the method-level DataCache (LRU + SQLite)."""
+
+    def _fresh(self, name: str) -> "cache.DataCache":
+        import tempfile
+
+        tmp = tempfile.mkdtemp() + f"/{name}.sqlite3"
+        dc = cache.DataCache(cache_dir=tmp)
+        dc.clear()
+        return dc
+
+    def test_roundtrip_and_ttl_expiry(self) -> None:
+        dc = self._fresh("rt")
+        dc.set("n", "k", [1, 2, 3], 60, user_scope="u1")
+        self.assertEqual(dc.get("n", "k"), [1, 2, 3])
+        # expired entry is gone
+        dc.set("n", "k2", "x", -1)
+        self.assertIsNone(dc.get("n", "k2"))
+
+    def test_max_age_override_shrinks_validity_window(self) -> None:
+        import time as _time
+
+        dc = self._fresh("ma")
+        dc.set("n", "k", "v", 600, user_scope="u1")
+        _time.sleep(0.02)
+        # stored 600s TTL, but the caller wants entries no older than 1ms
+        self.assertIsNone(dc.get("n", "k", max_age=0.001))
+
+    def test_user_scope_invalidation(self) -> None:
+        dc = self._fresh("inv")
+        dc.set("n", "u1:k1", "a", 600, user_scope="u1")
+        dc.set("n", "u2:k2", "b", 600, user_scope="u2")
+        dc.invalidate_user("u1")
+        self.assertIsNone(dc.get("n", "u1:k1"))
+        self.assertEqual(dc.get("n", "u2:k2"), "b")
+
+    def test_sqlite_persistence_across_instances(self) -> None:
+        import tempfile
+
+        path = tempfile.mkdtemp() + "/persist.sqlite3"
+        dc1 = cache.DataCache(cache_dir=path)
+        dc1.set("n", "u1:k", {"x": 1}, 600, user_scope="u1")
+        dc2 = cache.DataCache(cache_dir=path)
+        self.assertEqual(dc2.get("n", "u1:k"), {"x": 1})
+
+    def test_clear_removes_everything(self) -> None:
+        import tempfile
+
+        path = tempfile.mkdtemp() + "/clear.sqlite3"
+        dc = cache.DataCache(cache_dir=path)
+        dc.set("n", "k", "v", 600)
+        dc.clear()
+        self.assertIsNone(dc.get("n", "k"))
+
+    def test_non_json_value_still_cached_in_memory(self) -> None:
+        dc = self._fresh("nj")
+        class O:  # noqa: N801
+            pass
+        dc.set("n", "k", O(), 600)  # not JSON-safe: memory-only, no crash
+        # hit comes back from memory for the same object identity
+        self.assertIsNotNone(dc.get("n", "k"))
+
+    def test_lru_eviction_after_max_size(self) -> None:
+        dc = cache.DataCache(cache_dir="/tmp/lru-evic.sqlite3", max_size=3)
+        for i in range(5):
+            dc.set("n", f"k{i}", i, 600)
+        # RAM holds at most max_size entries; evicted ones live on in SQLite
+        self.assertLessEqual(len(dc._mem), 3)
+        self.assertIsNotNone(dc.get("n", "k4"))
+
+    def test_singleton_is_stable(self) -> None:
+        self.assertIs(cache.data_cache(), cache.data_cache())
+
+    def test_ttl_table_has_entries_for_client_methods(self) -> None:
+        for method in (
+            "get_my_enrollments", "get_messages", "get_course", "get_term",
+            "get_gradebook_attempts", "get_course_search", "tracker",
+        ):
+            self.assertIn(method, cache.DEFAULT_TTL_SECONDS)
+
+
+class DataCacheModeTests(unittest.TestCase):
+    """NTULEARN_CACHE_MODE=off / readonly drive no-op writes."""
+
+    def test_off_mode_disables_reads_and_writes(self) -> None:
+        import tempfile
+        from unittest import mock as _mock
+
+        path = tempfile.mkdtemp() + "/off.sqlite3"
+        with _mock.patch.dict(
+            "os.environ", {"NTULEARN_CACHE_MODE": "off"}, clear=False
+        ):
+            dc = cache.DataCache(cache_dir=path)
+            dc.set("n", "k", "v", 600)
+            self.assertIsNone(dc.get("n", "k"))
+
+    def test_readonly_mode_serves_hits_but_does_not_write(self) -> None:
+        import tempfile
+        from unittest import mock as _mock
+
+        path = tempfile.mkdtemp() + "/ro.sqlite3"
+        cache.DataCache(cache_dir=path).set("n", "k", "v", 600)
+        with _mock.patch.dict(
+            "os.environ", {"NTULEARN_CACHE_MODE": "readonly"}, clear=False
+        ):
+            dc = cache.DataCache(cache_dir=path)
+            self.assertEqual(dc.get("n", "k"), "v")
+            dc.set("n", "k2", "w", 600)
+        dc2 = cache.DataCache(cache_dir=path)
+        self.assertIsNone(dc2.get("n", "k2"))
