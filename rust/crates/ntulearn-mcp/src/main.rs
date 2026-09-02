@@ -16,6 +16,7 @@ mod prompts;
 mod render;
 mod resources;
 mod schemas;
+mod setup;
 mod tools;
 
 use std::path::PathBuf;
@@ -40,6 +41,37 @@ const BASE_URL: &str = "https://ntulearn.ntu.edu.sg";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Non-server subcommands run without entering the stdio MCP loop.
+    let arg = std::env::args().nth(1).unwrap_or_default();
+    match arg.as_str() {
+        "setup" => {
+            let code = setup::run_setup().await;
+            std::process::exit(code);
+        }
+        "check" => {
+            let code = setup::run_check().await;
+            std::process::exit(code);
+        }
+        "refresh" => {
+            let code = setup::run_refresh().await;
+            std::process::exit(code);
+        },
+        "help" | "--help" | "-h" => {
+            println!("ntulearn-mcp — NTULearn (Blackboard Learn) MCP server");
+            println!();
+            println!("subcommands:");
+            println!("  ntulearn-mcp            run the MCP server over stdio");
+            println!("  ntulearn-mcp setup      one-time interactive cookie setup");
+            println!("  ntulearn-mcp check      show cookie state (source, expiry, validity)");
+            println!("  ntulearn-mcp refresh    on-demand cookie refresh + re-validate");
+            println!("  ntulearn-mcp help       this help");
+            println!();
+            println!("env: NTULEARN_BASE_URL, NTULEARN_COOKIE, NTULEARN_CACHE_DIR, NTULEARN_DOWNLOAD_DIR");
+            return Ok(());
+        }
+        _ => {}
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             std::env::var("RUST_LOG").unwrap_or_else(|_| "warn,ntulearn_mcp=info".to_string()),

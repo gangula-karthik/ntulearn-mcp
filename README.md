@@ -336,9 +336,31 @@ names, prompts, and resource template.
 ```bash
 cd rust
 cargo build --release          # binary at target/release/ntulearn-mcp
-cargo test                     # 19 unit tests (cache, client, cookie)
+cargo test                     # 23 unit tests (cache, client, cookie)
 target/release/ntulearn-mcp    # serve over stdio
 ```
+
+### Cookie setup & on-demand refresh
+
+The Rust server has three CLI subcommands that run outside the stdio MCP loop:
+
+```bash
+ntulearn-mcp setup      # one-time interactive cookie acquisition
+ntulearn-mcp check      # show cookie state (source, expiry, live validity)
+ntulearn-mcp refresh    # on-demand cookie refresh + re-validate
+```
+
+- `setup` first looks for a cookie you already have (env var, config file,
+  Firefox), and validates it live against the API. If none is found it opens
+  the NTULearn login page in your default browser and accepts a one-time paste
+  of the `BbRouter` value (or full `Cookie` header), validates it, and saves it
+  to the config file (`<config>/ntulearn-mcp/cookie`).
+- `check` reports where the current cookie came from, how long it is valid (if
+  expiry is embedded), and whether it still works live — without changing anything.
+- `refresh` re-resolves the cookie from all sources and re-validates it, and
+  saves a working value to the config file. Refresh is never proactive: it runs
+  only when you invoke it (or when a live call returns 401, in which case the
+  newly-resolved cookie is persisted so the next run starts authenticated).
 
 Differences from the Python server (intentional):
 
@@ -347,7 +369,8 @@ Differences from the Python server (intentional):
   plaintext read. Chrome/Edge/Safari auto-read is not attempted (encrypted
   stores).
 - 401 now invalidates the cache, re-resolves the cookie once, and retries
-  (Python raises immediately).
+  (Python raises immediately); the refreshed cookie is persisted to the config
+  file for future runs.
 
 Project layout (`rust/crates/ntulearn-mcp/src/`):
 

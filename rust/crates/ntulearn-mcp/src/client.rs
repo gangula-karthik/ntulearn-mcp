@@ -304,6 +304,9 @@ impl NTULearnClient {
                     };
                     if let Some(nc) = new_cookie {
                         if nc != self.current_cookie().await {
+                            // Persist the newly-resolved cookie so future runs start
+                            // authenticated instead of re-401ing (best-effort).
+                            cookie::write_cookie(&nc);
                             self.set_cookie(nc).await;
                             let retry = self
                                 .http

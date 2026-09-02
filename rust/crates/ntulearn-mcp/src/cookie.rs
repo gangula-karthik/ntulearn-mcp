@@ -25,9 +25,70 @@ fn env_cookie() -> Option<String> {
     std::env::var("NTULEARN_COOKIE").ok().filter(|v| !v.trim().is_empty())
 }
 
-fn cookie_file_path() -> PathBuf {
+pub fn cookie_file_path() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("ntulearn-mcp").join(COOKIE_FILE_NAME)
+}
+
+/// Where a resolved cookie came from (for diagnostics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CookieSource {
+    Env,
+    File,
+    Firefox,
+    None,
+}
+
+impl CookieSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CookieSource::Env => "NTULEARN_COOKIE env var",
+            CookieSource::File => "config file",
+            CookieSource::Firefox => "Firefox cookies.sqlite",
+            CookieSource::None => "none",
+        }
+    }
+}
+
+/// Parse the `expires:<epoch-seconds>` prefix of a BbRouter value.
+/// Returns None if the prefix is absent or not a number (session cookie).
+pub fn cookie_expiry(value: &str) -> Option<i64> {
+    let v = value.trim();
+    let rest = v.strip_prefix("expires:")?;
+    let until_sep = rest.split(|ch: char| ch == ',' || ch.is_whitespace()).next().unwrap_or("");
+    if until_sep.is_empty() || !until_sep.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    until_sep.parse::<i64>().ok()
+}
+
+/// User-visible seconds remaining until the cookie expires (None = unknown).
+pub fn seconds_remaining(value: &str) -> Option<i64> {
+    let exp = cookie_expiry(value)?;
+    if exp <= 0 {
+        return None;
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
+    Some(exp.saturating_sub(now))
+}
+
+/// Resolve the first valid cookie available, reporting which source won.
+pub fn resolve_cookie_with_source() -> (Option<String>, CookieSource) {
+    if let Some(mut v) = env_cookie() {
+        v = v.trim().to_string();
+        strip_prefix(&mut v);
+        if is_valid_value(&v) {
+            return (Some(v), CookieSource::Env);
+        }
+    }
+    if let Some(v) = read_cookie_file() {
+        return (Some(v), CookieSource::File);
+    }
+    if let Some(v) = browser_cookie() {
+        return (Some(v), CookieSource::Firefox);
+    }
+    (None, CookieSource::None)
 }
 
 /// A valid BbRouter value starts with `expires:` (mirrors cookie.py
@@ -121,18 +182,7 @@ fn read_firefox_cookie(db: &std::path::Path) -> Option<String> {
 
 /// First valid cookie available, in priority order. Returns None if none.
 pub fn resolve_cookie() -> Option<String> {
-    if let Some(mut v) = env_cookie() {
-        v = v.trim().to_string();
-        strip_prefix(&mut v);
-        if is_valid_value(&v) {
-            return Some(v);
-        }
-    }
-    if let Some(v) = read_cookie_file() {
-        return Some(v);
-    }
-    // Browser read (deferred beyond Firefox), guarded and silent on failure.
-    browser_cookie()
+    resolve_cookie_with_source().0
 }
 
 /// Persist a working cookie for later runs (best-effort; ignores errors).
@@ -161,4 +211,29 @@ mod tests {
         assert!(is_valid_value(&v));
         assert!(!is_valid_value("garbage"));
     }
+    #[test]
+    fn cookie_expiry_parsing() {
+        assert_eq!(cookie_expiry("expires:9999999999,id:abc"), Some(9999999999));
+        assert_eq!(cookie_expiry("expires:0"), Some(0));
+        // session cookie / no numeric prefix
+        assert_eq!(cookie_expiry("expires:,id:x"), None);
+        assert_eq!(cookie_expiry("id:abc"), None);
+        assert_eq!(cookie_expiry("expires:abc,id:x"), None);
+    }
+
+    #[test]
+    fn seconds_remaining_sane() {
+        // Far-future expiry -> large positive remaining.
+        let fut = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 86400 * 30;
+        let rem = seconds_remaining(&format!("expires:{fut},id:x")).unwrap();
+        assert!(rem > 86_400 * 29, "expected ~30 days left, got {rem}");
+        // expired
+        let rem2 = seconds_remaining("expires:1000,id:x").unwrap();
+        assert!(rem2 <= 0);
+    }
+
 }
