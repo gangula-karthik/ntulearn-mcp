@@ -2153,14 +2153,23 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
     let since_val = args.get("since");
     let until_val = args.get("until");
     let since = match since_val {
-        Some(v) => Some(validate_iso8601(&v.to_string(), "since")?),
+        Some(v) => Some(validate_iso8601(
+            v.as_str().ok_or("since must be a string")?,
+            "since",
+        )?),
         None => None,
     };
     let until = match until_val {
-        Some(v) => Some(validate_iso8601(&v.to_string(), "until")?),
+        Some(v) => Some(validate_iso8601(
+            v.as_str().ok_or("until must be a string")?,
+            "until",
+        )?),
         None => None,
     };
-    let item_type = args.get("type").map(|v| v.to_string());
+    let item_type = args
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     if let Some(t) = &item_type {
         if !CALENDAR_ITEM_TYPES.contains(&t.as_str()) {
             return Err(format!(
@@ -2217,7 +2226,10 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
 async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, String> {
     let since_val = args.get("since");
     let since = match since_val {
-        Some(v) => Some(validate_iso8601(&v.to_string(), "since")?),
+        Some(v) => Some(validate_iso8601(
+            v.as_str().ok_or("since must be a string")?,
+            "since",
+        )?),
         None => None,
     };
     let course_ids = coerce_course_ids(args, &state.client).await?;
@@ -2408,7 +2420,10 @@ async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String
 async fn h_list_messages(state: &AppState, args: &Value) -> Result<Value, String> {
     let folder = str_arg(args, "folder").unwrap_or("inbox").to_lowercase();
     let unread_only = bool_arg(args, "unread_only", false);
-    let since = args.get("since").map(|v| v.to_string());
+    let since = args
+        .get("since")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     if let Some(s) = &since {
         validate_iso8601(s, "since")?;
     }
@@ -2592,7 +2607,10 @@ async fn h_get_gradebook_attempts(state: &AppState, args: &Value) -> Result<Valu
     validate_bb_id(&course_id, "course_id")?;
     let column_id = str_arg(args, "column_id").unwrap_or("").to_string();
     validate_bb_id(&column_id, "column_id")?;
-    let user_id = args.get("user_id").map(|v| v.to_string());
+    let user_id = args
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     if let Some(uid) = &user_id {
         validate_bb_id(uid, "user_id")?;
     }
@@ -2639,7 +2657,12 @@ async fn h_get_gradebook_attempts(state: &AppState, args: &Value) -> Result<Valu
 }
 
 async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, String> {
-    let query = args.get("query").map(|v| v.to_string()).unwrap_or_default().trim().to_string();
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if query.is_empty() {
         return Err("query must be a non-empty string".to_string());
     }
@@ -2720,7 +2743,12 @@ async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, Str
 async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
-    let dest_raw = args.get("destination_dir").map(|v| v.to_string()).unwrap_or_default().trim().to_string();
+    let dest_raw = args
+        .get("destination_dir")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let crs = course(&state.client, &course_id).await.unwrap_or_else(|_| json!({}));
     let course_name = parsers::safe_folder_name(
         crs.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
@@ -2819,12 +2847,8 @@ fn tracker_set_last_seen(s: String) {
 
 async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
-    let since = match args.get("since") {
-        Some(v) => {
-            let s = v.to_string();
-            validate_iso8601(&s, "since")?;
-            s
-        }
+    let since = match args.get("since").and_then(|v| v.as_str()) {
+        Some(s) => validate_iso8601(s, "since")?,
         None => tracker_get_last_seen().unwrap_or_else(default_since),
     };
     let update_tracker = bool_arg(args, "update_tracker", false);
@@ -2942,11 +2966,11 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
 
 async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
-    let since = match args.get("since") {
+    let since = match args.get("since").and_then(|v| v.as_str()) {
         Some(v) => v.to_string(),
         None => iso_from_now(0, 0),
     };
-    let until = match args.get("until") {
+    let until = match args.get("until").and_then(|v| v.as_str()) {
         Some(v) => v.to_string(),
         None => iso_from_now(30, 0),
     };
@@ -3113,4 +3137,43 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
     let json_text = serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_string());
     out.push(ToolContent::text(json_text));
     out
+}
+
+
+#[cfg(test)]
+mod args_guard_tests {
+    use super::*;
+
+    /// Regression guard: `serde_json::Value::to_string()` on a JSON *string*
+    /// yields the JSON-encoded form WITH surrounding double quotes, which
+    /// previously corrupted `since`/`until`/`type`/`query`/`user_id`/
+    /// `destination_dir` argument extraction (e.g. "2026-01-01T00:00:00Z"
+    /// became "\"2026-01-01T00:00:00Z\""). String args must go through
+    /// `.as_str()`, never `.to_string()`.
+    #[test]
+    fn json_string_to_string_has_quotes() {
+        let v = serde_json::json!("2026-02-01T00:00:00Z");
+        let encoded = v.to_string();
+        assert_eq!(encoded, "\"2026-02-01T00:00:00Z\"");
+        assert_ne!(encoded, "2026-02-01T00:00:00Z");
+        // the correct extraction path
+        let via_str = v.as_str().unwrap_or("");
+        assert_eq!(via_str, "2026-02-01T00:00:00Z");
+    }
+
+    #[test]
+    fn str_arg_returns_unquoted() {
+        let args = serde_json::json!({
+            "since": "2026-02-01T00:00:00Z",
+            "query": "lecture",
+            "type": "GradebookColumn",
+            "user_id": "user-1",
+            "destination_dir": "/tmp/x"
+        });
+        assert_eq!(str_arg(&args, "since"), Some("2026-02-01T00:00:00Z"));
+        assert_eq!(str_arg(&args, "query"), Some("lecture"));
+        assert_eq!(str_arg(&args, "type"), Some("GradebookColumn"));
+        assert_eq!(str_arg(&args, "user_id"), Some("user-1"));
+        assert_eq!(str_arg(&args, "destination_dir"), Some("/tmp/x"));
+    }
 }
