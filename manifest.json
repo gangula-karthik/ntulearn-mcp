@@ -2,9 +2,9 @@
   "manifest_version": "0.4",
   "name": "ntulearn-mcp",
   "display_name": "NTULearn",
-  "version": "0.2.0",
-  "description": "MCP server for NTULearn (NTU Singapore's Blackboard Learn). Announcements, assignments, grades, and course files — across all your enrolled courses.",
-  "long_description": "Lets Claude answer questions like \"what's due next week?\", \"what announcements went out this week?\", and \"organise my semester files into ~/NTU/y3s1/…\" — fanning out across all your enrolled courses automatically.\n\nAuthenticates via the BbRouter cookie — auto-read from your browser on macOS / Linux / Windows-with-Firefox. Windows + Chrome/Edge users paste the cookie into the field below (Claude Desktop stores it in your OS keychain).\n\nTools: list_courses, get_course_contents (with folder drill-down), get_upcoming (calendar + assignment due dates), get_announcements (cross-course, with since filter), get_gradebook (cross-course), search_course_content, download_file (with destination_dir for folder hierarchies), read_file_content (text extraction from PDFs / Office files; vision opt-in for diagrams).",
+  "version": "0.3.0",
+  "description": "MCP server for NTULearn (NTU Singapore's Blackboard Learn). Announcements, assignments, grades, messages, users/groups, and course files — across all your enrolled courses.",
+  "long_description": "Lets Claude answer questions like \"what's due next week?\", \"what announcements went out this week?\", \"who's in my tutorial group?\", \"show me every file in this course\", and \"organise my semester files into ~/NTU/y3s1/…\" — fanning out across all your enrolled courses automatically.\n\nAuthenticates via the BbRouter cookie — auto-read from your browser on macOS / Linux / Windows-with-Firefox. Windows + Chrome/Edge users paste the cookie into the field below (Claude Desktop stores it in your OS keychain).\n\nTools: list_courses, get_course_contents (with folder drill-down), get_upcoming (calendar + assignment due dates), get_announcements (cross-course, with since filter), get_gradebook (cross-course), search_course_content, download_file (with destination_dir for folder hierarchies), read_file_content (text extraction from PDFs / Office files; vision opt-in for diagrams), plus v0.3: list_messages / read_message (mailbox), list_course_users / list_course_groups / get_group_members (roster), get_gradebook_attempts (submissions), search_all_courses (cross-course content search), get_content_tree (whole nested tree), download_course (recursive course download), whats_new (digest), export_calendar_ics, export_gradebook_csv, and summarize_course (one-call course briefing).",
   "author": {
     "name": "kingdonkatsu",
     "url": "https://github.com/kingdonkatsu"
@@ -16,13 +16,26 @@
   "homepage": "https://github.com/kingdonkatsu/ntulearn-mcp",
   "support": "https://github.com/kingdonkatsu/ntulearn-mcp/issues",
   "license": "MIT",
-  "keywords": ["mcp", "ntulearn", "blackboard", "ntu", "singapore", "lms", "education"],
+  "keywords": [
+    "mcp",
+    "ntulearn",
+    "blackboard",
+    "ntu",
+    "singapore",
+    "lms",
+    "education"
+  ],
   "server": {
     "type": "uv",
     "entry_point": "src/ntulearn_mcp/server.py",
     "mcp_config": {
       "command": "uv",
-      "args": ["run", "--directory", "${__dirname}", "ntulearn-mcp"],
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "ntulearn-mcp"
+      ],
       "env": {
         "NTULEARN_COOKIE": "${user_config.bbrouter_cookie}"
       }
@@ -39,19 +52,99 @@
   },
   "compatibility": {
     "claude_desktop": ">=0.10.0",
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "python": ">=3.12"
     }
   },
   "tools": [
-    { "name": "ntulearn_list_courses", "description": "List the user's enrolled NTULearn courses." },
-    { "name": "ntulearn_get_course_contents", "description": "Get the content tree of a course. Omit parent_id for the root; pass it to drill into a folder." },
-    { "name": "ntulearn_get_upcoming", "description": "Calendar items across enrolled courses for the next 2 weeks. type='GradebookColumn' filters to assignment due dates." },
-    { "name": "ntulearn_get_announcements", "description": "Announcements across all enrolled courses, newest first. Optional since (ISO-8601) for a time window." },
-    { "name": "ntulearn_get_gradebook", "description": "Gradebook columns and scores across all enrolled courses." },
-    { "name": "ntulearn_search_course_content", "description": "Recursive substring search within one course's content tree." },
-    { "name": "ntulearn_download_file", "description": "Download a content item's files to disk. destination_dir accepts absolute paths and ~/… prefixes." },
-    { "name": "ntulearn_read_file_content", "description": "Read an attached file inline — text mode by default (PDF/docx/pptx/xlsx); pass mode='vision' for diagram pages." }
+    {
+      "name": "ntulearn_list_courses",
+      "description": "List the user's enrolled NTULearn courses."
+    },
+    {
+      "name": "ntulearn_get_course_contents",
+      "description": "Get the content tree of a course. Omit parent_id for the root; pass it to drill into a folder."
+    },
+    {
+      "name": "ntulearn_get_upcoming",
+      "description": "Calendar items across enrolled courses for the next 2 weeks. type='GradebookColumn' filters to assignment due dates."
+    },
+    {
+      "name": "ntulearn_get_announcements",
+      "description": "Announcements across all enrolled courses, newest first. Optional since (ISO-8601) for a time window."
+    },
+    {
+      "name": "ntulearn_get_gradebook",
+      "description": "Gradebook columns and scores across all enrolled courses."
+    },
+    {
+      "name": "ntulearn_search_course_content",
+      "description": "Recursive substring search within one course's content tree."
+    },
+    {
+      "name": "ntulearn_download_file",
+      "description": "Download a content item's files to disk. destination_dir accepts absolute paths and ~/… prefixes."
+    },
+    {
+      "name": "ntulearn_read_file_content",
+      "description": "Read an attached file inline — text mode by default (PDF/docx/pptx/xlsx); pass mode='vision' for diagram pages."
+    },
+    {
+      "name": "ntulearn_list_messages",
+      "description": "List the user's Blackboard mailbox messages (inbox/sent), optionally unread or since a cutoff."
+    },
+    {
+      "name": "ntulearn_read_message",
+      "description": "Read a single message by ID, including body and recipients."
+    },
+    {
+      "name": "ntulearn_list_course_users",
+      "description": "List users enrolled in a course."
+    },
+    {
+      "name": "ntulearn_list_course_groups",
+      "description": "List the groups defined in a course."
+    },
+    {
+      "name": "ntulearn_get_group_members",
+      "description": "List the members of a specific course group."
+    },
+    {
+      "name": "ntulearn_get_gradebook_attempts",
+      "description": "List submission attempts for a gradebook column, with optional user_id scope."
+    },
+    {
+      "name": "ntulearn_search_all_courses",
+      "description": "Recursive substring search across ALL enrolled courses' content trees."
+    },
+    {
+      "name": "ntulearn_get_content_tree",
+      "description": "Return a course's entire content tree as nested JSON."
+    },
+    {
+      "name": "ntulearn_download_course",
+      "description": "Recursively download every file in a course's content tree to disk."
+    },
+    {
+      "name": "ntulearn_whats_new",
+      "description": "Digest of announcements, upcoming due dates, and gradebook summary since a cutoff."
+    },
+    {
+      "name": "ntulearn_export_calendar_ics",
+      "description": "Export calendar items (incl. due dates) as an iCalendar (.ics) string."
+    },
+    {
+      "name": "ntulearn_export_gradebook_csv",
+      "description": "Export gradebook columns and scores as a CSV string."
+    },
+    {
+      "name": "ntulearn_summarize_course",
+      "description": "Bite-size briefing of a single course: title, instructors, upcoming, announcements, grades, top folders."
+    }
   ]
 }

@@ -71,7 +71,7 @@ That's the whole flow for most users. Read [Authentication](#authentication) if 
 
 ## Tools
 
-8 tools. Most do cross-course aggregation by default — you almost never need to pass course IDs by hand.
+21 tools. Most do cross-course aggregation by default — you almost never need to pass course IDs by hand.
 
 | Tool | What it does |
 |---|---|
@@ -83,6 +83,38 @@ That's the whole flow for most users. Read [Authentication](#authentication) if 
 | `ntulearn_get_gradebook` | **Gradebook columns across enrolled courses,** with your scores when available. |
 | `ntulearn_download_file` | Download every file on a content item to disk. `destination_dir` lets you build hierarchies (`~/NTU/y3s1/sc2002/week 8/`). |
 | `ntulearn_read_file_content` | Read attached file content inline (no filesystem hop). PDFs default to **text** mode; pass `mode='vision'` + a narrow `pages` range for diagram-heavy pages. |
+| `ntulearn_list_messages` | List your NTULearn mailbox messages (inbox/sent). Filter to unread or since a date. |
+| `ntulearn_read_message` | Read one message by ID, with full body and recipients. |
+| `ntulearn_list_course_users` | List users in a course (instructors, TAs, students). |
+| `ntulearn_list_course_groups` | List the groups defined in a course (tutorial/lab groups). |
+| `ntulearn_get_group_members` | List the members of a specific course group. |
+| `ntulearn_get_gradebook_attempts` | List submission attempts for an assignment (gradebook column). |
+| `ntulearn_search_all_courses` | Search content across **all** courses at once; results carry courseId + breadcrumb. |
+| `ntulearn_get_content_tree` | Return one course's entire content tree as nested JSON (bounded by `max_depth`). |
+| `ntulearn_download_course` | Recursively download every file in a course to `~/Downloads/NTU/<course>` (write tool). |
+| `ntulearn_whats_new` | One-call digest: announcements + upcoming + gradebook summary since a cutoff. |
+| `ntulearn_export_calendar_ics` | Export calendar items (incl. due dates) as an iCalendar `.ics` string. |
+| `ntulearn_export_gradebook_csv` | Export your gradebook as a CSV string for a spreadsheet. |
+| `ntulearn_summarize_course` | Bite-size briefing of one course: instructors, upcoming, announcements, grades, top folders. |
+
+Most read-only tools default to `response_format='json'`; pass `response_format='markdown'` for a
+human-readable summary. List-returning tools accept `limit`/`offset` pagination.
+
+## Resources & Prompts
+
+The server exposes dynamic **resources** and two **prompt templates**:
+
+- **Resources** — `ntulearn://courses/{course_id}` returns a JSON course briefing (the same content
+  as `ntulearn_summarize_course`). `list_resources` enumerates your enrolled courses, and the
+  `{course_id}` URI template lets clients read any course directly.
+- **Prompts** —
+  - `ntulearn-weekly-brief` — args `courses` (optional comma-separated IDs) and `days` (default 7).
+    Produces a prompt that chains `ntulearn_get_announcements` + `ntulearn_get_upcoming` over a
+    computed since/until window.
+  - `ntulearn-assignment-triage` — args `courses` and `days` (default 14). Produces a due-date
+    triage prompt that chains `ntulearn_get_upcoming(type='GradebookColumn')` + `ntulearn_get_gradebook`.
+
+Prompts return prompt **text only**; the model executes the chained tools itself.
 
 ## Example prompts
 
@@ -180,7 +212,12 @@ The cookie expires with your NTULearn session (days–weeks). When it does, repe
 |---|---|---|
 | `NTULEARN_COOKIE` | (auto-read) | Manual cookie fallback. |
 | `NTULEARN_BASE_URL` | `https://ntulearn.ntu.edu.sg` | Change for a different Blackboard instance. |
-| `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` when no per-call value is passed. |
+| `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` / `download_course` when no per-call value is passed. |
+| `NTULEARN_CACHE_DIR` | `~/.cache/ntulearn-mcp/cache.sqlite3` | SQLite persistence path for the response cache (best-effort; falls back to in-memory). |
+| `NTULEARN_CACHE_MODE` | `readwrite` | `readwrite` (default), `readonly` (never evict/write), or `off` (no-op cache). |
+| `NTULEARN_HTTP2` | on | Set `0` to disable HTTP/2 on the underlying httpx client. |
+| `NTULEARN_FIELDS` | on | Set `0` to disable default `fields=` trimming on API responses. |
+| `NTULEARN_JSON` | on (orjson if available) | Set `0` to force stdlib `json` instead of orjson. |
 
 Set these in your MCP host's `env` block (same place as `NTULEARN_COOKIE` above).
 
