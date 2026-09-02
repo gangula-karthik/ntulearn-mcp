@@ -1408,9 +1408,13 @@ async fn build_course_summary(
             let mut instructors: Vec<Value> = Vec::new();
             for u in users.iter().take(1000) {
                 if INSTRUCTOR_ROLES.contains(&user_role(u).as_str()) {
+                    // Resolve id/name through the same nested `user.*` unwrapping
+                    // as render_user_row (the public REST API nests the user
+                    // object under `user`, with userId on the outer object).
+                    let row = render_user_row(u);
                     instructors.push(json!({
-                        "id": u.get("id").cloned().unwrap_or(Value::Null),
-                        "name": user_name(u),
+                        "id": row.get("id").cloned().unwrap_or(Value::Null),
+                        "name": row.get("name").cloned().unwrap_or(Value::String(String::new())),
                     }));
                     if instructors.len() >= 10 {
                         break;
