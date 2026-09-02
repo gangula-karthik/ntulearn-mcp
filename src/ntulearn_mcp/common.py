@@ -363,3 +363,4 @@ def safe_folder_name(name: str) -> str:
     slug = re.sub(r"[^\w.\- ]+", "_", name).strip()
     slug = re.sub(r"\s+", " ", slug).strip(" ._")
     return slug or "untitled"
+
