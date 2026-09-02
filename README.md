@@ -326,6 +326,43 @@ Tests use `unittest` (not pytest); HTTP is mocked via `httpx.MockTransport`.
 
 ---
 
+## Rust implementation (ultrafast-mcp)
+
+The server is also implemented in Rust on top of
+[`ultrafast-mcp`](https://github.com/techgopal/ultrafast-mcp) — a full
+performance-oriented rewrite of the same 21-tool surface with identical tool
+names, prompts, and resource template.
+
+```bash
+cd rust
+cargo build --release          # binary at target/release/ntulearn-mcp
+cargo test                     # 19 unit tests (cache, client, cookie)
+target/release/ntulearn-mcp    # serve over stdio
+```
+
+Differences from the Python server (intentional):
+
+- Cookie resolution never touches the OS keychain and never prompts: env var →
+  config-file (`<config>/ntulearn-mcp/cookie`) → Firefox `cookies.sqlite`
+  plaintext read. Chrome/Edge/Safari auto-read is not attempted (encrypted
+  stores).
+- 401 now invalidates the cache, re-resolves the cookie once, and retries
+  (Python raises immediately).
+
+Project layout (`rust/crates/ntulearn-mcp/src/`):
+
+```
+main.rs     # ultrafast-mcp server wiring (stdio)
+handlers.rs # the 21 tool handlers (Python-parity emit / response_format)
+parsers.rs  # HTML body → download URL extraction (scraper)
+render.rs   # markdown/csv/ics renderers
+client.rs   # reqwest (HTTP/2, retries) Blackboard REST client + download
+cache.rs    # SQLite + in-memory TTL cache (per-instance LRU, scoped keys)
+cookie.rs   # layered cookie resolution (never keychain)
+```
+
+---
+
 ## Publishing / secret check
 
 Before pushing to a remote, run this to confirm no credentials are in history or the tree:
