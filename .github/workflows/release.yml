@@ -1,0 +1,79 @@
+name: release
+
+# Release pipeline for ntulearn-mcp.
+# Push a tag `v<version>` (matching Cargo.toml's workspace version) and this
+# builds the self-update artifacts the `ntulearn-mcp update` command consumes:
+#   * ntulearn-mcp-<triple>.tar.gz (ntulearn-mcp binary inside)
+#   * ntulearn-mcp-<triple>.zip    (Windows)
+#   * checksums.txt                (sha256 of every asset, verified on update)
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  archive: tar.gz }
+          - { os: macos-latest,   target: aarch64-apple-darwin,      archive: tar.gz }
+          - { os: macos-13,       target: x86_64-apple-darwin,       archive: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    archive: zip }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.target }}
+      - name: Build (release)
+        run: cargo build --release --target ${{ matrix.target }}
+        working-directory: rust
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd rust/target/${{ matrix.target }}/release
+          ext=""
+          [[ "${{ matrix.os }}" == windows-* ]] && ext=".exe"
+          mkdir -p staging
+          cp "ntulearn-mcp${ext}" staging/
+          name="ntulearn-mcp-${{ matrix.target }}"
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            (cd staging && zip "../${name}.zip" "ntulearn-mcp${ext}")
+          else
+            (cd staging && tar -czf "../${name}.tar.gz" "ntulearn-mcp${ext}")
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ntulearn-mcp-${{ matrix.target }}
+          path: rust/target/${{ matrix.target }}/release/ntulearn-mcp-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          shopt -s nullglob
+          sha256sum ntulearn-mcp-* > checksums.txt
+          cat checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ntulearn-mcp-*
+            dist/checksums.txt
+          generate_release_notes: true

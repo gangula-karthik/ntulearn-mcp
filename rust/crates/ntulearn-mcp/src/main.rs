@@ -21,6 +21,7 @@ mod resources;
 mod schemas;
 mod setup;
 mod tools;
+mod update;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -39,6 +40,10 @@ use crate::tools::NtuToolHandler;
 pub struct AppState {
     pub client: NTULearnClient,
     pub download_dir: PathBuf,
+    /// One-line "update available" notice, appended to the FIRST tool result
+    /// of the process so the agent relays it to the user exactly once.
+    /// Filled by the background updater task (see `update::background_updater`).
+    pub update_notice: Arc<update::UpdateNotice>,
 }
 
 const BASE_URL: &str = "https://ntulearn.ntu.edu.sg";
@@ -62,7 +67,11 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     let data_cache = Arc::new(DataCache::open()?);
     let client = NTULearnClient::new(base_url, cookie, data_cache)?;
 
-    Ok(Arc::new(AppState { client, download_dir }))
+    Ok(Arc::new(AppState {
+        client,
+        download_dir,
+        update_notice: Arc::new(update::UpdateNotice::default()),
+    }))
 }
 
 #[tokio::main]
@@ -80,6 +89,11 @@ async fn main() -> anyhow::Result<()> {
                 "setup" => setup::run_setup().await,
                 "check" => setup::run_check().await,
                 "refresh" => setup::run_refresh().await,
+                "update" => update::run_update_cli(&argv[1..]).await,
+                "version" | "--version" | "-V" => {
+                    println!("ntulearn-mcp {}", update::current_version());
+                    std::process::exit(0);
+                }
                 other => {
                     let _ = other;
                     std::process::exit(cli::run_cli(&argv).await);
@@ -133,6 +147,13 @@ async fn main() -> anyhow::Result<()> {
         .with_tool_handler(Arc::new(NtuToolHandler { state: state.clone() }))
         .with_resource_handler(Arc::new(NtuResourceHandler { state: state.clone() }))
         .with_prompt_handler(Arc::new(NtuPromptHandler));
+
+    // Update notifications + (opt-in) auto-update. Runs in the background,
+    // throttled to one network check per 24h; every failure is logged to
+    // stderr and swallowed — it must never affect the server. With
+    // auto-update ON the new binary is downloaded, checksum-verified, and
+    // atomically swapped in; it activates on the next host restart.
+    tokio::spawn(update::background_updater(state.update_notice.clone()));
 
     // Pre-warm the static tool catalog before entering the stdio loop so
     // the first `tools/list` (tool discovery) is already a cache hit —
