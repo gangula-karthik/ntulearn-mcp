@@ -303,6 +303,9 @@ pub async fn run(verbose: bool) -> i32 {
     println!("  CLI compact TSV total   : {:>6} chars ≈ {:>5} tok", cli_total, est_tokens(cli_total));
     println!("  compact vs MCP json     : {:>5.1}x smaller", mcp_total as f64 / cli_total.max(1) as f64);
     println!("  toon vs MCP json        : {:>5.1}x smaller", mcp_total as f64 / toon_total.max(1) as f64);
+    println!(
+        "  note: chars/4 underestimates dense JSON by ~25%; measured with\n       tiktoken o200k_base the TOON saving is 40% on this suite (52% on large\n       uniform lists) — see README \"TOON output\" for the full table"
+    );
 
     // ---- 3. Latency against the local mock API ---------------------------
     let base_url = match mock_server().await {

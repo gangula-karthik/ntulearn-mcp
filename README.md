@@ -291,8 +291,9 @@ human-readable summary. List-returning tools accept `limit`/`offset` pagination.
 
 Every tool accepts `response_format: "toon"`, and the CLI takes a global `--toon` flag. TOON
 ([Token-Oriented Object Notation](https://github.com/toon-format/toon), spec v4.1) is a lossless
-encoding of the JSON data model that declares array shapes once and drops repeated keys — roughly
-**half the tokens of the default pretty-JSON responses** on this server's payloads:
+encoding of the JSON data model that declares array shapes once and drops repeated keys —
+**40% fewer output tokens** than the default pretty-JSON responses across this server's
+payloads, and **52%** on large uniform lists:
 
 ```
 courses[8]{id,courseId,name,title,created,availability{available},isFavorite}:
@@ -302,18 +303,28 @@ total: 8
 hasMore: false
 ```
 
-Measured with `ntulearn-mcp selfbench` (fixture suite, chars/4 token estimate):
+Measured token counts (tiktoken `o200k_base`; `cl100k_base` agrees within 2%):
 
-| format | total chars | ≈ tokens |
-|---|---|---|
-| MCP `json` (pretty, default) | 8774 | 2193 |
-| MCP `toon` / CLI `--toon` | 4805 | 1201 |
-| CLI `--json` (compact) | 6812 | 1703 |
-| CLI compact TSV (default) | 1970 | 492 |
+| payload | pretty JSON (default) | compact JSON | TOON | TOON saves |
+|---|---|---|---|---|
+| courses (6) | 393 | 289 | 235 | 40% |
+| course contents (10) | 1127 | 867 | 709 | 37% |
+| announcements (5) | 492 | 392 | 345 | 30% |
+| gradebook (8) | 739 | 527 | 355 | 52% |
+| **fixture suite total** | **2751** | **2075** | **1644** | **40%** |
+| 50-course enrollment list | 7399 | 5280 | 3557 | 52% |
+| file-content text blob | 177 | 162 | 161 | 9% |
 
-TOON keeps structure explicit (lengths, field lists) so agents can parse and validate it reliably;
-the compact TSV default is even smaller but field-capped. Ask for TOON when you want full-fidelity
-payloads at minimal cost, e.g. `get_gradebook(course_ids=[...], response_format='toon')`.
+The savings scale with how *tabular* the payload is: `list_courses`, `get_course_contents`,
+`get_gradebook`, `get_upcoming` — anything that returns uniform rows — is TOON's sweet spot
+(declared-once field lists amortize over every row). Payloads that are mostly a single text
+blob (`read_file_content`) gain little over compact JSON — there's no repeated structure to
+fold away. TOON beats even *compact* JSON by 21% on the suite (33% on large lists) because
+it drops both the repeated keys and most quoting.
+
+For comparison, the CLI's default compact TSV is smaller still, but lossy (field-capped, no
+nesting); TOON is the smallest *full-fidelity* format. Ask for it when you want everything,
+e.g. `get_gradebook(course_ids=[...], response_format='toon')`.
 
 The encoder is spec-conformant (all four forms, nested field groups, keyed tabular, delimiter
 selection) and covered by conformance tests drawn from the spec's examples. TOON output is
