@@ -287,6 +287,38 @@ human-readable summary. List-returning tools accept `limit`/`offset` pagination.
   - `ntulearn-assignment-triage` — args `courses` and `days` (default 14). Produces a due-date
     triage prompt that chains `ntulearn_get_upcoming(type='GradebookColumn')` + `ntulearn_get_gradebook`.
 
+## TOON output (token-optimized responses)
+
+Every tool accepts `response_format: "toon"`, and the CLI takes a global `--toon` flag. TOON
+([Token-Oriented Object Notation](https://github.com/toon-format/toon), spec v4.1) is a lossless
+encoding of the JSON data model that declares array shapes once and drops repeated keys — roughly
+**half the tokens of the default pretty-JSON responses** on this server's payloads:
+
+```
+courses[8]{id,courseId,name,title,created,availability{available},isFavorite}:
+  _93810_1|SC2002|SC2002 Data Structures & Algorithms|...|"2026-08-11T02:00:00.000Z"|Yes|true
+  ...
+total: 8
+hasMore: false
+```
+
+Measured with `ntulearn-mcp selfbench` (fixture suite, chars/4 token estimate):
+
+| format | total chars | ≈ tokens |
+|---|---|---|
+| MCP `json` (pretty, default) | 8774 | 2193 |
+| MCP `toon` / CLI `--toon` | 4805 | 1201 |
+| CLI `--json` (compact) | 6812 | 1703 |
+| CLI compact TSV (default) | 1970 | 492 |
+
+TOON keeps structure explicit (lengths, field lists) so agents can parse and validate it reliably;
+the compact TSV default is even smaller but field-capped. Ask for TOON when you want full-fidelity
+payloads at minimal cost, e.g. `get_gradebook(course_ids=[...], response_format='toon')`.
+
+The encoder is spec-conformant (all four forms, nested field groups, keyed tabular, delimiter
+selection) and covered by conformance tests drawn from the spec's examples. TOON output is
+deterministic: object key order is encounter order (serde_json `preserve_order`).
+
 ## Example prompts
 
 - *"What announcements went out across my courses this past week?"* — `get_announcements(since='...')`.

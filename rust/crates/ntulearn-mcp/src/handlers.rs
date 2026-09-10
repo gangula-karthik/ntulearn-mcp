@@ -136,8 +136,8 @@ pub fn response_format(args: &Value) -> Result<String, String> {
         })
         .unwrap_or_else(|| "json".to_string())
         .to_lowercase();
-    if fmt != "json" && fmt != "markdown" {
-        return Err("response_format must be 'json' or 'markdown'".to_string());
+    if fmt != "json" && fmt != "markdown" && fmt != "toon" {
+        return Err("response_format must be 'json', 'markdown' or 'toon'".to_string());
     }
     Ok(fmt)
 }
@@ -3182,6 +3182,11 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
     } else {
         String::new()
     };
+    if fmt == "toon" {
+        // Token-optimized payload: TOON instead of pretty JSON
+        // (spec: https://github.com/toon-format/spec).
+        return vec![ToolContent::text(crate::toon::encode(payload))];
+    }
     let mut out: Vec<ToolContent> = Vec::new();
     if !text.is_empty() {
         out.push(ToolContent::text(text));
@@ -3308,4 +3313,27 @@ mod args_guard_tests {
         // string `name` falls back to userName then flat
         assert_eq!(user_name(&json!({"userName": "ju", "name": "plain"})), "ju");
     }
+
+#[test]
+fn toon_response_format_accepted_and_rendered() {
+    let args = serde_json::json!({"response_format": "toon"});
+    assert_eq!(response_format(&args).unwrap(), "toon");
+    // Invalid still rejected.
+    assert!(response_format(&serde_json::json!({"response_format": "yaml"})).is_err());
+    // render_for_tool emits TOON (tabular header) instead of pretty JSON.
+    let payload = serde_json::json!({
+        "courses": [
+            {"id": "_1_1", "name": "SC2002"},
+            {"id": "_2_1", "name": "SC3000"}
+        ]
+    });
+    let out = render_for_tool("list_courses", &args, &payload);
+    assert_eq!(out.len(), 1);
+    let text = match &out[0] {
+        ToolContent::Text { text } => text.clone(),
+        _ => String::new(),
+    };
+    assert!(text.starts_with("courses[2]{id,name}:"), "got: {text}");
+    assert!(!text.contains("  \""), "should not be pretty JSON: {text}");
+}
 }

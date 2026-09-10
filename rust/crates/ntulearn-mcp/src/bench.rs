@@ -282,22 +282,27 @@ pub async fn run(verbose: bool) -> i32 {
     let mut mcp_total = 0usize;
     let mut cli_total = 0usize;
     let mut raw_total = 0usize;
+    let mut toon_total = 0usize;
     for (name, cmd, payload) in suite_payloads() {
         let inv = parse_invocation_or_panic(&cmd);
         let mcp_pretty = serde_json::to_string_pretty(&payload).unwrap_or_default();
         let cli_compact = cli::render_compact(&inv, &payload);
         let cli_raw = serde_json::to_string(&payload).unwrap_or_default();
+        let toon = crate::toon::encode(&payload);
         mcp_total += mcp_pretty.len();
         cli_total += cli_compact.len();
         raw_total += cli_raw.len();
+        toon_total += toon.len();
         if verbose {
-            println!("  {name:<14} mcp-json {:>6} ch | cli-tsv {:>6} ch | cli-json {:>6} ch", mcp_pretty.len(), cli_compact.len(), cli_raw.len());
+            println!("  {name:<14} mcp-json {:>6} ch | cli-tsv {:>6} ch | cli-json {:>6} ch | toon {:>6} ch", mcp_pretty.len(), cli_compact.len(), cli_raw.len(), toon.len());
         }
     }
     println!("  MCP json (pretty) total : {:>6} chars ≈ {:>5} tok", mcp_total, est_tokens(mcp_total));
+    println!("  MCP/CLI toon total      : {:>6} chars ≈ {:>5} tok", toon_total, est_tokens(toon_total));
     println!("  CLI --json total        : {:>6} chars ≈ {:>5} tok", raw_total, est_tokens(raw_total));
     println!("  CLI compact TSV total   : {:>6} chars ≈ {:>5} tok", cli_total, est_tokens(cli_total));
     println!("  compact vs MCP json     : {:>5.1}x smaller", mcp_total as f64 / cli_total.max(1) as f64);
+    println!("  toon vs MCP json        : {:>5.1}x smaller", mcp_total as f64 / toon_total.max(1) as f64);
 
     // ---- 3. Latency against the local mock API ---------------------------
     let base_url = match mock_server().await {

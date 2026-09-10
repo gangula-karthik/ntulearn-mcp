@@ -340,12 +340,15 @@ pub struct Invocation {
     /// Cap for long-form content fields (text/body/...) — larger than
     /// `max_chars` so `read` returns useful content by default.
     pub text_chars: usize,
+    /// `--toon`: emit the full payload as TOON (token-optimized JSON).
+    pub toon: bool,
 }
 
 #[derive(Clone)]
 struct OutputFlags {
     raw: bool,
     md: bool,
+    toon: bool,
     fields: Option<Vec<String>>,
     max_chars: usize,
     full: bool,
@@ -377,7 +380,7 @@ pub fn parse_invocation(cmd_token: &str, rest: &[String]) -> Result<Invocation, 
     let spec = find_cmd(cmd_token)
         .ok_or_else(|| format!("unknown command: {cmd_token} (run `ntulearn-mcp help`)"))?;
 
-    let mut out = OutputFlags { raw: false, md: false, fields: None, max_chars: 200, full: false, chars_set: false };
+    let mut out = OutputFlags { raw: false, md: false, toon: false, fields: None, max_chars: 200, full: false, chars_set: false };
     let mut map: Map<String, Value> = Map::new();
     let mut positional: Vec<String> = Vec::new();
     let mut i = 0usize;
@@ -404,6 +407,11 @@ pub fn parse_invocation(cmd_token: &str, rest: &[String]) -> Result<Invocation, 
             }
             "--md" | "--markdown" => {
                 out.md = true;
+                i += 1;
+                continue;
+            }
+            "--toon" => {
+                out.toon = true;
                 i += 1;
                 continue;
             }
@@ -518,6 +526,9 @@ pub fn parse_invocation(cmd_token: &str, rest: &[String]) -> Result<Invocation, 
     if out.raw && out.md {
         return Err("--json and --md are mutually exclusive".to_string());
     }
+    if out.toon && (out.raw || out.md) {
+        return Err("--toon is mutually exclusive with --json and --md".to_string());
+    }
 
     Ok(Invocation {
         spec,
@@ -533,6 +544,7 @@ pub fn parse_invocation(cmd_token: &str, rest: &[String]) -> Result<Invocation, 
         } else {
             2000
         },
+        toon: out.toon,
     })
 }
 
@@ -758,7 +770,7 @@ pub fn help_command(cmd_token: &str) -> String {
             out.push_str(&format!("      {}\n", a.hint));
         }
     }
-    out.push_str("\nglobal: --json  --md  --fields a,b  --max-chars N  --full\n");
+    out.push_str("\nglobal: --json  --toon  --md  --fields a,b  --max-chars N  --full\n");
     out
 }
 
@@ -769,6 +781,9 @@ pub fn help_command(cmd_token: &str) -> String {
 /// Run one invocation against shared state and return stdout text.
 pub async fn run_one(state: &Arc<AppState>, inv: &Invocation) -> Result<String, String> {
     let payload = handlers::dispatch_value(state, inv.spec.short, &inv.args).await?;
+    if inv.toon {
+        return Ok(crate::toon::encode(&payload));
+    }
     if inv.raw {
         return Ok(serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()));
     }
@@ -1050,7 +1065,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn text_fields_get_larger_default_cap() {
         use serde_json::json;
         let inv = parse_invocation("read", &toks(&["_1_1", "_2_2"])).unwrap();
@@ -1065,7 +1079,7 @@ mod tests {
             }]
         });
         let out = render_compact(&inv, &payload);
-        let text_cell = out.lines().last().unwrap().split('\t').last().unwrap();
+        let text_cell = out.lines().next_back().unwrap().split('\t').next_back().unwrap();
         // capped at 2000 chars + ellipsis marker
         assert_eq!(text_cell.chars().count(), 2000);
         // explicit --max-chars applies to text too
@@ -1106,4 +1120,16 @@ mod tests {
             vec!["search", "_1_1", "--query", "week 8"]
         );
     }
+
+#[test]
+fn toon_flag_parsing_and_exclusivity() {
+    let inv = parse_invocation("courses", &toks(&["--toon"])).unwrap();
+    assert!(inv.toon && !inv.raw && !inv.md);
+    // Mutually exclusive with --json and --md.
+    assert!(parse_invocation("courses", &toks(&["--toon", "--json"])).is_err());
+    assert!(parse_invocation("courses", &toks(&["--toon", "--md"])).is_err());
+    // Default off.
+    let inv = parse_invocation("courses", &toks(&[])).unwrap();
+    assert!(!inv.toon);
+}
 }
