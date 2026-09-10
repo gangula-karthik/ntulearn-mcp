@@ -18,7 +18,7 @@ fn prompt_course_arg(courses: Option<&str>) -> String {
     let ids: Vec<String> = c.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
     if ids.is_empty() { return String::new(); }
     let ids_json = serde_json::Value::Array(ids.into_iter().map(serde_json::Value::String).collect());
-    format!(", course_ids={}", ids_json.to_string())
+    format!(", course_ids={}", ids_json)
 }
 
 fn user_msg(text: String) -> PromptMessage {
@@ -117,7 +117,7 @@ impl PromptHandler for NtuPromptHandler {
                     String::new()
                 } else {
                     let j = serde_json::Value::Array(ids.into_iter().map(serde_json::Value::String).collect());
-                    format!("course_ids={}", j.to_string())
+                    format!("course_ids={}", j)
                 };
                 let text = format!(
                     "Running an assignment triage for the next {days} days. Run these tools and \

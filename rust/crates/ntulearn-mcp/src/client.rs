@@ -164,7 +164,7 @@ fn trim_value(v: Value) -> Value {
 
 fn trim_fields(mut items: Vec<Value>, _fields: Option<&str>) -> Value {
     // The Python client requests `fields` from the API directly; no local trim.
-    Value::Array(items.drain(..).collect())
+    Value::Array(std::mem::take(&mut items))
 }
 
 /// Best-effort RFC3339/ISO-8601 comparison: `a >= b`. Falls back to string
@@ -311,7 +311,7 @@ impl NTULearnClient {
             .build()
             .map_err(|e| ClientError::Other(format!("reqwest external client build: {e}")))?;
         let user_scope = sha256_hex_first(&value, 16);
-        let refresh = Some(Box::new(|| cookie::resolve_cookie()) as Box<dyn Fn() -> Option<String> + Send + Sync>);
+        let refresh = Some(Box::new(cookie::resolve_cookie) as Box<dyn Fn() -> Option<String> + Send + Sync>);
         Ok(NTULearnClient {
             in_flight: Default::default(),
             http,
@@ -482,7 +482,7 @@ impl NTULearnClient {
 
     fn cache_off(&self) -> bool {
         std::env::var("NTULEARN_CACHE_MODE")
-            .map(|m| m.trim().to_ascii_lowercase() == "off")
+            .map(|m| m.trim().eq_ignore_ascii_case("off"))
             .unwrap_or(false)
     }
 
@@ -684,10 +684,7 @@ impl NTULearnClient {
         let fields = default_fields("contents");
         let params: Vec<(&str, &str)> = vec![("search", query)];
         // Search failures return [] (matches Python: BlackboardAPIError -> []).
-        let items = match self.paginated(&path, &params, fields).await {
-            Ok(v) => v,
-            Err(_) => Vec::new(),
-        };
+        let items = self.paginated(&path, &params, fields).await.unwrap_or_default();
         let value = Value::Array(items);
         self.cache_write("get_course_search", &path, &params, cache, &value);
         Ok(value)
@@ -1127,7 +1124,7 @@ impl NTULearnClient {
                     let ct = resp.headers.get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).map(|s| s.to_string());
                     return Ok((resp.bytes, ct));
                 }
-                return Err(ClientError::Other(format!("Unsafe download URL: {url}")));
+                Err(ClientError::Other(format!("Unsafe download URL: {url}")))
             }
             Ok(parsed) => {
                 if !matches!(parsed.scheme(), "http" | "https") {

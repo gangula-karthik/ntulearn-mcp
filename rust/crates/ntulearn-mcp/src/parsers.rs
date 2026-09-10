@@ -82,7 +82,7 @@ pub fn extract_bbcswebdav_url(html_body: &str) -> Option<(String, Option<String>
     if html_body.is_empty() {
         return None;
     }
-    for (href, filename, link_text) in bb_anchor_pairs(html_body) {
+    if let Some((href, filename, link_text)) = bb_anchor_pairs(html_body).into_iter().next() {
         let name = filename.or(link_text);
         return Some((href, name));
     }
@@ -172,15 +172,7 @@ pub fn content_text(html: &str) -> String {
 /// chars -> "_", capped at 200 chars.
 pub fn sanitize_filename(name: &str) -> String {
     let mut out: String = name
-        .replace('\\', "_")
-        .replace('/', "_")
-        .replace('*', "_")
-        .replace('?', "_")
-        .replace(':', "_")
-        .replace('"', "_")
-        .replace('<', "_")
-        .replace('>', "_")
-        .replace('|', "_");
+        .replace(['\\', '/', '*', '?', ':', '"', '<', '>', '|'], "_");
     if out.chars().count() > 200 {
         out = out.chars().take(200).collect();
     }

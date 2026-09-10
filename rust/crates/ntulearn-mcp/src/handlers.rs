@@ -210,11 +210,7 @@ fn validate_iso8601(value: &str, name: &str) -> Result<String, String> {
     if value.trim().is_empty() {
         return Err(format!("{name} must be a non-empty ISO-8601 timestamp string"));
     }
-    let normalised = if value.ends_with('Z') {
-        format!("{}Z", &value[..value.len() - 1])
-    } else {
-        value.to_string()
-    };
+    let normalised = value.to_string();
     let ok = chrono::DateTime::parse_from_rfc3339(&normalised).is_ok()
         || chrono::NaiveDateTime::parse_from_str(&normalised, "%Y-%m-%dT%H:%M:%S%.f").is_ok()
         || chrono::NaiveDate::parse_from_str(&normalised, "%Y-%m-%d").is_ok();
@@ -866,7 +862,7 @@ fn render_user_row(u: &Value) -> Value {
         })
         .unwrap_or("")
         .to_string();
-    let name = nested.map(|v| user_name(v)).unwrap_or_else(|| user_name(u));
+    let name = nested.map(user_name).unwrap_or_else(|| user_name(u));
     let role = user_role(u);
     let uid = u
         .get("userId")
@@ -972,6 +968,7 @@ type WalkBox<'b> = std::pin::Pin<
 
 /// walk_rec — recursive pre-order walk; owned-state threading avoids the
 /// infinitely-sized future error without changing the DFS order or payload.
+#[allow(clippy::too_many_arguments)] // state threads through the recursion by design
 fn walk_rec<'b>(
     c: &'b NTULearnClient,
     course_id: &'b str,
@@ -1177,7 +1174,7 @@ fn extension(filename: &str) -> String {
 }
 
 fn parse_extensions(raw: Option<&Value>) -> Option<HashSet<String>> {
-    let Some(raw) = raw else { return None };
+    let raw = raw?;
     let text = match raw {
         Value::String(s) => s.clone(),
         other => other.to_string(),
@@ -1718,7 +1715,7 @@ fn sanitize_filename_quick(name: &str) -> String {
     name.replace(['\\', '/', '*', '?', ':', '"', '<', '>', '|'], "_")
 }
 
-fn rpartition<'a>(s: &'a str, sep: char) -> Option<(&'a str, &'a str)> {
+fn rpartition(s: &str, sep: char) -> Option<(&str, &str)> {
     match s.rfind(sep) {
         Some(i) => Some((&s[..i], &s[i + 1..])),
         None => None,
@@ -1837,7 +1834,7 @@ async fn h_get_course_contents(state: &AppState, args: &Value) -> Result<Value, 
         Some(pid) => content_children(&state.client, &course_id, pid).await?,
         None => course_contents(&state.client, &course_id).await?,
     };
-    let stripped: Vec<Value> = items.iter().map(|it| strip_content(it)).collect();
+    let stripped: Vec<Value> = items.iter().map(strip_content).collect();
     let (page, meta) = slice_with_pagination(&stripped, offset, limit);
     let mut payload = Map::new();
     payload.insert("items".to_string(), Value::Array(page));
@@ -1868,6 +1865,10 @@ async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value
     // Sequential walk (mirrors the gather/semaphore version's payload exactly).
     // Owned-state recursion (Box::pin) — same pre-order walk as the Python
     // recursive gather, but without an infinitely-sized future.
+    type WalkFuture<'b> =
+        std::pin::Pin<Box<dyn std::future::Future<Output = (Vec<Value>, HashSet<String>)> + Send + 'b>>;
+
+    #[allow(clippy::too_many_arguments)] // state threads through the recursion by design
     fn rec_walk<'b>(
         c: &'b NTULearnClient,
         course_id: &'b str,
@@ -1879,7 +1880,7 @@ async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value
         max_results: i64,
         matches: Vec<Value>,
         visited: HashSet<String>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = (Vec<Value>, HashSet<String>)> + Send + 'b>> {
+    ) -> WalkFuture<'b> {
         Box::pin(async move {
             if depth > max_depth as usize || (matches.len() as i64) >= max_results {
                 return (matches, visited);
@@ -1916,25 +1917,22 @@ async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value
                 }
                 let has_children = item.get("hasChildren").and_then(|v| v.as_bool()).unwrap_or(false);
                 if has_children && (matches.len() as i64) < max_results && !item_id.is_empty() {
-                    match content_children(c, course_id, item_id).await {
-                        Ok(children) => {
-                            let (m2, v2) = rec_walk(
-                                c,
-                                course_id,
-                                query,
-                                children,
-                                current_path,
-                                depth + 1,
-                                max_depth,
-                                max_results,
-                                matches,
-                                visited,
-                            )
-                            .await;
-                            matches = m2;
-                            visited = v2;
-                        }
-                        Err(_) => {}
+                    if let Ok(children) = content_children(c, course_id, item_id).await {
+                        let (m2, v2) = rec_walk(
+                            c,
+                            course_id,
+                            query,
+                            children,
+                            current_path,
+                            depth + 1,
+                            max_depth,
+                            max_results,
+                            matches,
+                            visited,
+                        )
+                        .await;
+                        matches = m2;
+                        visited = v2;
                     }
                 }
             }
@@ -2813,12 +2811,12 @@ async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, Stri
             .unwrap_or(&course_id),
     );
     let dest_root: PathBuf = if dest_raw.is_empty() {
-        let d = if let Some(home) = dirs::home_dir() {
+        
+        if let Some(home) = dirs::home_dir() {
             home.join("Downloads").join("NTULearn")
         } else {
             PathBuf::from("./Downloads/NTULearn")
-        };
-        d
+        }
     } else {
         let expanded = expand_tilde(&dest_raw);
         if !expanded.is_absolute() {
@@ -3070,10 +3068,7 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
 async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
     let _fmt = response_format(args)?;
-    let user_id = match me_user_id(&state.client).await {
-        Ok(uid) => uid,
-        Err(_) => None,
-    };
+    let user_id = me_user_id(&state.client).await.unwrap_or_default();
     let mut rows: Vec<Value> = Vec::new();
     let mut errors: Map<String, Value> = Map::new();
     for cid in &course_ids {
@@ -3088,14 +3083,14 @@ async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value,
                     let own = grades.iter().find(|g| {
                         g.get("columnId").and_then(|v| v.as_str()) == Some(col_id)
                     });
-                    let score = own.map(|o| grade_score(o)).flatten();
+                    let score = own.and_then(grade_score);
                     let status = own.map(|o| o.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string()).unwrap_or_default();
                     rows.push(json!({
                         "courseId": cid,
                         "columnId": col_id,
                         "columnName": column_name(col),
-                        "possible": column_possible(col).map(|p| Value::from(p)).unwrap_or(Value::Null),
-                        "score": score.map(|s| Value::from(s)).unwrap_or(Value::Null),
+                        "possible": column_possible(col).map(Value::from).unwrap_or(Value::Null),
+                        "score": score.map(Value::from).unwrap_or(Value::Null),
                         "status": status,
                         "grade": score.map(|s| s.to_string()).unwrap_or_default(),
                     }));
