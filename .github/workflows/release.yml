@@ -23,7 +23,9 @@ jobs:
         include:
           - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  archive: tar.gz }
           - { os: macos-latest,   target: aarch64-apple-darwin,      archive: tar.gz }
-          - { os: macos-13,       target: x86_64-apple-darwin,       archive: tar.gz }
+          # macos-13 (last Intel runner) is retired — cross-compile x86_64
+          # on the arm64 runner; the macOS SDK links both arches natively.
+          - { os: macos-latest,   target: x86_64-apple-darwin,       archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc,    archive: zip }
     steps:
       - uses: actions/checkout@v4
@@ -37,21 +39,23 @@ jobs:
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}
         working-directory: rust
-      - name: Package
+      - name: Package (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
           cd rust/target/${{ matrix.target }}/release
-          ext=""
-          [[ "${{ matrix.os }}" == windows-* ]] && ext=".exe"
           mkdir -p staging
-          cp "ntulearn-mcp${ext}" staging/
+          cp ntulearn-mcp staging/
           name="ntulearn-mcp-${{ matrix.target }}"
-          if [[ "${{ matrix.archive }}" == "zip" ]]; then
-            (cd staging && zip "../${name}.zip" "ntulearn-mcp${ext}")
-          else
-            (cd staging && tar -czf "../${name}.tar.gz" "ntulearn-mcp${ext}")
-          fi
+          (cd staging && tar -czf "../${name}.tar.gz" ntulearn-mcp)
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "rust/target/${{ matrix.target }}/release"
+          $name = "ntulearn-mcp-${{ matrix.target }}"
+          Compress-Archive -Path "$dir/ntulearn-mcp.exe" -DestinationPath "$dir/$name.zip" -Force
       - uses: actions/upload-artifact@v4
         with:
           name: ntulearn-mcp-${{ matrix.target }}
