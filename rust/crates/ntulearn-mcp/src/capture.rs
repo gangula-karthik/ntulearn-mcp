@@ -55,17 +55,17 @@ fn browser_candidates() -> Vec<(String, PathBuf)> {
     {
         // Program-Files installs (system-wide).
         if let Ok(p) = std::env::var("PROGRAMFILES") {
-            v.push(("Chrome", PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
+            v.push(("Chrome".to_string(), PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
         }
         if let Ok(p) = std::env::var("PROGRAMFILES(X86)") {
-            v.push(("Chrome x86", PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
-            v.push(("Edge", PathBuf::from(p).join("Microsoft\\Edge\\Application\\msedge.exe")));
-            v.push(("Brave", PathBuf::from(p).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
+            v.push(("Chrome x86".to_string(), PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
+            v.push(("Edge".to_string(), PathBuf::from(p).join("Microsoft\\Edge\\Application\\msedge.exe")));
+            v.push(("Brave".to_string(), PathBuf::from(p).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
         }
         // Per-user installs (the default for Chrome/Brave on Windows).
         if let Ok(p) = std::env::var("LOCALAPPDATA") {
-            v.push(("Chrome per-user", PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
-            v.push(("Brave per-user", PathBuf::from(p).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
+            v.push(("Chrome per-user".to_string(), PathBuf::from(p).join("Google\\Chrome\\Application\\chrome.exe")));
+            v.push(("Brave per-user".to_string(), PathBuf::from(p).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe")));
         }
     }
     v.into_iter().filter(|(_, p)| PathBuf::from(p).exists()).collect()
