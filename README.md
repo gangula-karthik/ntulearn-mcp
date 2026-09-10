@@ -89,6 +89,49 @@ proactive; it happens on a live 401 or when you run `ntulearn-mcp refresh`.
 
 ---
 
+## Staying up to date (update notifications + auto-update)
+
+The binary checks GitHub (at most once every 24 h, throttled + persisted in
+`<config>/ntulearn-mcp/update-state.json`) for a newer release. Checks never block or break the
+server: every failure is logged and swallowed.
+
+**When an update is available you get notified two ways:**
+
+* the MCP host's server log gets a one-line stderr notice (once per day), and
+* the **first tool call of the session** gets a one-line notice appended, so the agent itself
+  tells you — e.g. *"ntulearn-mcp 0.5.1 available (this server runs 0.5.0)…"* — roughly 25 tokens,
+  once.
+
+**Then you decide:**
+
+```bash
+ntulearn-mcp update            # check + prompt before installing
+ntulearn-mcp update --check    # non-interactive; exit 0 = current, 10 = update available
+ntulearn-mcp update --yes      # install without prompting (safe in scripts)
+ntulearn-mcp update --status   # version, latest release, auto-update mode
+```
+
+**Auto-update** (off by default):
+
+```bash
+ntulearn-mcp update --auto on    # background-install new releases automatically
+ntulearn-mcp update --auto ask   # default: notify only
+ntulearn-mcp update --auto off   # never even check
+```
+
+With `--auto on`, a running MCP server downloads the new release in the background, verifies its
+**sha256 against the release's `checksums.txt`**, and atomically swaps the binary — the new version
+activates the next time your MCP host restarts the server (the running process is never killed).
+Installs the binary did not place itself (cargo install, homebrew, dev builds) are detected and
+answered with the right update command instead of a self-replace.
+
+Environment overrides: `NTULEARN_MCP_AUTOUPDATE=on|off|ask`, `NTULEARN_MCP_NO_UPDATE_CHECK=1`,
+`NTULEARN_MCP_UPDATE_INTERVAL_SECS`, `NTULEARN_MCP_REPO` (for forks).
+
+**Cutting a release** (maintainers): bump `rust/Cargo.toml` to the new version, tag `v<version>`,
+push — the `release` workflow builds signed-checksummed binaries for Linux, macOS (arm64 + x64) and
+Windows and publishes them with `checksums.txt`, which is what the updater consumes.
+
 ## Install from source
 
 ```bash

@@ -701,6 +701,9 @@ pub fn help_text() -> String {
     out.push_str("  multi \"cmd ...\" ...     run several commands CONCURRENTLY in one process\n");
     out.push_str("  selfbench               built-in token + latency benchmark\n");
     out.push_str("  setup | check | refresh cookie lifecycle\n");
+    out.push_str("  update                  check for / install a newer release (--check, --yes,\n");
+    out.push_str("                          --auto on|off|ask, --status)\n");
+    out.push_str("  version                 print this binary's version\n");
     out.push_str("  (no args)               run as an MCP server over stdio\n\n");
     out.push_str("commands (positional args shown; all also accept --kebab-flags):\n");
     for c in COMMANDS {

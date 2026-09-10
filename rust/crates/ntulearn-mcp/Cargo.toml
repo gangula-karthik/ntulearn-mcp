@@ -33,3 +33,7 @@ tracing-subscriber.workspace = true
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
 ultrafast-mcp.workspace = true
+semver.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true

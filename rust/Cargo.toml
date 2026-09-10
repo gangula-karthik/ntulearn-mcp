@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/ntulearn-mcp"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/gangula-karthik/ntulearn-mcp"
@@ -31,3 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
 ultrafast-mcp = { version = "202506018.1.0", features = ["http"] }
+semver = "1"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }

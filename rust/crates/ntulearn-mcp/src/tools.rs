@@ -40,9 +40,17 @@ impl ToolHandler for NtuToolHandler {
 
     async fn handle_tool_call(&self, call: ToolCall) -> MCPResult<ToolResult> {
         let args = call.arguments.unwrap_or_default();
-        Ok(match handlers::dispatch(&self.state, &call.name, &args).await {
+        let mut result = match handlers::dispatch(&self.state, &call.name, &args).await {
             Ok(contents) => content_result(contents),
             Err(msg) => err_result(msg),
-        })
+        };
+        // Update notification: appended to the first tool call of the process
+        // only (the notice self-clears), throttled to once per day by the
+        // background updater. ~25 tokens, once, so the agent can tell the
+        // user a new release exists.
+        if let Some(notice) = self.state.update_notice.take() {
+            result.content.push(ToolContent::text(notice));
+        }
+        Ok(result)
     }
 }

@@ -232,11 +232,13 @@ pub async fn run_check() -> i32 {
             } else {
                 println!("Expires in    : unknown (session cookie)");
             }
-            match validates_live(&base, val).await {
+            let live = match validates_live(&base, val).await {
                 Ok(true) => { println!("Live validity : OK (200)"); 0 }
                 Ok(false) => { println!("Live validity : EXPIRED (401)"); 1 }
                 Err(e) => { println!("Live validity : unknown ({e})"); 2 }
-            }
+            };
+            println!("{}", crate::update::status_line().await);
+            live
         }
     }
 }
