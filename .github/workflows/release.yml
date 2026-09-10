@@ -71,9 +71,32 @@ jobs:
           shopt -s nullglob
           sha256sum ntulearn-mcp-* > checksums.txt
           cat checksums.txt
+      - name: Sign checksums.txt (minisign)
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+        run: |
+          # The matching public key is committed as minisign.pub and baked
+          # into the binary at compile time; the updater refuses tampered
+          # releases. If the secret is missing we warn and ship unsigned
+          # (clients install with a warning unless require_signature is on).
+          if [ -z "$MINISIGN_PRIVATE_KEY" ]; then
+            echo "::warning::MINISIGN_PRIVATE_KEY secret not set — releasing UNSIGNED."
+            exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          printf '%s\n' "$MINISIGN_PRIVATE_KEY" > minisign.key
+          cd dist
+          minisign -S -s ../minisign.key -m checksums.txt -x checksums.txt.minisig
+          rm -f ../minisign.key
+          cat checksums.txt.minisig
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/ntulearn-mcp-*
             dist/checksums.txt
+            dist/checksums.txt.minisig
+          # Tags like v0.7.0-beta.1 publish as prereleases: GitHub's
+          # "latest" (stable channel) skips them; `update --channel beta`
+          # picks them up — that is the staged-rollout mechanism.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

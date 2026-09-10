@@ -355,11 +355,9 @@ pub fn md_export_calendar(payload: &Value) -> String {
     let course_count = payload.get("courseCount").and_then(|v| v.as_u64()).unwrap_or(0);
     let since = _dt(payload.get("since"));
     let until = _dt(payload.get("until"));
-    let lines = vec![
-        format!("# Calendar export (.ics) — {item_count} events from {course_count} course(s)"),
+    let lines = [format!("# Calendar export (.ics) — {item_count} events from {course_count} course(s)"),
         format!("- window: {since} → {until}"),
-        "- you can import the ICS payload directly into most calendar apps.".to_string(),
-    ];
+        "- you can import the ICS payload directly into most calendar apps.".to_string()];
     lines.join("\n")
 }
 
@@ -367,10 +365,8 @@ pub fn md_export_calendar(payload: &Value) -> String {
 pub fn md_export_gradebook(payload: &Value) -> String {
     let row_count = payload.get("rowCount").and_then(|v| v.as_u64()).unwrap_or(0);
     let course_count = payload.get("courseCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let lines = vec![
-        format!("# Gradebook export (.csv) — {row_count} rows across {course_count} course(s)"),
-        "You can paste the CSV payload into a file and open it in Sheets/Excel.".to_string(),
-    ];
+    let lines = [format!("# Gradebook export (.csv) — {row_count} rows across {course_count} course(s)"),
+        "You can paste the CSV payload into a file and open it in Sheets/Excel.".to_string()];
     lines.join("\n")
 }
 

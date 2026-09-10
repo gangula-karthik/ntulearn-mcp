@@ -258,7 +258,7 @@ pub async fn run_refresh() -> i32 {
             match validates_live(&base, &val).await {
                 Ok(true) => {
                     println!("Still valid — refreshing not needed.");
-                    (return 0);
+                    0
                 }
                 Ok(false) => {
                     println!("Current cookie is expired (401). No newer one available from \

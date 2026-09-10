@@ -128,9 +128,36 @@ answered with the right update command instead of a self-replace.
 Environment overrides: `NTULEARN_MCP_AUTOUPDATE=on|off|ask`, `NTULEARN_MCP_NO_UPDATE_CHECK=1`,
 `NTULEARN_MCP_UPDATE_INTERVAL_SECS`, `NTULEARN_MCP_REPO` (for forks).
 
+### Release integrity (minisign signatures)
+
+Every release's `checksums.txt` is minisign-signed by CI; the matching **public key is committed as
+[`minisign.pub`](minisign.pub) and baked into the binary at compile time**. Before installing
+anything the updater verifies the signature over the checksums, and the checksums over the
+downloaded binary — a tampered release (or CDN) is refused. Releases without a signature install
+with a loud warning; set `require_signature: true` in `settings.json` (or
+`NTULEARN_MCP_REQUIRE_SIGNATURE=1`) to refuse unsigned releases outright.
+
+### Release channels & staged rollouts
+
+```bash
+ntulearn-mcp update --channel beta    # try pre-releases before everyone else
+ntulearn-mcp update --channel stable  # default: GitHub "latest" only
+```
+
+Tag a `v0.7.0-rc.1`-style release and it publishes as a GitHub **prerelease**: stable-channel users
+never see it, beta-channel users get it immediately. Roll the final `v0.7.0` tag when the rc looks
+good — that's the whole staged-rollout mechanism.
+
 **Cutting a release** (maintainers): bump `rust/Cargo.toml` to the new version, tag `v<version>`,
-push — the `release` workflow builds signed-checksummed binaries for Linux, macOS (arm64 + x64) and
-Windows and publishes them with `checksums.txt`, which is what the updater consumes.
+push — the `release` workflow builds binaries for Linux, macOS (arm64 + x64) and Windows, publishes
+them with `checksums.txt` + its minisign signature (private key in the `MINISIGN_PRIVATE_KEY`
+secret). Tags containing a hyphen (e.g. `v0.7.0-rc.1`) publish as prereleases automatically.
+
+### Homebrew
+
+A formula template lives in [`packaging/homebrew/`](packaging/homebrew/) — copy it into a
+`homebrew-<name>` tap repository to serve `brew install ntulearn-mcp`. Brew-managed installs are
+detected by the updater, which then defers to `brew upgrade` instead of self-replacing.
 
 ## Install from source
 

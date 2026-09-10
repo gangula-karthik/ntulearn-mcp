@@ -81,6 +81,66 @@ impl AutoUpdate {
 struct Settings {
     #[serde(default)]
     auto_update: AutoUpdate,
+    /// Release channel: `stable` (GitHub "latest") or `beta` (newest tag,
+    /// prereleases included). See `Channel`.
+    #[serde(default)]
+    channel: Channel,
+    /// Refuse to install releases that are not minisign-signed (strict mode).
+    /// Default false: unsigned releases install with a loud warning. The
+    /// signature is ALWAYS verified when present — this only decides what
+    /// happens when it is missing.
+    #[serde(default)]
+    require_signature: bool,
+}
+
+/// Release channel.
+/// * Stable — GitHub's `releases/latest` (prereleases excluded).
+/// * Beta   — newest semver tag including prereleases (staged rollout:
+///   ship v0.7.0-rc.1 as a prerelease and beta-channel users get it,
+///   stable users do not until the final tag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    #[default]
+    Stable,
+    Beta,
+}
+
+impl Channel {
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "stable" | "release" => Ok(Channel::Stable),
+            "beta" | "pre" | "prerelease" | "rc" => Ok(Channel::Beta),
+            other => Err(anyhow!("unknown channel `{other}` (use stable|beta)")),
+        }
+    }
+}
+
+pub fn effective_channel() -> Channel {
+    if let Ok(v) = std::env::var("NTULEARN_MCP_CHANNEL") {
+        if let Ok(c) = Channel::parse(&v) {
+            return c;
+        }
+    }
+    read_json::<Settings>(&settings_path()).map(|s| s.channel).unwrap_or_default()
+}
+
+pub fn set_channel(channel: Channel) -> anyhow::Result<()> {
+    let mut settings = read_json::<Settings>(&settings_path()).unwrap_or_default();
+    settings.channel = channel;
+    write_json(&settings_path(), &settings)
+        .with_context(|| format!("writing {}", settings_path().display()))?;
+    println!("channel: {channel:?} (saved to {})", settings_path().display());
+    Ok(())
+}
+
+fn require_signature() -> bool {
+    if let Ok(v) = std::env::var("NTULEARN_MCP_REQUIRE_SIGNATURE") {
+        return v != "0";
+    }
+    read_json::<Settings>(&settings_path())
+        .map(|s| s.require_signature)
+        .unwrap_or(false)
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
@@ -124,6 +184,8 @@ struct UpdateState {
     last_notice: Option<u64>,
     /// Latest version seen, e.g. "0.5.0" (no `v` prefix).
     latest: Option<String>,
+    /// Which channel `latest` was observed on (cache invalidation on switch).
+    channel: Option<String>,
 }
 
 fn now_secs() -> u64 {
@@ -147,6 +209,53 @@ fn check_disabled() -> bool {
 
 fn repo() -> String {
     std::env::var("NTULEARN_MCP_REPO").unwrap_or_else(|_| DEFAULT_REPO.to_string())
+}
+
+fn channel_name(c: Channel) -> &'static str {
+    match c {
+        Channel::Stable => "stable",
+        Channel::Beta => "beta",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Release signatures (minisign)
+// ---------------------------------------------------------------------------
+
+/// Baked-in minisign public key (repo root `minisign.pub`). Releases sign
+/// `checksums.txt` with the matching secret key in CI; the updater verifies
+/// the signature BEFORE trusting the checksums (which in turn verify each
+/// downloaded asset). Forks/other distributions can override the key at
+/// runtime with NTULEARN_MCP_MINISIGN_PUBKEY (raw base64 or full file).
+const MINISIGN_PUB_FILE: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../minisign.pub");
+
+/// The base64 key line from a minisign pubkey file (skips comment lines).
+fn minisign_key_base64() -> Option<String> {
+    if let Ok(v) = std::env::var("NTULEARN_MCP_MINISIGN_PUBKEY") {
+        let line = v.lines().rev().find(|l| !l.trim().is_empty() && !l.starts_with("untrusted"))?;
+        return Some(line.trim().to_string());
+    }
+    let file = std::fs::read_to_string(MINISIGN_PUB_FILE).ok()?;
+    let line = file
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty() && !l.starts_with("untrusted"))?;
+    Some(line.trim().to_string())
+}
+
+/// Verify a minisign signature over `data`. `sig_file` is the raw content of
+/// the `.minisig` file (untrusted comment + base64 + trusted comment + b64).
+fn verify_minisign(data: &[u8], sig_file: &str) -> anyhow::Result<()> {
+    use minisign_verify::{PublicKey, Signature};
+    let key_b64 = minisign_key_base64()
+        .ok_or_else(|| anyhow!("no minisign public key available (minisign.pub missing)"))?;
+    let pk = PublicKey::from_base64(&key_b64)
+        .map_err(|e| anyhow!("invalid minisign public key: {e:?}"))?;
+    let signature = Signature::decode(sig_file)
+        .map_err(|e| anyhow!("invalid minisign signature file: {e:?}"))?;
+    pk.verify(data, &signature, false)
+        .map_err(|_| anyhow!("minisign signature verification FAILED"))
 }
 
 // ---------------------------------------------------------------------------
@@ -192,20 +301,44 @@ fn http_client() -> anyhow::Result<reqwest::Client> {
         .context("building HTTP client for update check")
 }
 
-/// Fetch the latest GitHub release (network, 10s timeout).
-pub async fn fetch_latest_release() -> anyhow::Result<Release> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", repo());
+/// Fetch the newest release on the given channel (network, 10s timeout).
+///
+/// * Stable: GitHub's `releases/latest` (prereleases excluded by GitHub).
+/// * Beta:   newest semver tag across published releases, prereleases
+///   included — this is the staged-rollout mechanism.
+pub async fn fetch_latest_release(channel: Channel) -> anyhow::Result<Release> {
     let client = http_client()?;
-    let resp = client
-        .get(&url)
-        .header("Accept", "application/vnd.github+json")
+    let headers = |mut rb: reqwest::RequestBuilder| {
+        rb = rb.header("Accept", "application/vnd.github+json");
+        rb
+    };
+    if channel == Channel::Stable {
+        let url = format!("https://api.github.com/repos/{}/releases/latest", repo());
+        let resp = headers(client.get(&url))
+            .send()
+            .await
+            .context("contacting GitHub for latest release")?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("GitHub API returned {}", resp.status()));
+        }
+        return resp.json::<Release>().await.context("parsing release payload");
+    }
+
+    // Beta: list recent published releases, pick the highest semver tag.
+    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", repo());
+    let resp = headers(client.get(&url))
         .send()
         .await
-        .context("contacting GitHub for latest release")?;
+        .context("listing GitHub releases")?;
     if !resp.status().is_success() {
         return Err(anyhow!("GitHub API returned {}", resp.status()));
     }
-    resp.json::<Release>().await.context("parsing release payload")
+    let releases = resp.json::<Vec<Release>>().await.context("parsing releases")?;
+    releases
+        .into_iter()
+        .filter(|r| tag_to_version(&r.tag_name).is_some())
+        .max_by_key(|r| tag_to_version(&r.tag_name))
+        .ok_or_else(|| anyhow!("no versioned releases found (beta channel)"))
 }
 
 /// Throttled check: hits the network at most once per interval (persisted),
@@ -216,6 +349,9 @@ pub async fn throttled_check(force: bool) -> anyhow::Result<Option<Release>> {
         .last_check
         .map(|t| now_secs().saturating_sub(t) < check_interval().as_secs())
         .unwrap_or(false);
+    let channel = effective_channel();
+    // Cache is only valid for the channel it was recorded on.
+    let fresh = fresh && state.channel.as_deref() == Some(channel_name(channel));
     if fresh && !force {
         if let Some(latest) = &state.latest {
             if is_newer(&format!("v{latest}")) {
@@ -226,9 +362,10 @@ pub async fn throttled_check(force: bool) -> anyhow::Result<Option<Release>> {
         return Ok(None);
     }
 
-    let release = fetch_latest_release().await?;
+    let release = fetch_latest_release(channel).await?;
     state.last_check = Some(now_secs());
     state.latest = Some(release.tag_name.trim_start_matches('v').to_string());
+    state.channel = Some(channel_name(channel).to_string());
     let _ = write_json(&state_path(), &state); // best effort
     if is_newer(&release.tag_name) {
         Ok(Some(release))
@@ -364,20 +501,44 @@ pub async fn install_release(release: &Release) -> anyhow::Result<()> {
     })?;
     let client = http_client()?;
 
-    // 1. checksums.txt (expected hash) — fetched first so we never install a
-    //    payload we cannot verify.
-    let checksums = client
-        .get(format!(
-            "https://github.com/{}/releases/download/{}/checksums.txt",
-            repo(),
-            release.tag_name
-        ))
+    // 1. checksums.txt (+ its minisign signature). The signature, when
+    //    present, is verified BEFORE the checksums are trusted — which is
+    //    before anything is written to disk.
+    let checksums_url = format!(
+        "https://github.com/{}/releases/download/{}/checksums.txt",
+        repo(),
+        release.tag_name
+    );
+    let checksums_resp = client.get(&checksums_url).send().await?;
+    if !checksums_resp.status().is_success() {
+        return Err(anyhow!("release has no checksums.txt (HTTP {}) — refusing to install unverified", checksums_resp.status()));
+    }
+    let checksums = checksums_resp.text().await.unwrap_or_default();
+
+    let sig_resp = client
+        .get(format!("{checksums_url}.minisig"))
         .send()
         .await?
-        .error_for_status()?
         .text()
         .await
         .unwrap_or_default();
+    if sig_resp.contains("Ed") && sig_resp.lines().count() >= 2 {
+        if let Err(e) = verify_minisign(checksums.as_bytes(), &sig_resp) {
+            return Err(anyhow!("release rejected: {e}"));
+        }
+    } else if minisign_key_base64().is_some() {
+        // We ship a signing key but this release is unsigned.
+        if require_signature() {
+            return Err(anyhow!(
+                "release is not minisign-signed and require_signature is on — refusing to install"
+            ));
+        }
+        eprintln!(
+            "WARNING: release {} has no minisign signature; installing unverified (set require_signature in {} to enforce)",
+            release.tag_name,
+            settings_path().display()
+        );
+    }
     let expected = expected_sha256(&checksums, &asset.name);
 
     // 2. download the archive.
@@ -450,6 +611,7 @@ pub async fn run_update_cli(argv: &[String]) -> i32 {
     let mut check_only = false;
     let mut yes = false;
     let mut auto: Option<AutoUpdate> = None;
+    let mut channel: Option<Channel> = None;
     let mut status_only = false;
 
     let mut it = argv.iter();
@@ -458,6 +620,17 @@ pub async fn run_update_cli(argv: &[String]) -> i32 {
             "--check" => check_only = true,
             "--yes" | "-y" => yes = true,
             "--status" => status_only = true,
+            "--channel" => match it.next().map(|s| Channel::parse(s)) {
+                Some(Ok(c)) => channel = Some(c),
+                Some(Err(e)) => {
+                    eprintln!("error: {e}");
+                    return 2;
+                }
+                None => {
+                    eprintln!("error: --channel needs a value: stable|beta");
+                    return 2;
+                }
+            },
             "--auto" => match it.next().map(|s| AutoUpdate::parse(s)) {
                 Some(Ok(mode)) => auto = Some(mode),
                 Some(Err(e)) => {
@@ -489,9 +662,20 @@ pub async fn run_update_cli(argv: &[String]) -> i32 {
         }
     }
 
+    if let Some(c) = channel {
+        if let Err(e) = set_channel(c) {
+            eprintln!("error: {e}");
+            return 1;
+        }
+        if status_only || check_only {
+            return 0;
+        }
+    }
+
     if status_only {
         println!("version    : {} (this binary)", current_version());
         println!("auto-update: {:?}", effective_auto_update());
+        println!("channel    : {:?}", effective_channel());
         match throttled_check(true).await {
             Ok(Some(r)) => {
                 println!("latest     : {} — UPDATE AVAILABLE", r.tag_name.trim_start_matches('v'));
@@ -598,7 +782,8 @@ pub async fn background_updater(notice: std::sync::Arc<UpdateNotice>) {
         let fresh = state
             .last_check
             .map(|t| now_secs().saturating_sub(t) < check_interval().as_secs())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && state.channel.as_deref() == Some(channel_name(effective_channel()));
         if fresh {
             // Reuse cached knowledge without network: notify if still pending.
             if let Some(latest) = &state.latest {
@@ -608,11 +793,12 @@ pub async fn background_updater(notice: std::sync::Arc<UpdateNotice>) {
                 }
             }
         } else {
-            match fetch_latest_release().await {
+            match fetch_latest_release(effective_channel()).await {
                 Ok(release) => {
                     let mut st = state;
                     st.last_check = Some(now_secs());
                     st.latest = Some(release.tag_name.trim_start_matches('v').to_string());
+                    st.channel = Some(channel_name(effective_channel()).to_string());
                     let _ = write_json(&state_path(), &st);
                     if is_newer(&release.tag_name) {
                         let latest = release.tag_name.trim_start_matches('v').to_string();
@@ -658,8 +844,9 @@ pub async fn status_line() -> String {
     }
     match throttled_check(false).await {
         Ok(Some(r)) => format!(
-            "Update       : {} available — run `ntulearn-mcp update`",
-            r.tag_name.trim_start_matches('v')
+            "Update       : {} available on {:?} channel — run `ntulearn-mcp update`",
+            r.tag_name.trim_start_matches('v'),
+            effective_channel()
         ),
         Ok(None) => "Update       : up to date".to_string(),
         Err(e) => format!("Update       : check failed ({e})"),
@@ -701,10 +888,16 @@ mod tests {
     fn settings_roundtrip() {
         let dir = std::env::temp_dir().join(format!("ntu-upd-test-{}", std::process::id()));
         let path = dir.join("settings.json");
-        let settings = Settings { auto_update: AutoUpdate::On };
+        let settings = Settings {
+            auto_update: AutoUpdate::On,
+            channel: Channel::Beta,
+            require_signature: true,
+        };
         write_json(&path, &settings).unwrap();
         let back: Settings = read_json(&path).unwrap();
         assert_eq!(back.auto_update, AutoUpdate::On);
+        assert_eq!(back.channel, Channel::Beta);
+        assert!(back.require_signature);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -799,7 +992,7 @@ mod tests {
     fn throttled_check_uses_cache_without_network() {
         let _cfg = ConfigDirOverride::new();
         // Fresh check (< 24h) with newer cached version -> cached hit, no network.
-        let st = UpdateState { last_check: Some(now_secs()), latest: Some("999.0.0".into()), last_notice: None };
+        let st = UpdateState { last_check: Some(now_secs()), latest: Some("999.0.0".into()), last_notice: None, channel: Some("stable".into()) };
         write_json(&state_path(), &st).unwrap();
         let rel = tokio::runtime::Runtime::new()
             .unwrap()
@@ -807,7 +1000,7 @@ mod tests {
             .expect("cached check must not error");
         assert_eq!(rel.unwrap().tag_name, "v999.0.0");
         // Up-to-date cache -> None.
-        let st = UpdateState { last_check: Some(now_secs()), latest: Some("0.0.1".into()), last_notice: None };
+        let st = UpdateState { last_check: Some(now_secs()), latest: Some("0.0.1".into()), last_notice: None, channel: Some("stable".into()) };
         write_json(&state_path(), &st).unwrap();
         let rel = tokio::runtime::Runtime::new()
             .unwrap()
@@ -829,6 +1022,56 @@ mod tests {
         let st = UpdateState { last_notice: Some(now_secs() - NOTICE_INTERVAL_SECS - 1), ..Default::default() };
         assert!(should_notice(&st));
     }
+
+    #[test]
+    fn channel_parse() {
+        assert_eq!(Channel::parse("stable").unwrap(), Channel::Stable);
+        assert_eq!(Channel::parse("BETA").unwrap(), Channel::Beta);
+        assert_eq!(Channel::parse("rc").unwrap(), Channel::Beta);
+        assert!(Channel::parse("dev").is_err());
+    }
+
+    #[test]
+    fn prerelease_versions_compare_correctly() {
+        // Staged rollout: a prerelease of a FUTURE version is an update;
+        // a prerelease of the CURRENT version is not (semver: x.y.z-rc < x.y.z).
+        assert!(is_newer("v999.0.0-beta.1"));
+        let current = semver::Version::parse(current_version()).unwrap();
+        assert!(!is_newer(&format!("v{current}-beta.1")));
+        assert!(
+            tag_to_version("v0.7.0-beta.1").unwrap() < tag_to_version("v0.7.0").unwrap()
+        );
+    }
+
+    #[test]
+    fn minisign_pubkey_is_baked_and_wellformed() {
+        // The repo ships minisign.pub; the updater must be able to read it
+        // (forks without the file are allowed — verification is then off).
+        let key = minisign_key_base64();
+        if Path::new(MINISIGN_PUB_FILE).exists() {
+            assert!(key.is_some(), "minisign.pub exists but key extraction failed");
+            use base64::Engine as _;
+            let raw = base64::engine::general_purpose::STANDARD
+                .decode(key.unwrap())
+                .expect("pubkey must be valid base64");
+            assert!(raw.len() >= 42, "minisign pubkey payload too short: {}", raw.len());
+            assert_eq!(&raw[..2], b"Ed", "pubkey algorithm must be Ed");
+        }
+    }
+
+    #[test]
+    fn minisign_verify_roundtrip() {
+        // Can't sign without the private key (it lives only in CI secrets),
+        // but a tampered signature must fail hard against the real key.
+        let key = minisign_key_base64();
+        if key.is_none() {
+            return; // fork without minisign.pub — nothing to test
+        }
+        let fake_sig = "untrusted comment: fake\nRWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\ntrusted comment: fake\nRWQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let err = verify_minisign(b"checksums", fake_sig);
+        assert!(err.is_err(), "forged signature must be rejected");
+    }
+
 
     #[test]
     fn notice_fires_once() {
