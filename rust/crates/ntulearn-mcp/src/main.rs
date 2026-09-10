@@ -20,6 +20,7 @@ mod render;
 mod resources;
 mod schemas;
 mod setup;
+mod toon;
 mod tools;
 mod update;
 
