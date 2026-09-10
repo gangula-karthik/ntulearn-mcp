@@ -244,6 +244,15 @@ fn minisign_key_base64() -> Option<String> {
     Some(line.trim().to_string())
 }
 
+/// Does this look like a minisign `.minisig` file? Real signature files
+/// always start with an `untrusted comment:` line and parse cleanly;
+/// GitHub error bodies (JSON) and empty responses do not. (Do NOT sniff for
+/// algorithm bytes like "Ed" — they land at arbitrary positions once the
+/// 74-byte signature blob is base64-encoded.)
+fn looks_like_minisig(s: &str) -> bool {
+    s.starts_with("untrusted comment:") && minisign_verify::Signature::decode(s).is_ok()
+}
+
 /// Verify a minisign signature over `data`. `sig_file` is the raw content of
 /// the `.minisig` file (untrusted comment + base64 + trusted comment + b64).
 fn verify_minisign(data: &[u8], sig_file: &str) -> anyhow::Result<()> {
@@ -515,14 +524,12 @@ pub async fn install_release(release: &Release) -> anyhow::Result<()> {
     }
     let checksums = checksums_resp.text().await.unwrap_or_default();
 
-    let sig_resp = client
-        .get(format!("{checksums_url}.minisig"))
-        .send()
-        .await?
-        .text()
-        .await
-        .unwrap_or_default();
-    if sig_resp.contains("Ed") && sig_resp.lines().count() >= 2 {
+    let sig_resp = match client.get(format!("{checksums_url}.minisig")).send().await {
+        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+        // Absent asset (404 JSON body, network error) -> treat as unsigned.
+        _ => String::new(),
+    };
+    if looks_like_minisig(&sig_resp) {
         if let Err(e) = verify_minisign(checksums.as_bytes(), &sig_resp) {
             return Err(anyhow!("release rejected: {e}"));
         }
@@ -1058,6 +1065,30 @@ mod tests {
             assert_eq!(&raw[..2], b"Ed", "pubkey algorithm must be Ed");
         }
     }
+    #[test]
+    fn minisig_detection_regression() {
+        // The v0.7.0 release's actual signature: base64 payload starts with
+        // "RU" (not "Ed" — the algorithm bytes don't sit at a fixed base64
+        // offset), which the old presence heuristic missed entirely.
+        let real_sig = r#"untrusted comment: signature from minisign secret key
+RUTMDxQVODM4LlXtykuradg+QhoSHtxITlzKBzfBXo03HeNdVzg9Fd1W28xDrUfx3T/4pLFrRWvrR+kLYLTttDH5uHbkD1wtoQ4=
+trusted comment: timestamp:1789026389	file:checksums.txt	hashed
+P37abEV85P0lLkI30cM23oAVRR6F7BfsgpluSJzYTqim+0mWJKCEQJvlQq8p3Z/o/yxNlrg+P2cBrQlKaZKTDQ==
+"#;
+        assert!(looks_like_minisig(real_sig), "real v0.7.0 signature must be detected");
+        // It must also verify against the baked key.
+        let checksums = r#"4ad240421d266974bc5e6a7df0025f7b3e707ce82c5931a2d34ac467e2341e74  ntulearn-mcp-aarch64-apple-darwin.tar.gz
+47df54a117d82963b4ebb89a308f4a457c7b1e9cfeb8103e1f9a7e1c4a2b1bef  ntulearn-mcp-x86_64-apple-darwin.tar.gz
+aaf0784ad01d69b2e0ef4b6b204406de57130e05348a5a1ad2852080cf51e90a  ntulearn-mcp-x86_64-pc-windows-msvc.zip
+7c5f492dfd59d4aa154dbde2b5b7918467cb245ad39da6a8f1579833a8f6c9c1  ntulearn-mcp-x86_64-unknown-linux-gnu.tar.gz
+"#;
+        assert!(verify_minisign(checksums.as_bytes(), real_sig).is_ok());
+        // Non-signature bodies must NOT be detected.
+        assert!(!looks_like_minisig(""));
+        assert!(!looks_like_minisig("{\"message\":\"Not Found\"}"));
+        assert!(!looks_like_minisig("untrusted comment: fake\nnot-base64!!!"));
+    }
+
 
     #[test]
     fn minisign_verify_roundtrip() {
