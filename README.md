@@ -1,190 +1,99 @@
+<p align="center">
+  <img src="assets/banner.webp" alt="ntulearn-mcp — your NTULearn courses, announcements and grades, inside your agent" width="100%">
+</p>
+
 # ntulearn-mcp
 
-MCP server + **agent-first CLI** for **NTULearn** (NTU Singapore's Blackboard Learn instance).
-Lets Claude Desktop, Claude Code, Prime Agent, Cursor, Cline, and other agents answer questions
-about your courses, announcements, calendar, and grades — and organise course files into a folder
-hierarchy on disk.
+**MCP server + agent-first CLI for NTULearn** — NTU Singapore's Blackboard Learn instance.
+Point any MCP host (Claude Desktop, Claude Code, Cursor, Cline, Prime Agent) at it to ask about your
+courses, announcements, calendar, and grades — and to organise course files into a folder hierarchy
+on disk.
 
-The **shipped server is a single Rust binary** built on
-[`ultrafast-mcp`](https://github.com/techgopal/ultrafast-mcp), with 21 tools, 2 prompt templates,
-and a course-resource URI. No Python, no pip, no virtualenv.
+The shipped server is a **single Rust binary** built on
+[`ultrafast-mcp`](https://github.com/techgopal/ultrafast-mcp), with 21 tools, 2 prompt templates, and
+a course-resource URI. No Python, no pip, no virtualenv.
 
-### Use the CLI with agents — it's ~64x more token-efficient
-
-MCP hosts inject every tool's JSON schema into the model's context **every turn** (~6.6k tokens for
-this server's 21 tools). Benchmarks across the ecosystem show CLI-based agent interfaces cost 4x–35x
-less than MCP for the same tasks. This binary therefore doubles as a **plain CLI**: run it with no
-args to serve MCP, or give it a command to get terse, tabular output an agent can read in a few
-hundred tokens:
-
-```bash
-ntulearn-mcp courses                 # 6 courses ≈ 100 tokens (MCP tool result: ≈ 450)
-ntulearn-mcp tree _2706844_1         # a course's content tree
-ntulearn-mcp whats-new --days 7      # announcements + due dates + grades digest
-ntulearn-mcp multi "courses" "grades" "upcoming --type GradebookColumn"   # concurrent!
-```
-
-Measured by the built-in benchmark (`ntulearn-mcp selfbench`):
-
-| Metric | MCP | CLI | Improvement |
-|---|---|---|---|
-| Discovery tokens (per conversation) | 6,639 (every turn) | 586 (once, on demand) | **11.3x** |
-| Task output tokens (4-task suite) | 2,193 | 492 (compact TSV) | **4.5x** |
-| 10-turn conversation model | ~68,583 tok | ~1,078 tok | **63.6x** |
-| `courses` cold (2 RTTs, 25ms mock) | — | 59ms (v0.3 sequential: 202ms) | **3.4x** |
-| `courses` warm (SQLite cache) | — | 82µs | — |
-| 4 commands concurrently (`multi`) | 225ms sequential | 59ms (singleflight-deduped to 8 HTTP reqs) | **3.8x** |
-
-The CLI shares the exact same handlers, cache, and cookie lifecycle as the MCP server — same
-behaviour, fraction of the tokens. Point your agent at the binary and tell it to run
-`ntulearn-mcp help` (≈590 tokens, once) instead of registering 21 MCP tools.
+**Website:** <https://ntulearn-mcp.krtk.app>
 
 ---
 
 ## Quick start
 
 ```bash
-cd rust
-cargo build --release
-# binary: rust/target/release/ntulearn-mcp
+git clone https://github.com/gangula-karthik/ntulearn-mcp.git
+cd ntulearn-mcp/rust
+cargo build --release          # binary: rust/target/release/ntulearn-mcp
 ```
 
-One-time cookie setup — just log in:
+Log in once — `setup` opens NTULearn in a throwaway-profile browser and captures your session cookie
+for you. No copy-paste, no devtools, no keychain prompts.
 
 ```bash
 rust/target/release/ntulearn-mcp setup
+rust/target/release/ntulearn-mcp check   # expect: Live validity : OK (200)
 ```
 
-`setup` opens NTULearn in a throwaway-profile browser (Chrome, Arc, Brave, Edge, or Chromium) and
-watches the browser's own debugging channel for your `BbRouter` session cookie. You only log in in
-the window that opens — no copy-paste, no devtools, no OS-keychain prompts. The captured cookie is
-validated live against the API before it is saved to `<config>/ntulearn-mcp/cookie`. If no supported
-browser is found (e.g. a headless server), it falls back to a one-time paste.
+Register the binary with your MCP host:
 
-Verify:
-
-```bash
-rust/target/release/ntulearn-mcp check   # expect: Cookie source + Live validity : OK (200)
+```json
+{
+  "mcpServers": {
+    "ntulearn": {
+      "command": "/Users/you/ntulearn-mcp/rust/target/release/ntulearn-mcp",
+      "args": []
+    }
+  }
+}
 ```
 
-Register the **Rust binary** with your MCP host (adjust the path):
-
-```bash
-# e.g. Claude Code / Cursor / Cline — point the command at the Rust binary:
-"/Users/you/ntulearn-mcp/rust/target/release/ntulearn-mcp"
-```
-
-### The server never touches your OS keychain
-
-Cookie resolution is strictly: **`NTULEARN_COOKIE` env var → config file
-(`<config>/ntulearn-mcp/cookie`) → read-only Firefox `cookies.sqlite`**. No keychain reads, no
-password dialogs, no `security` commands. The `setup` command acquires a fresh cookie through a
-throwaway browser's debugging port — keychain-free by construction.
-
-### Session expiry
-
-When NTULearn rejects a call with 401, the server re-resolves the cookie (env → config → Firefox),
-**persists** a working value to the config file, and retries the call once. Refresh is never
-proactive; it happens on a live 401 or when you run `ntulearn-mcp refresh`.
+That's it. The same binary serves MCP with no arguments and acts as a CLI with a command.
 
 ---
 
-## Staying up to date (update notifications + auto-update)
+## Why the CLI: about 64x fewer tokens
 
-The binary checks GitHub (at most once every 24 h, throttled + persisted in
-`<config>/ntulearn-mcp/update-state.json`) for a newer release. Checks never block or break the
-server: every failure is logged and swallowed.
-
-**When an update is available you get notified two ways:**
-
-* the MCP host's server log gets a one-line stderr notice (once per day), and
-* the **first tool call of the session** gets a one-line notice appended, so the agent itself
-  tells you — e.g. *"ntulearn-mcp 0.5.1 available (this server runs 0.5.0)…"* — roughly 25 tokens,
-  once.
-
-**Then you decide:**
+MCP hosts inject every tool's JSON schema into context **every turn** — about 6.6k tokens for this
+server's 21 tools. The same binary doubles as a plain CLI, whose terse tabular output an agent reads
+in a few hundred tokens:
 
 ```bash
-ntulearn-mcp update            # check + prompt before installing
-ntulearn-mcp update --check    # non-interactive; exit 0 = current, 10 = update available
-ntulearn-mcp update --yes      # install without prompting (safe in scripts)
-ntulearn-mcp update --status   # version, latest release, auto-update mode
+ntulearn-mcp courses                 # 6 courses ≈ 100 tokens (MCP tool result: ≈ 450)
+ntulearn-mcp tree _2706844_1         # a course's content tree
+ntulearn-mcp whats-new --days 7      # announcements + due dates + grades digest
+ntulearn-mcp multi "courses" "grades" "upcoming --type GradebookColumn"   # concurrent
 ```
 
-**Auto-update** (off by default):
+Measured with the built-in benchmark (`ntulearn-mcp selfbench`):
 
-```bash
-ntulearn-mcp update --auto on    # background-install new releases automatically
-ntulearn-mcp update --auto ask   # default: notify only
-ntulearn-mcp update --auto off   # never even check
-```
+| Metric | MCP | CLI | Improvement |
+|---|---|---|---|
+| Discovery tokens (per conversation) | 6,639 (every turn) | 586 (once, on demand) | **11.3x** |
+| Task output tokens (4-task suite) | 2,193 | 492 (compact TSV) | **4.5x** |
+| 10-turn conversation model | ~68,583 tok | ~1,078 tok | **63.6x** |
+| `courses` cold (2 RTTs, 25ms mock) | — | 59ms | **3.4x** vs v0.3 |
+| `courses` warm (SQLite cache) | — | 82µs | — |
+| 4 commands concurrently (`multi`) | 225ms sequential | 59ms (singleflight-deduped) | **3.8x** |
 
-With `--auto on`, a running MCP server downloads the new release in the background, verifies its
-**sha256 against the release's `checksums.txt`**, and atomically swaps the binary — the new version
-activates the next time your MCP host restarts the server (the running process is never killed).
-Installs the binary did not place itself (cargo install, homebrew, dev builds) are detected and
-answered with the right update command instead of a self-replace.
+The CLI shares the same handlers, cache, and cookie lifecycle as the MCP server. Point your agent at
+the binary and have it run `ntulearn-mcp help` (≈590 tokens, once) instead of registering 21 tools.
 
-Environment overrides: `NTULEARN_MCP_AUTOUPDATE=on|off|ask`, `NTULEARN_MCP_NO_UPDATE_CHECK=1`,
-`NTULEARN_MCP_UPDATE_INTERVAL_SECS`, `NTULEARN_MCP_REPO` (for forks).
+---
 
-### Release integrity (minisign signatures)
+## What people ask for
 
-Every release's `checksums.txt` is minisign-signed by CI; the matching **public key is committed as
-[`minisign.pub`](minisign.pub) and baked into the binary at compile time**. Before installing
-anything the updater verifies the signature over the checksums, and the checksums over the
-downloaded binary — a tampered release (or CDN) is refused. Releases without a signature install
-with a loud warning; set `require_signature: true` in `settings.json` (or
-`NTULEARN_MCP_REQUIRE_SIGNATURE=1`) to refuse unsigned releases outright.
+1. **"What announcements happened across my courses this week?"** — fans out across all enrolled courses, newest first.
+2. **"What assignments are due next week?"** — reads the calendar, including gradable items.
+3. **"Organise this semester's content into `~/NTU/y3s1/sc2002/week 8/…`."** — walks the course tree and downloads into any folder layout you describe.
+4. **"Pull the due dates and grade weightages out of this course briefing PDF."** — reads small text-heavy documents inline.
 
-### Release channels & staged rollouts
+For multi-page, diagram-heavy lecture decks, use `download_file` and open the PDF in your client —
+MCP tool results are capped at 1 MB, so this server does not compete with drag-and-drop for full decks.
 
-```bash
-ntulearn-mcp update --channel beta    # try pre-releases before everyone else
-ntulearn-mcp update --channel stable  # default: GitHub "latest" only
-```
+---
 
-Tag a `v0.7.0-rc.1`-style release and it publishes as a GitHub **prerelease**: stable-channel users
-never see it, beta-channel users get it immediately. Roll the final `v0.7.0` tag when the rc looks
-good — that's the whole staged-rollout mechanism.
+## CLI reference
 
-**Cutting a release** (maintainers): bump `rust/Cargo.toml` to the new version, tag `v<version>`,
-push — the `release` workflow builds binaries for Linux, macOS (arm64 + x64) and Windows, publishes
-them with `checksums.txt` + its minisign signature (private key in the `MINISIGN_PRIVATE_KEY`
-secret). Tags containing a hyphen (e.g. `v0.7.0-rc.1`) publish as prereleases automatically.
-
-### Homebrew
-
-A formula template lives in [`packaging/homebrew/`](packaging/homebrew/) — copy it into a
-`homebrew-<name>` tap repository to serve `brew install ntulearn-mcp`. Brew-managed installs are
-detected by the updater, which then defers to `brew upgrade` instead of self-replacing.
-
-## Install from source
-
-```bash
-git clone https://github.com/gangula-karthik/ntulearn-mcp.git
-cd ntulearn-mcp/rust
-cargo build --release           # -> target/release/ntulearn-mcp
-cargo test                      # 53 unit tests
-target/release/ntulearn-mcp     # serve over stdio
-```
-
-## What it's for
-
-Four prompts this server is built to make easy:
-
-1. **"What announcements happened across my courses this week?"** → fans out across all enrolled courses, sorted newest first.
-2. **"What assignments do I have due next week?"** → reads NTULearn's calendar, including gradable items (`type=GradebookColumn`).
-3. **"Organise this semester's NTULearn content into `~/NTU/y3s1/sc2002/week 8/…` on my disk."** → walks the course tree and downloads files into a folder layout you describe in plain English.
-4. **"Pull the assignment due dates and grading weightages out of this course briefing PDF."** → reads small text-heavy documents inline (no filesystem hop).
-
-For multi-page, diagram-heavy lecture decks, **use `download_file` and drag the PDF into claude.ai**
-— that path has a native vision rendering budget. MCP tool results are capped at 1 MB; this server
-doesn't try to compete with drag-and-drop for full lecture decks.
-
-### CLI command reference
-
-`ntulearn-mcp help` prints this in ≈590 tokens; `ntulearn-mcp help <cmd>` shows one command's flags.
+`ntulearn-mcp help` prints this list; `ntulearn-mcp help <cmd>` shows one command's flags.
 
 ```
 courses                                  my enrolled courses (run this first for course ids)
@@ -210,280 +119,228 @@ ics                                      export calendar items to an .ics file
 grades-csv                               export gradebook to .csv
 ```
 
-Output is **compact TSV** by default (header row + one tab-separated row per item). Output flags:
-`--json` (raw payload), `--md` (markdown), `--fields a,b` (column selection), `--max-chars N`
-(cell truncation, default 200; text-bearing fields default to 2000), `--full` (no truncation),
-`--limit N` / `--offset N` (pagination). Every MCP tool argument is accepted as a kebab-case flag
-(`--include-disabled`, `--course-ids a,b`, `--mode vision`).
+Output is **compact TSV** by default. Flags: `--json`, `--md`, `--toon`, `--fields a,b`,
+`--max-chars N`, `--full`, `--limit N`, `--offset N`. Every MCP tool argument is also accepted as a
+kebab-case flag (`--include-disabled`, `--course-ids a,b`, `--mode vision`).
 
-**`multi`** runs several commands concurrently in one process, deduplicating identical in-flight
-HTTP fetches (singleflight) and sharing one cache:
+`multi` runs several commands concurrently in one process, deduplicating identical in-flight HTTP
+fetches and sharing one cache:
 
 ```bash
-ntulearn-mcp multi "courses" "announcements --since 2026-01-01" "grades" "upcoming --type GradebookColumn"
+ntulearn-mcp multi "courses" "announcements --since 2026-01-01" "grades"
 # results arrive concatenated, each prefixed with: ===== <command> =====
 ```
+
+### Output formats
+
+| Format | Flag | Notes |
+|---|---|---|
+| Compact TSV | default | Smallest; field-capped, no nesting. |
+| Markdown | `--md` | Human-readable. |
+| JSON | `--json` | Raw payload. |
+| TOON | `--toon` | Smallest **full-fidelity** format — **40% fewer tokens** than pretty JSON (52% on large lists). |
+
+TOON ([Token-Oriented Object Notation](https://github.com/toon-format/toon), spec v4.1) declares
+array shapes once and drops repeated keys, so the savings scale with how tabular the payload is.
+Every MCP tool accepts `response_format: "toon"` too.
 
 ---
 
 ## Tools
 
-21 tools. Most do cross-course aggregation by default — you almost never need to pass course IDs by hand.
+21 tools, most doing cross-course aggregation by default — you rarely pass course IDs by hand.
 
 | Tool | What it does |
 |---|---|
 | `ntulearn_list_courses` | List enrolled courses. |
 | `ntulearn_get_course_contents` | Walk a course's content tree. Omit `parent_id` for the top level; pass it to drill into a folder. |
 | `ntulearn_search_course_content` | Recursive substring search within one course. |
-| `ntulearn_get_upcoming` | **Calendar items across enrolled courses.** Defaults to the next 2 weeks. `type='GradebookColumn'` filters to assignments. |
-| `ntulearn_get_announcements` | **Announcements across enrolled courses, newest first.** Optional `since` for "this week". |
-| `ntulearn_get_gradebook` | **Gradebook columns across enrolled courses,** with your scores when available. |
-| `ntulearn_download_file` | Download every file on a content item to disk. `destination_dir` lets you build hierarchies (`~/NTU/y3s1/sc2002/week 8/`). |
+| `ntulearn_get_upcoming` | Calendar items across enrolled courses. Defaults to the next 2 weeks. `type='GradebookColumn'` filters to assignments. |
+| `ntulearn_get_announcements` | Announcements across enrolled courses, newest first. Optional `since`. |
+| `ntulearn_get_gradebook` | Gradebook columns across enrolled courses, with your scores when available. |
+| `ntulearn_download_file` | Download every file on a content item to disk. `destination_dir` builds hierarchies. |
 | `ntulearn_read_file_content` | Read an attached file's content inline (no filesystem hop). |
-| `ntulearn_list_messages` | List your NTULearn mailbox messages (inbox/sent). |
+| `ntulearn_list_messages` | List mailbox messages (inbox/sent). |
 | `ntulearn_read_message` | Read one message by ID, with full body and recipients. |
 | `ntulearn_list_course_users` | List users in a course (instructors, TAs, students). |
-| `ntulearn_list_course_groups` | List the groups defined in a course (tutorial/lab groups). |
-| `ntulearn_get_group_members` | List the members of a specific course group. |
-| `ntulearn_get_gradebook_attempts` | List submission attempts for an assignment (gradebook column). |
-| `ntulearn_search_all_courses` | Search content across **all** courses at once; results carry courseId + breadcrumb. |
-| `ntulearn_get_content_tree` | Return one course's entire content tree as nested JSON (bounded by `max_depth`). |
-| `ntulearn_download_course` | Recursively download every file in a course to `~/Downloads/NTU/<course>` (write tool). |
-| `ntulearn_whats_new` | One-call digest: announcements + upcoming + gradebook summary since a cutoff. |
-| `ntulearn_export_calendar_ics` | Export calendar items (incl. due dates) as an iCalendar `.ics` string. |
-| `ntulearn_export_gradebook_csv` | Export your gradebook as a CSV string for a spreadsheet. |
-| `ntulearn_summarize_course` | Bite-size briefing of one course: instructors, upcoming, announcements, grades, top folders. |
+| `ntulearn_list_course_groups` | List the groups defined in a course. |
+| `ntulearn_get_group_members` | List the members of a course group. |
+| `ntulearn_get_gradebook_attempts` | List submission attempts for an assignment. |
+| `ntulearn_search_all_courses` | Search content across **all** courses; results carry courseId + breadcrumb. |
+| `ntulearn_get_content_tree` | One course's entire content tree as nested JSON (bounded by `max_depth`). |
+| `ntulearn_download_course` | Recursively download every file in a course to `~/Downloads/NTU/<course>`. |
+| `ntulearn_whats_new` | One-call digest: announcements + upcoming + gradebook since a cutoff. |
+| `ntulearn_export_calendar_ics` | Export calendar items as an iCalendar `.ics` string. |
+| `ntulearn_export_gradebook_csv` | Export your gradebook as a CSV string. |
+| `ntulearn_summarize_course` | Briefing for one course: instructors, upcoming, announcements, grades, top folders. |
 
-Most read-only tools default to `response_format='json'`; pass `response_format='markdown'` for a
-human-readable summary. List-returning tools accept `limit`/`offset` pagination.
+Read-only tools default to `response_format='json'`; pass `'markdown'` for a readable summary.
+List-returning tools accept `limit`/`offset`. A resource URI,
+`ntulearn://courses/{course_id}`, returns a JSON course briefing, and two prompts
+(`ntulearn-weekly-brief`, `ntulearn-assignment-triage`) chain the tools for you.
 
-### Known environment limits (observed on real NTULearn)
+### Known environment limits
 
-- **`list_messages` / `read_message`** — the public `/users/me/messages` REST API is not exposed
-  on this NTU instance (404), so the Rust client instead walks the internal v1 conversation API
-  (one cached mailbox flatten → per-course `conversations`), which returns the same parity-shaped
-  message objects. Recipients are derived from the conversation (`includesAllMembers`, member
-  groups, and resolved participant ids). The `sent` folder is inferred from the sender being you.
-- **`get_group_members`** — the public `/courses/{id}/groups/{id}/users` endpoint returns 403 for
-  student accounts, so the client uses the internal v1 `memberships?groupId=…&expand=user,courseRole`
-  endpoint (accessible to students); member names and full role names (S→Student, T→TA, P→Primary
-  instructor, …) are rendered from the expanded `user` objects.
-- **Calendar/upcoming windows** wider than ~16 weeks → NTULearn rejects with a 400 `courseErrors`
-  entry; keep `since`/`until` within a semester.
-- **`read_file_content`** extracts text from simple documents; for large/graphical PDFs prefer
-  `download_file` and read the file in the client.
+- **`list_messages` / `read_message`** — the public `/users/me/messages` REST API returns 404 on this
+  instance, so the client walks the internal v1 conversation API instead (one cached mailbox flatten
+  → per-course conversations) and derives recipients from the conversation.
+- **`get_group_members`** — the public groups endpoint returns 403 for student accounts, so the
+  client uses the internal v1 memberships endpoint instead.
+- **Calendar windows wider than ~16 weeks** are rejected by NTULearn with a 400 `courseErrors` entry
+  — keep `since`/`until` within a semester.
+- **`read_file_content`** extracts text from simple documents; for large or graphical PDFs, use
+  `download_file` and open the file in your client.
 
 ---
 
-## Resources & Prompts
-
-- **Resources** — `ntulearn://courses/{course_id}` returns a JSON course briefing (the same content
-  as `ntulearn_summarize_course`). `list_resources` enumerates your enrolled courses, and the
-  `{course_id}` URI template lets clients read any course directly.
-- **Prompts** —
-  - `ntulearn-weekly-brief` — args `courses` (optional comma-separated IDs) and `days` (default 7).
-    Produces a prompt that chains `ntulearn_get_announcements` + `ntulearn_get_upcoming` over a
-    computed since/until window.
-  - `ntulearn-assignment-triage` — args `courses` and `days` (default 14). Produces a due-date
-    triage prompt that chains `ntulearn_get_upcoming(type='GradebookColumn')` + `ntulearn_get_gradebook`.
-
-## TOON output (token-optimized responses)
-
-Every tool accepts `response_format: "toon"`, and the CLI takes a global `--toon` flag. TOON
-([Token-Oriented Object Notation](https://github.com/toon-format/toon), spec v4.1) is a lossless
-encoding of the JSON data model that declares array shapes once and drops repeated keys —
-**40% fewer output tokens** than the default pretty-JSON responses across this server's
-payloads, and **52%** on large uniform lists:
-
-```
-courses[8]{id,courseId,name,title,created,availability{available},isFavorite}:
-  _93810_1|SC2002|SC2002 Data Structures & Algorithms|...|"2026-08-11T02:00:00.000Z"|Yes|true
-  ...
-total: 8
-hasMore: false
-```
-
-Measured token counts (tiktoken `o200k_base`; `cl100k_base` agrees within 2%):
-
-| payload | pretty JSON (default) | compact JSON | TOON | TOON saves |
-|---|---|---|---|---|
-| courses (6) | 393 | 289 | 235 | 40% |
-| course contents (10) | 1127 | 867 | 709 | 37% |
-| announcements (5) | 492 | 392 | 345 | 30% |
-| gradebook (8) | 739 | 527 | 355 | 52% |
-| **fixture suite total** | **2751** | **2075** | **1644** | **40%** |
-| 50-course enrollment list | 7399 | 5280 | 3557 | 52% |
-| file-content text blob | 177 | 162 | 161 | 9% |
-
-The savings scale with how *tabular* the payload is: `list_courses`, `get_course_contents`,
-`get_gradebook`, `get_upcoming` — anything that returns uniform rows — is TOON's sweet spot
-(declared-once field lists amortize over every row). Payloads that are mostly a single text
-blob (`read_file_content`) gain little over compact JSON — there's no repeated structure to
-fold away. TOON beats even *compact* JSON by 21% on the suite (33% on large lists) because
-it drops both the repeated keys and most quoting.
-
-For comparison, the CLI's default compact TSV is smaller still, but lossy (field-capped, no
-nesting); TOON is the smallest *full-fidelity* format. Ask for it when you want everything,
-e.g. `get_gradebook(course_ids=[...], response_format='toon')`.
-
-The encoder is spec-conformant (all four forms, nested field groups, keyed tabular, delimiter
-selection) and covered by conformance tests drawn from the spec's examples. TOON output is
-deterministic: object key order is encounter order (serde_json `preserve_order`).
-
-## Example prompts
-
-- *"What announcements went out across my courses this past week?"* — `get_announcements(since='...')`.
-- *"What assignments do I have due in the next two weeks?"* — `get_upcoming(type='GradebookColumn')`.
-- *"Show me the full calendar for the next 10 days."* — `get_upcoming(until='...')`.
-- *"What's my current grade in `_12345_1`?"* — `get_gradebook(course_ids=['_12345_1'])`.
-- *"Walk my enrolled courses and put each course's content under `~/NTU/y3s1/<course-name>/<topic>/…`."* — chains `list_courses` → `get_course_contents` → `download_file`.
-
 ## Authentication
 
-The server resolves the `BbRouter` cookie strictly in this order:
+The `BbRouter` cookie is resolved strictly in this order:
 
-1. **`NTULEARN_COOKIE` env var**
-2. **Config file** at `<config>/ntulearn-mcp/cookie` (written by `setup`, `refresh`, or a successful
-   401-refresh)
-3. **Firefox** `cookies.sqlite` (read-only, plaintext — no keychain decryption)
+1. `NTULEARN_COOKIE` environment variable
+2. Config file at `<config>/ntulearn-mcp/cookie`
+3. Firefox `cookies.sqlite` (read-only, plaintext)
 
-Never proactive: the 401-refresh path runs only after a live 401. Run `ntulearn-mcp check` to see
-the current source, expiry, and live validity.
+**No keychain access, ever** — no password dialogs, no `security` commands. When NTULearn rejects a
+call with 401, the server re-resolves the cookie, persists a working value, and retries once.
+Refresh is never proactive; it happens on a live 401 or when you run `ntulearn-mcp refresh`.
 
-### The `setup` command
+`setup` is the normal first-run path: it validates any existing cookie live, and if there is none,
+opens Chrome/Arc/Brave/Edge/Chromium with a throwaway profile and polls the DevTools protocol for
+your cookie (15-minute login timeout). The captured value is validated against the API before it is
+saved, then the browser and profile are cleaned up. On a headless server with no supported browser,
+it falls back to a one-time paste.
 
-`ntulearn-mcp setup` is the normal first-run path. It:
+The cookie expires with your NTULearn session (days to weeks). Re-run `setup` when it does.
 
-1. Checks for an existing cookie (env → config → Firefox) and validates it live. If valid: done.
-2. Otherwise launches Chromium (Chrome/Arc/Brave/Edge) with a throwaway profile + local debugging
-   port, opens NTULearn, and polls the DevTools protocol for the `BbRouter` cookie
-   (15-minute login timeout). You just log in.
-3. Validates the captured cookie live (`GET /learn/api/public/v1/users/me` must return 200) before
-   saving it to the config file. A pre-login guest cookie is rejected, not saved.
-4. Cleans up the browser window + profile automatically.
+<details>
+<summary>Manual cookie fallback</summary>
 
-No supported browser → falls back to a one-time paste (accepts a bare value, `BbRouter=...`, or a
-full `Cookie:` header).
-
-### Manual cookie fallback
-
-1. Open https://ntulearn.ntu.edu.sg in your browser and log in.
+1. Log in at <https://ntulearn.ntu.edu.sg>.
 2. DevTools (`F12`) → **Application** → **Cookies** → `ntulearn.ntu.edu.sg`.
 3. Copy the **Value** of the `BbRouter` cookie (starts with `expires:`).
-4. Either run `ntulearn-mcp setup` and choose paste, or add it to your MCP host's `env` block:
+4. Run `ntulearn-mcp setup` and choose paste, or set it in your MCP host's `env` block:
 
    ```json
-   {
-     "mcpServers": {
-       "ntulearn": {
-         "command": "/Users/you/ntulearn-mcp/rust/target/release/ntulearn-mcp",
-         "args": [],
-         "env": { "NTULEARN_COOKIE": "expires:1234567890,id:..." }
-       }
-     }
-   }
+   { "env": { "NTULEARN_COOKIE": "expires:1234567890,id:..." } }
    ```
 
 5. Restart your MCP host.
 
-The cookie expires with your NTULearn session (days–weeks); re-run `setup` (or let the 401-refresh
-resolve it) when it does.
+</details>
 
 ---
 
-## Optional configuration
+## Configuration
+
+All optional — the defaults work for most users.
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `NTULEARN_COOKIE` | — | Manual cookie fallback. |
 | `NTULEARN_BASE_URL` | `https://ntulearn.ntu.edu.sg` | Change for a different Blackboard instance. |
 | `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` / `download_course`. |
-| `NTULEARN_CACHE_DIR` | `~/.cache/ntulearn-mcp/cache.sqlite3` | SQLite persistence path for the response cache (best-effort; falls back to in-memory). |
-| `NTULEARN_CACHE_MODE` | `readwrite` | `readwrite` (default), `readonly`, or `off`. |
-
-## Development
-
-```bash
-cd rust
-cargo test                 # 53 unit tests (cli, cache, client, cookie, capture, setup)
-cargo build --release
-target/release/ntulearn-mcp selfbench   # token + latency + concurrency benchmark
-```
-
-Project layout (`rust/crates/ntulearn-mcp/src/`):
-
-```
-main.rs      # routing: no args → MCP stdio server; command → CLI; setup/check/refresh
-cli.rs       # agent-first CLI: 21 commands, compact TSV renderer, `multi` concurrency
-bench.rs     # selfbench: token/latency/concurrency benchmark + mock Blackboard API
-handlers.rs  # the 21 tool handlers (shared by MCP server and CLI)
-parsers.rs   # HTML body → download URL extraction (scraper)
-render.rs    # markdown/csv/ics renderers
-client.rs    # reqwest (HTTP/2, retries, parallel batch fan-out, singleflight dedup)
-cache.rs     # SQLite (WAL, persistent conn) + in-memory TTL cache (LRU, scoped keys)
-cookie.rs    # layered cookie resolution (never keychain)
-setup.rs     # setup / check / refresh subcommands
-capture.rs   # throwaway-browser CDP cookie capture
-resources.rs # course resource template + reader
-prompts.rs   # prompt templates
-schemas.rs   # tool schemas
-tools.rs     # tool definition registry
-```
+| `NTULEARN_CACHE_DIR` | `~/.cache/ntulearn-mcp/cache.sqlite3` | SQLite response cache (falls back to in-memory). |
+| `NTULEARN_CACHE_MODE` | `readwrite` | `readwrite`, `readonly`, or `off`. |
+| `NTULEARN_MCP_AUTOUPDATE` | `ask` | `on`, `off`, or `ask`. |
+| `NTULEARN_MCP_NO_UPDATE_CHECK` | — | Set to `1` to disable update checks. |
+| `NTULEARN_MCP_UPDATE_INTERVAL_SECS` | 86400 | Check throttle. |
+| `NTULEARN_MCP_REPO` | upstream repo | Override for forks. |
+| `NTULEARN_MCP_REQUIRE_SIGNATURE` | — | Set to `1` to refuse unsigned releases. |
 
 ---
 
-## Publishing / secret check
+## Updates
 
-Before pushing to a remote, verify no credentials are in history or the tree:
+The binary checks GitHub for a newer release at most once every 24 hours, and never blocks or breaks
+the server. When one is available you get a one-line notice in the MCP host's log and at the start
+of the session.
 
 ```bash
-git status --short   # no .env / downloads / cookie files staged
-git log --all -p | grep -nE '(BbRouter=|expires:[0-9]{10,},id:|Set-Cookie|ghp_[A-Za-z0-9]{20,})' | grep -viE 'test|example|README' || echo "clean"
+ntulearn-mcp update            # check + prompt before installing
+ntulearn-mcp update --check    # exit 0 = current, 10 = update available
+ntulearn-mcp update --yes      # install without prompting
+ntulearn-mcp update --auto on  # background-install new releases
+ntulearn-mcp update --channel beta   # try prereleases first
 ```
 
-If anything real shows up, do **not** push — scrub it first (rotate the credential, remove it from
-history with filter-repo or an interactive rebase).
+With `--auto on` the server downloads the release in the background, verifies its **sha256 against
+the release's `checksums.txt`**, and atomically swaps the binary — the new version activates when
+your MCP host next restarts the server. Every `checksums.txt` is **minisign-signed** by CI, and the
+public key is committed as [`minisign.pub`](minisign.pub) and baked into the binary, so a tampered
+release is refused. Set `require_signature: true` in `settings.json` to refuse unsigned releases outright. Installs the binary did not make itself (cargo, Homebrew, dev builds) are
+detected and answered with the right update command instead of a self-replace. A Homebrew formula
+template lives in [`packaging/homebrew/`](packaging/homebrew/).
+
+**Cutting a release** (maintainers): bump `rust/Cargo.toml`, tag `v<version>`, push. The workflow
+builds Linux, macOS (arm64 + x64), and Windows binaries, and publishes `checksums.txt` with its
+minisign signature. Tags with a hyphen (e.g. `v0.8.0-rc.1`) publish as prereleases automatically.
 
 ---
 
 ## Troubleshooting
 
-**"No NTULearn cookie found" / tools fail with 401.**
-Run `ntulearn-mcp check` to see the cookie source and live validity, then `ntulearn-mcp setup` to
-re-capture (or paste) a fresh cookie.
-
-**MCP host lists "ntulearn" but tool calls return nothing.**
-Make sure the server is started with the config file present (run `setup` once), and confirm it works
-directly: `target/release/ntulearn-mcp check`.
-
-**Prime Agent lists the server but tools aren't available.**
-Run `/reload` in Prime Agent (or restart it) so settings are re-read.
-
-**`read_file_content` returns "No download URL found" for an item.**
-That content node is not a file (e.g. a text page or tool link). For real attached files use
-`download_file` with a `destination_dir`.
-
-**The server crashes on startup.**
-
-```bash
-rust/target/release/ntulearn-mcp
-```
-
-Most common cause: no cookie resolvable. The error message will guide you (or run `setup`).
+- **"No NTULearn cookie found", or tools fail with 401** — run `ntulearn-mcp check` to see the
+  cookie source and live validity, then `ntulearn-mcp setup` to re-capture one.
+- **MCP host lists the server but tool calls return nothing** — run
+  `rust/target/release/ntulearn-mcp` directly. The usual cause is an unresolvable cookie; the error
+  message will say so.
+- **Prime Agent lists the server but tools aren't available** — run `/reload` (or restart it) so
+  settings are re-read.
+- **`read_file_content` returns "No download URL found"** — that content node is not a file (a text
+  page or tool link, say). Use `download_file` for real attached files.
 
 ---
 
-## Disclaimer & responsible use
+## Development
+
+```bash
+cd rust
+cargo test                              # 53 unit tests
+cargo build --release
+target/release/ntulearn-mcp selfbench   # token + latency + concurrency benchmark
+```
+
+Layout (`rust/crates/ntulearn-mcp/src/`):
+
+```
+main.rs      no args → MCP stdio server; command → CLI; setup/check/refresh
+cli.rs       the 21 commands, compact TSV renderer, `multi` concurrency
+handlers.rs  the 21 tool handlers (shared by MCP server and CLI)
+bench.rs     selfbench + mock Blackboard API
+client.rs    reqwest (HTTP/2, retries, parallel fan-out, singleflight dedup)
+cache.rs     SQLite (WAL, persistent conn) + in-memory TTL cache
+cookie.rs    layered cookie resolution (never keychain)
+setup.rs     setup / check / refresh subcommands
+capture.rs   throwaway-browser CDP cookie capture
+parsers.rs   HTML body → download URL extraction
+render.rs    markdown / csv / ics renderers
+resources.rs course resource template + reader
+prompts.rs   prompt templates
+schemas.rs   tool schemas
+tools.rs     tool definition registry
+```
+
+Before pushing, check that no credential is staged or in history:
+
+```bash
+git status --short
+git log --all -p | grep -nE '(BbRouter=|expires:[0-9]{10,},id:|Set-Cookie|ghp_[A-Za-z0-9]{20,})' | grep -viE 'test|example|README' || echo "clean"
+```
+
+If anything real shows up, do **not** push. Rotate the credential first.
+
+---
+
+## Disclaimer
 
 **Use at your own risk.** This is an unofficial, personal-use tool. It is **not** affiliated with,
-endorsed by, or sponsored by NTU Singapore, Anthology Inc., or Blackboard Learn. NTULearn,
-Blackboard, and related marks belong to their respective owners.
+endorsed by, or sponsored by NTU Singapore, Anthology Inc., or Blackboard Learn.
 
-- **Your account, your responsibility.** Driving the LMS via your session cookie may be inconsistent
-  with NTU's IT acceptable use policy or terms of service. Consult NTU policy if you're unsure.
-- **Your cookie stays local.** The `BbRouter` cookie is read locally and sent only to
-  `ntulearn.ntu.edu.sg`. The author never sees it.
-- **Don't share cookie values.** Anyone with your `BbRouter` can act as you on NTULearn until it expires.
-- **Don't run this on someone else's behalf.** Each user should run their own instance against their own account.
+- **Your account, your responsibility.** Driving the LMS with your session cookie may be
+  inconsistent with NTU's acceptable use policy. Check NTU policy if you are unsure.
+- **Your cookie stays local.** It is read locally and sent only to `ntulearn.ntu.edu.sg`.
+- **Don't share cookie values.** Anyone with your `BbRouter` can act as you until it expires.
+- **Don't run this for someone else.** Each user should run their own instance against their own account.
 
-The MIT license disclaims all warranties — see [LICENSE](LICENSE).
+MIT licensed — see [LICENSE](LICENSE). All warranties are disclaimed.
