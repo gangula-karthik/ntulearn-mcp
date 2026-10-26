@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ntulearn.cookie-refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/karthikgangula/Library/Application Support/ntulearn-mcp/venv/bin/python</string>
+    <string>/Users/karthikgangula/Library/Application Support/ntulearn-mcp/arc_cookie_sync.py</string>
+    <string>--min-remaining</string><string>2700</string>
+  </array>
+  <key>StartInterval</key><integer>900</integer>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/Users/karthikgangula/Library/Application Support/ntulearn-mcp/refresh.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/karthikgangula/Library/Application Support/ntulearn-mcp/refresh.err.log</string>
+</dict>
+</plist>

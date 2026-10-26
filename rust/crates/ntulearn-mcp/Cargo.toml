@@ -25,6 +25,7 @@ scraper.workspace = true
 ammonia.workspace = true
 rusqlite.workspace = true
 dirs.workspace = true
+fs2.workspace = true
 percent-encoding.workspace = true
 sha2.workspace = true
 csv.workspace = true

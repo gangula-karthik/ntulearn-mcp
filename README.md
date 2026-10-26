@@ -25,8 +25,9 @@ cd ntulearn-mcp/rust
 cargo build --release          # binary: rust/target/release/ntulearn-mcp
 ```
 
-Log in once — `setup` opens NTULearn in a throwaway-profile browser and captures your session cookie
-for you. No copy-paste, no devtools, no keychain prompts.
+Log in once — `setup` opens NTULearn in a dedicated browser window and captures your session for
+you. No copy-paste, no devtools, no keychain/password prompts. After that the server renews the
+session silently in the background. (No terminal? Ask your agent to call `ntulearn_login`.)
 
 ```bash
 rust/target/release/ntulearn-mcp setup
@@ -201,17 +202,35 @@ The `BbRouter` cookie is resolved strictly in this order:
 2. Config file at `<config>/ntulearn-mcp/cookie`
 3. Firefox `cookies.sqlite` (read-only, plaintext)
 
-**No keychain access, ever** — no password dialogs, no `security` commands. When NTULearn rejects a
-call with 401, the server re-resolves the cookie, persists a working value, and retries once.
-Refresh is never proactive; it happens on a live 401 or when you run `ntulearn-mcp refresh`.
+**No keychain access, ever** — no password dialogs, no `security` commands. The capture browser is
+launched with `--use-mock-keychain --password-store=basic`, so it never asks macOS Keychain, GNOME
+Keyring or KWallet for anything.
 
-`setup` is the normal first-run path: it validates any existing cookie live, and if there is none,
-opens Chrome/Arc/Brave/Edge/Chromium with a throwaway profile and polls the DevTools protocol for
-your cookie (15-minute login timeout). The captured value is validated against the API before it is
-saved, then the browser and profile are cleaned up. On a headless server with no supported browser,
-it falls back to a one-time paste.
+`setup` (or the `ntulearn_login` tool) is the first-run path. It works with **any** Chromium-based
+browser you have installed — Chrome, Edge, Brave, Arc, Vivaldi, Opera, Chromium — regardless of
+which browser you normally use, and never touches your real browser profile. It opens NTULearn in a
+dedicated profile (`<config>/ntulearn-mcp/capture-profile-v2`), waits for you to log in, validates
+the cookie live, and saves it. Answer **Yes** to "Stay signed in?".
 
-The cookie expires with your NTULearn session (days to weeks). Re-run `setup` when it does.
+After that, sessions renew themselves:
+
+- NTULearn cookies last ~3 h. Before one expires — or when a call hits 401 — the server re-logs in
+  through the saved NTU SSO session in a **headless** browser: no window, no password.
+- SSO session cookies are re-saved with a 30-day lifetime in the dedicated profile, so the silent
+  re-login keeps working across browser and server restarts (NTU's IdP still enforces its own limit).
+- When even the SSO session has ended, the login window opens **by itself** in the background (only
+  on machines that have logged in through the capture flow before — a fresh install never spawns a
+  window unasked). The failing tool returns "a browser login window has just opened"; log in there,
+  and a retry of the same request succeeds — the fresh session is hot-swapped in the moment it lands.
+  At most one window is ever open, no matter how many tools fail while you are away.
+- Browsers never pile up: capture is single-flight **machine-wide** (a cross-process lock covers
+  multiple MCP hosts and the CLI at once), orphaned capture browsers from a killed server are
+  reaped automatically, an unattended login window is not re-opened for 30 min, and when the SSO
+  session is dead all silent sign-in retries back off for 6 h instead of launching headless
+  browsers that cannot succeed.
+
+Each laptop needs its own one-time login. With no Chromium browser at all (or set
+`NTULEARN_BROWSER` to a binary path), `setup` falls back to a one-time paste.
 
 <details>
 <summary>Manual cookie fallback</summary>
@@ -238,6 +257,7 @@ All optional — the defaults work for most users.
 | Env var | Default | Purpose |
 |---|---|---|
 | `NTULEARN_COOKIE` | — | Manual cookie fallback. |
+| `NTULEARN_BROWSER` | auto-detect | Path to a Chromium-based browser binary for login capture. |
 | `NTULEARN_BASE_URL` | `https://ntulearn.ntu.edu.sg` | Change for a different Blackboard instance. |
 | `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` / `download_course`. |
 | `NTULEARN_CACHE_DIR` | `~/.cache/ntulearn-mcp/cache.sqlite3` | SQLite response cache (falls back to in-memory). |
@@ -280,8 +300,10 @@ minisign signature. Tags with a hyphen (e.g. `v0.8.0-rc.1`) publish as prereleas
 
 ## Troubleshooting
 
-- **"No NTULearn cookie found", or tools fail with 401** — run `ntulearn-mcp check` to see the
-  cookie source and live validity, then `ntulearn-mcp setup` to re-capture one.
+- **"Not logged in to NTULearn", or tools fail with 401** — ask your agent to call `ntulearn_login`,
+  or run `ntulearn-mcp setup`. `ntulearn-mcp check` shows the cookie source and live validity.
+- **A macOS "wants to use your confidential information" prompt** — that came from versions before
+  the mock-keychain fix; update, click Deny, and log in once more with `setup`.
 - **MCP host lists the server but tool calls return nothing** — run
   `rust/target/release/ntulearn-mcp` directly. The usual cause is an unresolvable cookie; the error
   message will say so.

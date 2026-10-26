@@ -1,5 +1,5 @@
 
-//! ToolHandler for the 21 NTULearn tools: schema listing + dispatch.
+//! ToolHandler for the 22 NTULearn tools: schema listing + dispatch.
 
 use std::sync::Arc;
 
@@ -40,7 +40,14 @@ impl ToolHandler for NtuToolHandler {
 
     async fn handle_tool_call(&self, call: ToolCall) -> MCPResult<ToolResult> {
         let args = call.arguments.unwrap_or_default();
-        let mut result = match handlers::dispatch(&self.state, &call.name, &args).await {
+        // Login needs the shared Arc: the capture may outlive this call while
+        // the user is still typing their password.
+        let outcome = if call.name == "ntulearn_login" {
+            handlers::login(self.state.clone(), &args).await.map(|t| vec![ToolContent::text(t)])
+        } else {
+            handlers::dispatch(&self.state, &call.name, &args).await
+        };
+        let mut result = match outcome {
             Ok(contents) => content_result(contents),
             Err(msg) => err_result(msg),
         };

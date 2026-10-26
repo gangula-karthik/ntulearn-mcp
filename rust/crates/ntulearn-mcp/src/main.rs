@@ -112,11 +112,29 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let state = build_state().await?;
+
+    // Freshly captured cookies (401 self-heal login window, background
+    // re-capture) are hot-swapped into the live client the moment they land,
+    // so the agent's retry succeeds without another round trip.
+    {
+        let state_for_hook = state.clone();
+        crate::capture::set_install_hook(Box::new(move |val: String| {
+            let state = state_for_hook.clone();
+            tokio::spawn(async move {
+                state.client.install_cookie(&val).await;
+            });
+        }));
+    }
+
     if state.client.cookie_is_empty() {
-        eprintln!(
-            "WARNING: no BbRouter cookie found. Set NTULEARN_COOKIE (or log into NTULearn \
-             in a supported browser). Authenticated calls will return 401."
-        );
+        if capture::capture_profile_ready() {
+            eprintln!("ntulearn-mcp: no current session; signing in silently with the saved NTU login.");
+        } else {
+            eprintln!(
+                "WARNING: not logged in to NTULearn. Run `ntulearn-mcp setup` once, or ask \
+                 your agent to call the ntulearn_login tool."
+            );
+        }
     }
 
     let info = ServerInfo {
@@ -168,14 +186,55 @@ async fn main() -> anyhow::Result<()> {
     // nearly expired, hot-swap to a fresher one (a signed-in Firefox profile's
     // cookies.sqlite is the usual auto-source). Long-lived server processes
     // never surface a 401 and never need a manual `setup` re-run.
+    //
+    // When no source has a live cookie, fall back to a SILENT re-capture: the
+    // persistent capture profile holds the NTU SSO session, so a headless
+    // browser re-authenticates through SSO with no window and no prompt. It
+    // never opens a visible window — when the SSO session itself has expired,
+    // the next tool call returns an error telling the agent to call
+    // ntulearn_login. Guarded by the known-good marker so a fresh install never
+    // launches a browser, and rate-limited to one attempt per 30 min. When the
+    // silent sign-in times out, a machine-wide backoff marker stops every
+    // process from retrying for 6 h (no headless-browser churn while nobody
+    // can log in).
     {
         let state = state.clone();
         tokio::spawn(async move {
             let threshold_secs = 45 * 60; // start refreshing under 45 min left
+            let base = std::env::var("NTULEARN_BASE_URL")
+                .unwrap_or_else(|_| BASE_URL.to_string());
             let mut tick = tokio::time::interval(Duration::from_secs(60));
+            let mut last_capture: Option<std::time::Instant> = None;
             loop {
                 tick.tick().await;
                 state.client.proactively_refresh(threshold_secs).await;
+
+                let current = state.client.current_cookie_value().await;
+                let needs_capture = current.is_empty()
+                    || cookie::should_refresh(&current, threshold_secs);
+                if !needs_capture
+                    || !capture::capture_profile_ready()
+                    || capture::silent_capture_futile()
+                {
+                    continue;
+                }
+                let cooled_down = last_capture
+                    .map(|t| t.elapsed() >= Duration::from_secs(30 * 60))
+                    .unwrap_or(true);
+                if !cooled_down {
+                    continue;
+                }
+                last_capture = Some(std::time::Instant::now());
+                tracing::info!("cookie nearly expired and no live source; silent re-capture starting");
+                match capture::capture_cookie(&base, capture::CaptureMode::Silent, true).await {
+                    Ok((val, browser)) => {
+                        state.client.install_cookie(&val).await;
+                        tracing::info!("auto re-capture via {browser} succeeded; session healed");
+                    }
+                    Err(e) => {
+                        tracing::warn!("auto re-capture failed: {e}");
+                    }
+                }
             }
         });
     }
