@@ -25,6 +25,7 @@ scraper = "0.23"
 ammonia = "4"
 rusqlite = { version = "0.37", features = ["bundled"] }
 dirs = "6"
+fs2 = "0.4"
 percent-encoding = "2"
 sha2 = { version = "0.10", features = ["std"] }
 csv = "1"

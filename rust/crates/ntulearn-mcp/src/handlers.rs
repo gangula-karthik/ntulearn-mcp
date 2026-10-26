@@ -110,6 +110,80 @@ pub async fn dispatch_value(state: &AppState, name: &str, args: &Value) -> Resul
     Ok(out)
 }
 
+/// How long `ntulearn_login` blocks before handing back to the agent; many
+/// MCP hosts time tool calls out after ~60 s.
+const LOGIN_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// `ntulearn_login`: validate the current session, else run an interactive
+/// capture (silent SSO first, then a visible login window). The capture runs
+/// in its own task so it survives this call returning early; the fresh cookie
+/// is installed into the live client whenever it lands.
+pub async fn login(state: std::sync::Arc<AppState>, args: &Value) -> Result<String, String> {
+    let force = bool_arg(args, "force", false);
+    let base = state.client.base_url().to_string();
+
+    if !force {
+        let mut current = state.client.current_cookie_value().await;
+        if current.is_empty() {
+            // Pick up a cookie that appeared since startup (written by
+            // `setup`, `refresh`, another server process, or a background
+            // capture) before opening any window.
+            if let Some(v) = crate::cookie::resolve_cookie() {
+                state.client.install_cookie(&v).await;
+                current = v;
+            }
+        }
+        if !current.is_empty() && crate::setup::validates_live(&base, &current).await == Ok(true) {
+            return Ok(json!({ "status": "already_logged_in" }).to_string());
+        }
+    }
+    if !crate::capture::browser_available() {
+        return Err("No Chromium-based browser (Chrome, Edge, Brave, Arc, Vivaldi, Opera) found, so \
+                    the login window cannot open. Ask the user to run `ntulearn-mcp setup` in a \
+                    terminal, which offers a manual cookie paste."
+            .to_string());
+    }
+
+    // One login window at a time: if a capture is already running (a previous
+    // ntulearn_login still waiting, or the 401 self-heal path having opened a
+    // window), report that instead of opening another.
+    let Some(claim) = crate::capture::try_claim_interactive() else {
+        return Ok(json!({
+            "status": "waiting_for_user",
+            "message": "A NTULearn login window is already open. Ask the user to log in with \
+                        their NTU account there (answer Yes to 'Stay signed in?'). The window \
+                        closes by itself when done; call ntulearn_login again to confirm."
+        })
+        .to_string());
+    };
+
+    let task = tokio::spawn({
+        let state = state.clone();
+        async move {
+            let _claim = claim;
+            let res = crate::capture::capture_cookie(&base, crate::capture::CaptureMode::Interactive, true).await;
+            if let Ok((val, _)) = &res {
+                state.client.install_cookie(val).await;
+            }
+            res
+        }
+    });
+    match tokio::time::timeout(LOGIN_WAIT, task).await {
+        Ok(Ok(Ok((_, browser)))) => Ok(json!({ "status": "logged_in", "browser": browser }).to_string()),
+        Ok(Ok(Err(e))) => Err(format!(
+            "Login did not complete: {e}. Ask the user to run `ntulearn-mcp setup` in a terminal."
+        )),
+        Ok(Err(e)) => Err(format!("login task failed: {e}")),
+        Err(_) => Ok(json!({
+            "status": "waiting_for_user",
+            "message": "A NTULearn login window is open. Ask the user to log in with their NTU \
+                        account there (answer Yes to 'Stay signed in?'). The window closes by \
+                        itself when done; then call ntulearn_login again to confirm."
+        })
+        .to_string()),
+    }
+}
+
 /// Route a tool name + JSON args to the right handler, then render (MCP path).
 pub async fn dispatch(
     state: &AppState,

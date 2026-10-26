@@ -160,14 +160,18 @@ async fn run_setup_inner() -> i32 {
     // Pass 2: try the fully-automatic capture first (Chromium CDP). The user
     // only logs in; we never need a paste.
     println!("No valid working cookie yet.");
-    if let Ok((val, browser)) = crate::capture::capture_cookie(&base).await {
-        persist(&val);
-        println!("Auto-captured a live session cookie via {browser} and saved it.");
-        println!();
-        println!("You are ready to use ntulearn-mcp (no changes needed).");
-        return 0;
+    match crate::capture::capture_cookie(&base, crate::capture::CaptureMode::Interactive, false).await {
+        Ok((val, browser)) => {
+            persist(&val);
+            println!("Logged in via {browser} and saved your session.");
+            println!();
+            println!("You are ready to use ntulearn-mcp. From now on the server renews the");
+            println!("session by itself in the background — you should not need `setup` again");
+            println!("on this machine unless you log out of NTU SSO.");
+            return 0;
+        }
+        Err(e) => println!("Automatic login was not available ({e}); falling back to manual paste.\n"),
     }
-    println!("Automatic capture was not available; falling back to manual paste.\n");
 
     // Pass 2b: walk the user through getting a fresh cookie by hand.
     println!("How to get one quickly:");
@@ -263,9 +267,22 @@ pub async fn run_refresh() -> i32 {
                 Ok(false) => {
                     println!("Current cookie is expired (401). No newer one available from \
                               env / config file / Firefox.");
-                    println!("Run `ntulearn-mcp setup` to re-capture a fresh cookie (auto-login \
-                              browser, or paste). Or set a fresh NTULEARN_COOKIE and run `refresh` again.");
-                    1
+                    println!("Trying automatic re-capture (persistent profile, usually silent \
+                              via your saved NTU SSO session)...");
+                    match crate::capture::capture_cookie(&base, crate::capture::CaptureMode::Interactive, false).await {
+                        Ok((val, browser)) => {
+                            persist(&val);
+                            println!("Auto-captured a fresh session cookie via {browser} ✅");
+                            println!("\nYou are ready to use ntulearn-mcp.");
+                            0
+                        }
+                        Err(e) => {
+                            println!("Auto-capture did not succeed: {e}");
+                            println!("Run `ntulearn-mcp setup` to log in again, or set a fresh \
+                                      NTULEARN_COOKIE and run `refresh` again.");
+                            1
+                        }
+                    }
                 }
                 Err(e) => {
                     println!("Could not reach {base}: {e}. Nothing changed.");

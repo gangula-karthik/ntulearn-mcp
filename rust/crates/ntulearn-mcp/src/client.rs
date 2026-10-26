@@ -8,7 +8,9 @@
 //! * per-method TTL caching via the SQLite-backed DataCache, keys scoped to the
 //!   user (sha256(cookie)[:16], matching Python);
 //! * 401 -> invalidate this user's cache, re-resolve cookie once, retry once
-//!   (never touches the OS keychain; browser reads are sqlite-only);
+//!   (never touches the OS keychain; browser reads are sqlite-only), then
+//!   escalate: silent re-login via the saved SSO session, and finally a
+//!   background login window (when the capture profile is known-good);
 //! * cursor pagination via `paging.nextPage`.
 
 use std::sync::Arc;
@@ -22,11 +24,20 @@ use crate::cookie;
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error(
-        "Blackboard session cookie has expired (HTTP 401). Open NTULearn in your \
-         browser, copy the new BbRouter cookie value, update NTULEARN_COOKIE, and \
-         restart the MCP server."
+        "Not logged in to NTULearn (session expired, HTTP 401). Call the ntulearn_login \
+         tool: it opens a browser window where the user logs in with their NTU account, \
+         then retry this request. (From a terminal: `ntulearn-mcp setup`.)"
     )]
     Auth,
+    /// 401 recovery escalated: a visible login window was opened in the
+    /// background (the user has logged in via the capture flow before).
+    #[error(
+        "Not logged in to NTULearn (session expired, HTTP 401). A browser login window has just \
+         opened for the user — ask them to log in with their NTU account there (answering Yes to \
+         'Stay signed in?' makes future renewals automatic); the window closes by itself. Then \
+         retry this request: the fresh session is picked up automatically."
+    )]
+    AuthWindowOpen,
     #[error("Blackboard API {status} {class}{path_desc} {hint}Body: {body}")]
     Api {
         status: u16,
@@ -35,7 +46,7 @@ pub enum ClientError {
         hint: String,
         body: String,
     },
-    #[error("no BbRouter cookie available (set NTULEARN_COOKIE to your Blackboard session cookie, or log into NTULearn in Firefox)")]
+    #[error("Not logged in to NTULearn. Call the ntulearn_login tool (opens a browser login window), or run `ntulearn-mcp setup` in a terminal.")]
     NoCookie,
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
@@ -251,6 +262,8 @@ pub struct NTULearnClient {
     /// `multi` command running `courses` twice at once) so N racing callers
     /// trigger one HTTP request, not N. Keyed like the data cache.
     in_flight: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Last silent re-capture attempted from the 401 path (rate limit).
+    last_silent_capture: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 
@@ -275,6 +288,7 @@ impl NTULearnClient {
             cache: Arc::new(DataCache::open().expect("test cache")),
             user_scope: String::new(),
             in_flight: Default::default(),
+            last_silent_capture: Default::default(),
         }
     }
 
@@ -314,6 +328,7 @@ impl NTULearnClient {
         let refresh = Some(Box::new(cookie::resolve_cookie) as Box<dyn Fn() -> Option<String> + Send + Sync>);
         Ok(NTULearnClient {
             in_flight: Default::default(),
+            last_silent_capture: Default::default(),
             http,
             no_redirect,
             external,
@@ -334,6 +349,62 @@ impl NTULearnClient {
 
     async fn set_cookie(&self, value: String) {
         self.cookie.lock().await.value = value;
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Last-resort 401 recovery: a headless re-login through the saved NTU SSO
+    /// session (no window, no prompt). Rate-limited to one attempt per 10 min
+    /// so a genuinely expired SSO session fails fast instead of stalling every
+    /// call. Returns the fresh cookie on success.
+    async fn silent_recapture(&self) -> Option<String> {
+        if !crate::capture::capture_profile_ready() {
+            return None;
+        }
+        // A recent attempt already proved the saved session dead; do not
+        // launch another headless browser until a human logs in again.
+        if crate::capture::silent_capture_futile() {
+            return None;
+        }
+        {
+            let mut last = self.last_silent_capture.lock().ok()?;
+            if last.is_some_and(|t| t.elapsed() < Duration::from_secs(10 * 60)) {
+                return None;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        match crate::capture::capture_cookie(&self.base_url, crate::capture::CaptureMode::Silent, true).await {
+            Ok((val, browser)) => {
+                tracing::info!("401 healed by silent re-login via {browser}");
+                Some(val)
+            }
+            Err(e) => {
+                tracing::warn!("silent re-login after 401 failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Current in-memory cookie value (for external maintenance loops).
+    pub async fn current_cookie_value(&self) -> String {
+        self.current_cookie().await
+    }
+
+    /// Install a freshly captured cookie: validate the shape, persist it to
+    /// the config file, and hot-swap the in-memory value. Future requests in
+    /// this process use it immediately.
+    pub async fn install_cookie(&self, value: &str) {
+        let mut v = value.trim().to_string();
+        if let Some(rest) = v.strip_prefix("BbRouter=") {
+            v = rest.to_string();
+        }
+        if !v.starts_with("expires:") || !cookie::is_useful(&v) {
+            return;
+        }
+        cookie::write_cookie(&v);
+        self.set_cookie(v).await;
     }
 
     /// Proactive session maintenance: when the in-memory cookie is within
@@ -400,9 +471,13 @@ impl NTULearnClient {
             if status == 401 {
                 self.cache.invalidate_user(&self.user_scope);
                 if attempt == 1 {
-                    let new_cookie = {
+                    let resolved = {
                         let g = self.cookie.lock().await;
                         g.refresh.as_ref().and_then(|f| f())
+                    };
+                    let new_cookie = match resolved {
+                        Some(nc) if nc != cookie => Some(nc),
+                        _ => self.silent_recapture().await,
                     };
                     if let Some(nc) = new_cookie {
                         if nc != self.current_cookie().await {
@@ -429,6 +504,16 @@ impl NTULearnClient {
                                 }
                             }
                         }
+                    }
+                    // Final self-heal: the user has logged in through the
+                    // capture flow before (profile known-good), so open the
+                    // login window right now in the background instead of
+                    // bouncing the agent through ntulearn_login first. The
+                    // fresh cookie is hot-swapped in by the install hook the
+                    // moment the user logs in, and a retry of this very
+                    // request then succeeds.
+                    if crate::capture::spawn_interactive_background(self.base_url.clone()) {
+                        return Err(ClientError::AuthWindowOpen);
                     }
                 }
                 return Err(ClientError::Auth);

@@ -7,7 +7,7 @@ use ultrafast_mcp::{Tool, ToolAnnotations};
 /// calls clone from here — no schema reconstruction or re-parsing per request.
 static TOOL_CATALOG: OnceLock<Vec<Tool>> = OnceLock::new();
 
-/// All 21 NTULearn tool definitions with their exact input schemas.
+/// All 22 NTULearn tool definitions with their exact input schemas.
 ///
 /// Built **once** and cached in a `OnceLock`, so every `tools/list` (tool
 /// discovery) is an O(1) cache hit instead of reconstructing all schemas and
@@ -312,7 +312,20 @@ fn build_tool_catalog() -> Vec<Tool> {
             idempotent_hint: Some(true),
             open_world_hint: Some(true),
         })
-        
+
+        ,
+        Tool::new(
+            r####"ntulearn_login"####.to_string(),
+            r####"Log in to NTULearn. Call this when another ntulearn_* tool reports 'Not logged in' / HTTP 401, or before first use. If a saved NTU login exists it renews the session silently; otherwise it opens a browser window where the USER must log in with their NTU account — tell them to do so (and to answer Yes to 'Stay signed in?'). Note: when a tool fails with 401 and says a login window 'has just opened', the window is already up — just wait for the user to log in, then retry that tool (no need to call this first). Returns once logged in, or after ~45 s with status 'waiting_for_user' while the window stays open; then call it again to confirm. Example: ntulearn_login()"####.to_string(),
+            json!({"type":"object","properties":{"force":{"type":"boolean","description":"Log in again even if the current session is still valid.","default":false}},"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"Log in to NTULearn"####.to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
         ,
     ]
 }
@@ -328,7 +341,7 @@ mod discovery_quality {
     #[test]
     fn every_tool_is_intern_test_ready() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 21, "tool surface changed; update this test");
+        assert_eq!(tools.len(), 22, "tool surface changed; update this test");
         for t in &tools {
             assert!(!t.name.is_empty(), "tool name empty");
             assert!(
