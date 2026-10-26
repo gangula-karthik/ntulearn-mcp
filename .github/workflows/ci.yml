@@ -1,0 +1,32 @@
+name: ci
+
+# Continuous integration: build + unit tests on every push and PR.
+# The release workflow (release.yml) builds the self-update artifacts on the
+# same runner set; this catches platform-specific compile/test breakage
+# (see the v0.6.0 Windows-only failure) before a release is cut.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    name: test ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build
+        run: cargo build --locked --all-targets
+        working-directory: rust
+      - name: Test
+        run: cargo test --locked
+        working-directory: rust
