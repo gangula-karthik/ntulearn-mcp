@@ -121,7 +121,14 @@ pub async fn run_setup() -> i32 {
     // Ctrl+C during capture cancels the in-flight capture future, which drops
     // `Launched` (RAII) and cleans up the throwaway browser + temp profile.
     tokio::select! {
-        code = run_setup_inner() => code,
+        code = run_setup_inner() => {
+            // On success, offer the one-time opt-ins (auto-update, issue
+            // auto-filing) while we have an interactive terminal.
+            if code == 0 {
+                crate::update::maybe_offer_optins();
+            }
+            code
+        }
         _ = tokio::signal::ctrl_c() => {
             eprintln!("\nInterrupted. Cancelling capture and cleaning up.\nYou can run `ntulearn-mcp setup` again anytime.");
             130
