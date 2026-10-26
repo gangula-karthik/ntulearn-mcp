@@ -14,8 +14,8 @@
 class NtulearnMcp < Formula
   desc "NTULearn Blackboard REST MCP server + agent-first CLI (Rust)"
   homepage "https://github.com/gangula-karthik/ntulearn-mcp"
-  url "https://github.com/gangula-karthik/ntulearn-mcp/releases/download/v0.7.1/ntulearn-mcp-aarch64-apple-darwin.tar.gz"
-  version "0.7.1"
+  url "https://github.com/gangula-karthik/ntulearn-mcp/releases/download/v0.7.2/ntulearn-mcp-aarch64-apple-darwin.tar.gz"
+  version "0.7.2"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000" # replace on release
   license "MIT"
 

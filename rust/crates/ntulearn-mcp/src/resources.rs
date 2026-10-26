@@ -5,11 +5,10 @@
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use ultrafast_mcp::{
-    types::resources::{ListResourceTemplatesRequest, ListResourceTemplatesResponse},
-    types::roots::{Root, RootOperation},
-    ListResourcesRequest, ListResourcesResponse, MCPResult, ReadResourceRequest,
-    ReadResourceResponse, ResourceContent, ResourceHandler, ResourceTemplate,
+use crate::mcp::{
+    ListResourceTemplatesRequest, ListResourceTemplatesResponse, ListResourcesRequest,
+    ListResourcesResponse, MCPResult, ReadResourceRequest, ReadResourceResponse,
+    ResourceContent, ResourceHandler, ResourceTemplate,
 };
 
 use crate::AppState;
@@ -98,12 +97,4 @@ impl ResourceHandler for NtuResourceHandler {
         })
     }
 
-    async fn validate_resource_access(
-        &self,
-        _uri: &str,
-        _operation: RootOperation,
-        _roots: &[Root],
-    ) -> MCPResult<()> {
-        Ok(())
-    }
 }

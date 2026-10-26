@@ -798,9 +798,8 @@ pub async fn run_one(state: &Arc<AppState>, inv: &Invocation) -> Result<String, 
             handlers::dispatch(state, &format!("ntulearn_{}", inv.spec.short), &args).await?;
         let text: Vec<String> = rendered
             .into_iter()
-            .filter_map(|c| match c {
-                ultrafast_mcp::ToolContent::Text { text } => Some(text),
-                _ => None,
+            .map(|c| match c {
+                crate::mcp::ToolContent::Text { text } => text,
             })
             .collect();
         return Ok(text.join("\n"));

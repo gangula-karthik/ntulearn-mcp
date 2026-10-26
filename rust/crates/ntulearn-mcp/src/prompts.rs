@@ -2,10 +2,9 @@
 //! PromptHandler: the two built-in templates (weekly brief + assignment triage),
 //! ported 1:1 from the Python server.
 
-use ultrafast_mcp::{
-    types::prompts::PromptMessage,
+use crate::mcp::{
     GetPromptRequest, GetPromptResponse, ListPromptsRequest, ListPromptsResponse, MCPResult,
-    Prompt, PromptArgument, PromptContent, PromptHandler, PromptRole,
+    Prompt, PromptArgument, PromptContent, PromptHandler, PromptMessage, PromptRole,
 };
 
 fn iso_offset(days: i64) -> String {

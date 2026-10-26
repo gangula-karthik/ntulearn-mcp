@@ -9,9 +9,9 @@ Point any MCP host (Claude Desktop, Claude Code, Cursor, Cline, Prime Agent) at 
 courses, announcements, calendar, and grades — and to organise course files into a folder hierarchy
 on disk.
 
-The shipped server is a **single Rust binary** built on
-[`ultrafast-mcp`](https://github.com/techgopal/ultrafast-mcp), with 21 tools, 2 prompt templates, and
-a course-resource URI. No Python, no pip, no virtualenv.
+The shipped server is a **single small Rust binary** with a built-in minimal MCP stdio
+implementation (no heavyweight framework — see [the dependency diet](#a-single-small-binary)),
+22 tools, 2 prompt templates, and a course-resource URI. No Python, no pip, no virtualenv.
 
 **Website:** <https://ntulearn-mcp.krtk.app>
 
@@ -148,7 +148,8 @@ ntulearn-mcp multi "courses" "announcements --since 2026-01-01" "grades"
 
 TOON ([Token-Oriented Object Notation](https://github.com/toon-format/toon), spec v4.1) declares
 array shapes once and drops repeated keys, so the savings scale with how tabular the payload is.
-Every MCP tool accepts `response_format: "toon"` too.
+Every MCP tool accepts `response_format: "json"` or `"markdown"` too — and as of v0.7.2
+**TOON is the default for MCP tool responses** (the CLI keeps its compact-TSV default).
 
 ---
 
@@ -180,7 +181,8 @@ Every MCP tool accepts `response_format: "toon"` too.
 | `ntulearn_export_gradebook_csv` | Export your gradebook as a CSV string. |
 | `ntulearn_summarize_course` | Briefing for one course: instructors, upcoming, announcements, grades, top folders. |
 
-Read-only tools default to `response_format='json'`; pass `'markdown'` for a readable summary.
+Read-only tools default to `response_format='toon'` (token-optimized); pass `'json'` for structured
+data or `'markdown'` for a readable summary.
 List-returning tools accept `limit`/`offset`. A resource URI,
 `ntulearn://courses/{course_id}`, returns a JSON course briefing, and two prompts
 (`ntulearn-weekly-brief`, `ntulearn-assignment-triage`) chain the tools for you.
@@ -359,6 +361,22 @@ minisign signature. Tags with a hyphen (e.g. `v0.8.0-rc.1`) publish as prereleas
   report automatically.
 
 ---
+
+## A single small binary
+
+The server has no heavyweight framework behind it: the MCP stdio transport is
+~450 lines of in-tree JSON-RPC (`src/mcp.rs`) over tokio, reqwest does the REST
+calls (rustls, gzip only), and rusqlite backs the TTL cache and Firefox cookie
+reads. As of v0.7.2:
+
+| Metric | v0.7.1 | v0.7.2 |
+|---|---|---|
+| Crates compiled | 383 | **277** |
+| Release binary | 16.4 MB | **5.7 MB** |
+| Cold `cargo build --release` | minutes (brotli + ring C toolchains in the graph) | **~64 s** on an M-series laptop |
+
+`selfbench` confirms zero runtime regression: warm dispatch ~0.1 ms, cold
+mock-RTT numbers unchanged (see "Why the CLI" above).
 
 ## Development
 

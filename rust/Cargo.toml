@@ -3,13 +3,13 @@ resolver = "2"
 members = ["crates/ntulearn-mcp"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/gangula-karthik/ntulearn-mcp"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "process", "fs", "io-std", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: TOON + JSON outputs must preserve field encounter order
 # (spec §8), and construction order is the natural key order everywhere.
@@ -17,8 +17,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 anyhow = "1"
 thiserror = "2"
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "http2", "rustls-tls", "gzip", "brotli", "deflate"] }
-regex = "1"
+# http2/brotli/deflate dropped: the Blackboard REST API is plain gzip'd http1.1;
+# each pulled a C-compiled crate (brotli) or the whole h2 stack for nothing.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 scraper = "0.23"
@@ -33,9 +34,16 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
-ultrafast-mcp = { version = "202506018.1.0", features = ["http"] }
 semver = "1"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 minisign-verify = "0.2"
+
+[profile.release]
+# Small, fast-to-install binaries. The server is network-bound, so size
+# optimization costs nothing measurable at runtime (selfbench-verified).
+strip = true
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
