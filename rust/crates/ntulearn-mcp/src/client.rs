@@ -712,6 +712,22 @@ impl NTULearnClient {
         self.object_with_cache("get_content_item", &path, &[], fields, cache).await
     }
 
+    /// Content item including the `body` HTML. The default `contents` field
+    /// set omits `body`, but `resource/x-bb-document` pages embed their file
+    /// links there; file resolution needs it. Distinct cache namespace
+    /// because the cache key does not cover the requested field set.
+    pub async fn get_content_item_with_body(
+        &self,
+        course_id: &str,
+        content_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
+        let path = format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}");
+        let fields = "id,title,contentHandler,hasChildren,description,modified,body";
+        self.object_with_cache("get_content_item_with_body", &path, &[], Some(fields), cache)
+            .await
+    }
+
     pub async fn get_attachments(&self, course_id: &str, content_id: &str, cache: Option<f64>) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}/attachments");
         self.list_with_cache("get_attachments", &path, &[], None, cache).await
