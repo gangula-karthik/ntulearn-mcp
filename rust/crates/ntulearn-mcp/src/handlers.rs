@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 use serde_json::{json, Map, Value};
-use ultrafast_mcp::ToolContent;
+use crate::mcp::ToolContent;
 
 use crate::client::{ClientError, NTULearnClient};
 use crate::{parsers, render, AppState};
@@ -199,7 +199,7 @@ pub async fn dispatch(
 // Argument + value helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve the optional `response_format` (default "json"). Invalid values are
+/// Resolve the optional `response_format` (default "toon" — token-optimized). Invalid values are
 /// rejected exactly like `common.resolve_response_format`.
 pub fn response_format(args: &Value) -> Result<String, String> {
     let fmt = args
@@ -208,7 +208,7 @@ pub fn response_format(args: &Value) -> Result<String, String> {
             Value::String(s) => s.clone(),
             other => other.to_string(),
         })
-        .unwrap_or_else(|| "json".to_string())
+        .unwrap_or_else(|| "toon".to_string())
         .to_lowercase();
     if fmt != "json" && fmt != "markdown" && fmt != "toon" {
         return Err("response_format must be 'json', 'markdown' or 'toon'".to_string());
@@ -3523,10 +3523,8 @@ fn toon_response_format_accepted_and_rendered() {
     });
     let out = render_for_tool("list_courses", &args, &payload);
     assert_eq!(out.len(), 1);
-    let text = match &out[0] {
-        ToolContent::Text { text } => text.clone(),
-        _ => String::new(),
-    };
+    let ToolContent::Text { text } = &out[0];
+    let text = text.clone();
     assert!(text.starts_with("courses[2]{id,name}:"), "got: {text}");
     assert!(!text.contains("  \""), "should not be pretty JSON: {text}");
 }

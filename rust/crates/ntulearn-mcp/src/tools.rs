@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use ultrafast_mcp::{
+use crate::mcp::{
     ListToolsRequest, ListToolsResponse, MCPResult, ToolCall, ToolContent, ToolHandler,
     ToolResult,
 };

@@ -1,9 +1,9 @@
 
 //! NTULearn MCP server — Blackboard Learn REST API wrapper, Rust edition.
 //!
-//! Built on `ultrafast-mcp` (https://github.com/techgopal/ultrafast-mcp).
-//! Registered as "ntulearn-mcp" with tool/resource/prompt parity with the
-//! original Python implementation.
+//! MCP stdio server implemented in-tree (src/mcp.rs): plain JSON-RPC 2.0 over
+//! newline-delimited stdio. Registered as "ntulearn-mcp" with
+//! tool/resource/prompt parity with the original Python implementation.
 
 #![allow(dead_code)]
 
@@ -15,6 +15,7 @@ mod client;
 mod cookie;
 mod handlers;
 mod issues;
+mod mcp;
 mod parsers;
 mod prompts;
 mod render;
@@ -29,7 +30,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::sync::Arc;
 
-use ultrafast_mcp::{ServerCapabilities, ServerInfo, UltraFastServer};
+use crate::mcp::{McpServer, ServerCapabilities, ServerInfo};
 
 use crate::cache::DataCache;
 use crate::client::NTULearnClient;
@@ -155,16 +156,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let capabilities = ServerCapabilities {
-        tools: Some(ultrafast_mcp::ToolsCapability { list_changed: Some(false) }),
-        resources: Some(ultrafast_mcp::ResourcesCapability {
+        tools: Some(crate::mcp::ToolsCapability { list_changed: Some(false) }),
+        resources: Some(crate::mcp::ResourcesCapability {
             subscribe: Some(false),
             list_changed: Some(false),
         }),
-        prompts: Some(ultrafast_mcp::PromptsCapability { list_changed: Some(false) }),
-        ..Default::default()
+        prompts: Some(crate::mcp::PromptsCapability { list_changed: Some(false) }),
     };
 
-    let server = UltraFastServer::new(info, capabilities)
+    let server = McpServer::new(info, capabilities)
         .with_tool_handler(Arc::new(NtuToolHandler { state: state.clone() }))
         .with_resource_handler(Arc::new(NtuResourceHandler { state: state.clone() }))
         .with_prompt_handler(Arc::new(NtuPromptHandler));
