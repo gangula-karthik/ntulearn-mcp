@@ -262,7 +262,9 @@ All optional — the defaults work for most users.
 | `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` / `download_course`. |
 | `NTULEARN_CACHE_DIR` | `~/.cache/ntulearn-mcp/cache.sqlite3` | SQLite response cache (falls back to in-memory). |
 | `NTULEARN_CACHE_MODE` | `readwrite` | `readwrite`, `readonly`, or `off`. |
-| `NTULEARN_MCP_AUTOUPDATE` | `ask` | `on`, `off`, or `ask`. |
+| `NTULEARN_MCP_AUTOUPDATE` | `on` | `on`, `off`, or `ask`. |
+| `NTULEARN_ISSUE_REPO` | upstream repo | Where unexpected-error issues are filed. |
+| `NTULEARN_ISSUE_REPORTS` | — | Set to `off` to force-disable issue auto-filing. |
 | `NTULEARN_MCP_NO_UPDATE_CHECK` | — | Set to `1` to disable update checks. |
 | `NTULEARN_MCP_UPDATE_INTERVAL_SECS` | 86400 | Check throttle. |
 | `NTULEARN_MCP_REPO` | upstream repo | Override for forks. |
@@ -272,9 +274,19 @@ All optional — the defaults work for most users.
 
 ## Updates
 
-The binary checks GitHub for a newer release at most once every 24 hours, and never blocks or breaks
-the server. When one is available you get a one-line notice in the MCP host's log and at the start
-of the session.
+New releases **auto-install by default**: the binary checks GitHub at most once every 24 hours, and
+when a newer release exists it is downloaded, signature-verified, and atomically swapped in — the
+new version activates when your MCP host next restarts the server. The first interactive
+`setup`/`update` run asks once whether you want this (answer "no" to switch to notify-only), and
+`update --auto off` changes it any time. A one-line notice still appears when an update lands.
+
+```bash
+ntulearn-mcp update            # check + prompt before installing
+ntulearn-mcp update --check    # exit 0 = current, 10 = update available
+ntulearn-mcp update --yes      # install without prompting
+ntulearn-mcp update --auto on  # background-install new releases (default)
+ntulearn-mcp update --channel beta   # try prereleases first
+```
 
 ```bash
 ntulearn-mcp update            # check + prompt before installing
@@ -291,6 +303,33 @@ public key is committed as [`minisign.pub`](minisign.pub) and baked into the bin
 release is refused. Set `require_signature: true` in `settings.json` to refuse unsigned releases outright. Installs the binary did not make itself (cargo, Homebrew, dev builds) are
 detected and answered with the right update command instead of a self-replace. A Homebrew formula
 template lives in [`packaging/homebrew/`](packaging/homebrew/).
+
+---
+
+## Error reporting (opt-in)
+
+The server can **auto-file a GitHub issue** when it keeps hitting the same *unexpected* error — the
+kind that would otherwise only surface as a dead end in some agent's transcript. This is opt-in:
+you are asked once during `setup`/`update`, or toggle it directly:
+
+```bash
+ntulearn-mcp issues on     # opt in
+ntulearn-mcp issues off    # opt out
+ntulearn-mcp issues        # status: enabled, gh availability, filed count
+```
+
+Behavior:
+
+- **Only unexpected errors.** Auth/session expiry, bad arguments, and transient network failures
+  self-heal or are the caller's fault — they are never filed. Parse failures, resolution dead ends
+  ("No download URL found"), and panics are.
+- **Once per error per version.** Errors are normalized to a signature; a signature is filed at
+  most once per binary version (an existing open issue with the same title is detected across
+  machines too).
+- **Public-repo safe.** Course/content IDs, emails, cookie values, and long tokens are redacted
+  before anything leaves the machine.
+- **Needs `gh`.** Filed through the GitHub CLI using your local `gh` auth; no-op when absent.
+  `NTULEARN_ISSUE_REPO` retargets (useful for forks), `NTULEARN_ISSUE_REPORTS=off` force-disables.
 
 **Cutting a release** (maintainers): bump `rust/Cargo.toml`, tag `v<version>`, push. The workflow
 builds Linux, macOS (arm64 + x64), and Windows binaries, and publishes `checksums.txt` with its
@@ -309,8 +348,10 @@ minisign signature. Tags with a hyphen (e.g. `v0.8.0-rc.1`) publish as prereleas
   message will say so.
 - **Prime Agent lists the server but tools aren't available** — run `/reload` (or restart it) so
   settings are re-read.
-- **`read_file_content` returns "No download URL found"** — that content node is not a file (a text
-  page or tool link, say). Use `download_file` for real attached files.
+- **`read_file_content` returns "No download URL found"** — for `x-bb-document` pages this is fixed
+  (the page body's embedded file links are now resolved). If it still happens, the content node is
+  likely not a file at all (a text page or tool link) — and with `issues on` the server files a
+  report automatically.
 
 ---
 

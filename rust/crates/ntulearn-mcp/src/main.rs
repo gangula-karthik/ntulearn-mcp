@@ -14,6 +14,7 @@ mod capture;
 mod client;
 mod cookie;
 mod handlers;
+mod issues;
 mod parsers;
 mod prompts;
 mod render;
@@ -91,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
                 "check" => setup::run_check().await,
                 "refresh" => setup::run_refresh().await,
                 "update" => update::run_update_cli(&argv[1..]).await,
+                "issues" => issues::run_cli(&argv[1..]),
                 "version" | "--version" | "-V" => {
                     println!("ntulearn-mcp {}", update::current_version());
                     std::process::exit(0);
@@ -173,6 +175,12 @@ async fn main() -> anyhow::Result<()> {
     // auto-update ON the new binary is downloaded, checksum-verified, and
     // atomically swapped in; it activates on the next host restart.
     tokio::spawn(update::background_updater(state.update_notice.clone()));
+
+    // Auto-file GitHub issues for unexpected errors (opt-in; see issues.rs).
+    // Recording happens on every tool-call Err path; this task does the
+    // network filing off the hot path. The panic hook files immediately.
+    tokio::spawn(issues::background_reporter());
+    issues::install_panic_hook();
 
     // Pre-warm the static tool catalog before entering the stdio loop so
     // the first `tools/list` (tool discovery) is already a cache hit —

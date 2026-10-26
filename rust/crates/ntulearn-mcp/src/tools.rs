@@ -9,6 +9,7 @@ use ultrafast_mcp::{
 };
 
 use crate::handlers;
+use crate::issues;
 use crate::schemas;
 use crate::AppState;
 
@@ -49,7 +50,12 @@ impl ToolHandler for NtuToolHandler {
         };
         let mut result = match outcome {
             Ok(contents) => content_result(contents),
-            Err(msg) => err_result(msg),
+            Err(msg) => {
+                // Unexpected errors (not auth/input/network) are counted for
+                // the opt-in GitHub issue auto-filer. See issues.rs.
+                issues::record(call.name.trim_start_matches("ntulearn_"), &msg);
+                err_result(msg)
+            }
         };
         // Update notification: appended to the first tool call of the process
         // only (the notice self-clears), throttled to once per day by the

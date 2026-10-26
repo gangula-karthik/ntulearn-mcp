@@ -56,14 +56,16 @@ fn state_path() -> PathBuf {
     config_dir().join("update-state.json")
 }
 
-/// Auto-update preference. Default (`Ask`): notify only, never install.
+/// Auto-update preference. Default (`On`): new releases are downloaded,
+/// signature-verified and atomically swapped in as soon as they appear — the
+/// user asked for "just keep me current". `Off`/`Ask` remain available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AutoUpdate {
     #[default]
-    Ask,
     On,
     Off,
+    Ask,
 }
 
 impl AutoUpdate {
@@ -91,6 +93,14 @@ struct Settings {
     /// happens when it is missing.
     #[serde(default)]
     require_signature: bool,
+    /// Opt-in to GitHub issue auto-filing for unexpected errors
+    /// (see `issues.rs`). Default false: filing to a public repo is a
+    /// consented behavior, offered once during setup/update.
+    #[serde(default)]
+    issue_reports: bool,
+    /// The setup/update opt-in prompt has been shown; never re-ask.
+    #[serde(default)]
+    optin_prompted: bool,
 }
 
 /// Release channel.
@@ -174,6 +184,54 @@ pub fn set_auto_update(mode: AutoUpdate) -> anyhow::Result<()> {
         .with_context(|| format!("writing {}", settings_path().display()))?;
     println!("auto-update: {mode:?} (saved to {})", settings_path().display());
     Ok(())
+}
+
+/// Opt-in state for GitHub issue auto-filing (see `issues.rs`).
+pub fn issue_reports_enabled() -> bool {
+    read_json::<Settings>(&settings_path())
+        .map(|s| s.issue_reports)
+        .unwrap_or(false)
+}
+
+pub fn set_issue_reports(on: bool) -> anyhow::Result<()> {
+    let mut settings = read_json::<Settings>(&settings_path()).unwrap_or_default();
+    settings.issue_reports = on;
+    write_json(&settings_path(), &settings)
+        .with_context(|| format!("writing {}", settings_path().display()))
+}
+
+/// One-time consent flow, offered during `setup` / `update` (interactive
+/// terminals only): auto-update defaults to yes, issue auto-filing to no.
+/// Persists both answers and never asks again.
+pub fn maybe_offer_optins() {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return;
+    }
+    let mut settings = read_json::<Settings>(&settings_path()).unwrap_or_default();
+    if settings.optin_prompted {
+        return;
+    }
+    println!("
+Two quick settings (asked once):");
+    if prompt_default("auto-install new releases when available?", true) {
+        settings.auto_update = AutoUpdate::On;
+    } else {
+        settings.auto_update = AutoUpdate::Off;
+    }
+    if prompt_default(
+        "auto-file GitHub issues when the server hits unexpected errors? (sanitized; needs gh)",
+        false,
+    ) {
+        settings.issue_reports = true;
+    }
+    settings.optin_prompted = true;
+    if write_json(&settings_path(), &settings).is_ok() {
+        println!(
+            "saved to {} (change later: `ntulearn-mcp update --auto on|off|ask`, `ntulearn-mcp issues on|off`)",
+            settings_path().display()
+        );
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -600,18 +658,28 @@ pub async fn install_release(release: &Release) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 fn prompt_yes(question: &str) -> bool {
+    prompt_default(question, false)
+}
+
+/// Terminal prompt where empty input accepts the shown default.
+fn prompt_default(question: &str, default_yes: bool) -> bool {
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
         eprintln!("{question} (stdin is not a terminal — pass --yes to apply)");
         return false;
     }
-    print!("{question} [y/N] ");
+    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
+    print!("{question} {hint} ");
     let _ = std::io::stdout().flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
-        return false;
+        return default_yes;
     }
-    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    match line.trim().to_ascii_lowercase().as_str() {
+        "" => default_yes,
+        "y" | "yes" => true,
+        _ => false,
+    }
 }
 
 pub async fn run_update_cli(argv: &[String]) -> i32 {
@@ -677,6 +745,12 @@ pub async fn run_update_cli(argv: &[String]) -> i32 {
         if status_only || check_only {
             return 0;
         }
+    }
+
+    // One-time consent prompts (auto-update / issue filing), interactive
+    // terminals only. Skipped when --auto was just set explicitly.
+    if auto.is_none() {
+        maybe_offer_optins();
     }
 
     if status_only {
@@ -899,6 +973,8 @@ mod tests {
             auto_update: AutoUpdate::On,
             channel: Channel::Beta,
             require_signature: true,
+            issue_reports: true,
+            optin_prompted: true,
         };
         write_json(&path, &settings).unwrap();
         let back: Settings = read_json(&path).unwrap();
