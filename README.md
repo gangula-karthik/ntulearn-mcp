@@ -71,6 +71,11 @@ Measured with the built-in benchmark (`ntulearn-mcp selfbench`):
 | Discovery tokens (per conversation) | 6,639 (every turn) | 586 (once, on demand) | **11.3x** |
 | Task output tokens (4-task suite) | 2,193 | 492 (compact TSV) | **4.5x** |
 | 10-turn conversation model | ~68,583 tok | ~1,078 tok | **63.6x** |
+
+Latency (mock API, 25 ms RTT, cold cache): all-courses tools fetch every enrolled course
+**concurrently** (bounded at 6 in flight) instead of one-by-one — `announcements` across 6 courses
+214 ms → 61 ms, the `whats_new` digest 703 ms → 147 ms; multi-file `download_file` fetches files in
+parallel too. Real-world effect scales with course count (a 44-course `whats_new` completes in ~2 s).
 | `courses` cold (2 RTTs, 25ms mock) | — | 59ms | **3.4x** vs v0.3 |
 | `courses` warm (SQLite cache) | — | 82µs | — |
 | 4 commands concurrently (`multi`) | 225ms sequential | 59ms (singleflight-deduped) | **3.8x** |
