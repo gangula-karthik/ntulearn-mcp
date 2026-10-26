@@ -1967,7 +1967,13 @@ async fn resolve_content_files(
     course_id: &str,
     content_id: &str,
 ) -> (Value, Option<String>, Vec<(String, Option<String>)>) {
-    let item = content_item(c, course_id, content_id).await.unwrap_or_else(|_| json!({}));
+    // Body-inclusive fetch: x-bb-file attachments cover files, but every
+    // other handler type (e.g. resource/x-bb-document pages) embeds its file
+    // links in the body HTML, which the default contents field set omits.
+    let item = c
+        .get_content_item_with_body(course_id, content_id, None)
+        .await
+        .unwrap_or_else(|_| json!({}));
     let handler_id = item
         .get("contentHandler")
         .and_then(|h| h.get("id"))
