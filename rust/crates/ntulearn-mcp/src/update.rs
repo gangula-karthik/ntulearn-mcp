@@ -1010,6 +1010,10 @@ mod tests {
                     browser_download_url: "http://x/mac".into(),
                 },
                 Asset {
+                    name: "ntulearn-mcp-x86_64-pc-windows-msvc.zip".into(),
+                    browser_download_url: "http://x/win".into(),
+                },
+                Asset {
                     name: "checksums.txt".into(),
                     browser_download_url: "http://x/sums".into(),
                 },
@@ -1030,7 +1034,10 @@ mod tests {
         header.set_size(payload.len() as u64);
         header.set_mode(0o755);
         header.set_cksum();
-        builder.append_data(&mut header, "ntulearn-mcp", &payload[..]).unwrap();
+        // extract_binary looks for the platform exe name, so the fixture must
+        // carry it too (this is exactly what the Windows runners caught).
+        let exe_name = if cfg!(windows) { "ntulearn-mcp.exe" } else { "ntulearn-mcp" };
+        builder.append_data(&mut header, exe_name, &payload[..]).unwrap();
         let raw = builder.into_inner().unwrap();
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         gz.write_all(&raw).unwrap();
