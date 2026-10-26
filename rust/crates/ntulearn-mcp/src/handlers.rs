@@ -735,6 +735,27 @@ async fn calendar_items(
     Ok(as_list(v))
 }
 
+/// Max concurrent requests when a tool fans out across courses or files.
+/// 6 keeps the server polite (parallel speedup without hammering Blackboard).
+const FANOUT_CONCURRENCY: usize = 6;
+
+/// Run an async fn over items with bounded concurrency, returning results in
+/// input order. Failures don't short-circuit — callers decide per result.
+/// This is the fan-out primitive behind every all-courses tool: N courses
+/// used to cost N round-trips serially; now they cost ceil(N/limit) waves.
+async fn bounded_map<T, R, F, Fut>(items: Vec<T>, limit: usize, f: F) -> Vec<R>
+where
+    F: FnMut(T) -> Fut,
+    Fut: std::future::Future<Output = R>,
+{
+    use futures_util::stream::StreamExt;
+    futures_util::stream::iter(items)
+        .map(f)
+        .buffered(limit)
+        .collect()
+        .await
+}
+
 /// fan_out_course_ids — resolve `course_ids` arg (None/empty -> enrolled+available).
 async fn fan_out_course_ids(c: &NTULearnClient, course_ids_arg: Option<&Value>) -> Result<Vec<String>, String> {
     let is_none_or_empty_list = match course_ids_arg {
@@ -1378,6 +1399,12 @@ async fn grade_brief(c: &NTULearnClient, course_id: &str, user_id: Option<&str>)
         Ok(cols) => cols,
         Err(_) => return json!({}),
     };
+    // The grades payload is per-course, not per-column — fetch it once
+    // instead of once per column.
+    let grades = match user_id {
+        Some(uid) => user_grades(c, course_id, uid).await.unwrap_or_default(),
+        None => Vec::new(),
+    };
     let mut graded = 0usize;
     let mut total_possible = 0.0f64;
     let mut earned = 0.0f64;
@@ -1387,20 +1414,16 @@ async fn grade_brief(c: &NTULearnClient, course_id: &str, user_id: Option<&str>)
         };
         let possible = column_possible(col);
         total_possible += possible.unwrap_or(0.0);
-        if let Some(uid) = user_id {
-            let grades = user_grades(c, course_id, uid).await.unwrap_or_default();
-            let own = grades
-                .iter()
-                .find(|g| g.get("columnId").and_then(|v| v.as_str()) == Some(col_id));
-            if let Some(own_grade) = own {
-                let score = grade_score(own_grade);
-                if let (Some(sc), Some(ps)) = (score, possible) {
-                    if ps > 0.0 {
-                        graded += 1;
-                        earned += sc;
-                    }
+        let own = grades
+            .iter()
+            .find(|g| g.get("columnId").and_then(|v| v.as_str()) == Some(col_id));
+        if let Some(own_grade) = own {
+            let score = grade_score(own_grade);
+            if let (Some(sc), Some(ps)) = (score, possible) {
+                if ps > 0.0 {
+                    graded += 1;
+                    earned += sc;
                 }
-                continue;
             }
         }
     }
@@ -2125,8 +2148,12 @@ async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String
         return Err(format!("{e}"));
     }
 
+    // Assign unique local filenames first (serial, deterministic), then fetch
+    // the files concurrently — a multi-file week page lands in a fraction of
+    // the wall time. The first failure in file order still fails the call;
+    // other in-flight files may already have been written, same as before.
     let mut used_names: HashSet<String> = HashSet::new();
-    let mut saved: Vec<Value> = Vec::new();
+    let mut plan: Vec<(String, String)> = Vec::with_capacity(pairs.len());
     for (url, detected_filename) in &pairs {
         let filename = match detected_filename {
             Some(f) => f.clone(),
@@ -2146,9 +2173,22 @@ async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String
         let filename = sanitize_filename_quick(&filename);
         let filename = deduplicate_filename(&filename, &used_names, &dest_dir);
         used_names.insert(filename.clone());
+        plan.push((url.clone(), filename));
+    }
 
+    let downloaded = bounded_map(plan, FANOUT_CONCURRENCY, |(url, filename)| {
+        let client = &state.client;
+        async move {
+            let res = client.download_bytes(&url).await;
+            (filename, res)
+        }
+    })
+    .await;
+
+    let mut saved: Vec<Value> = Vec::new();
+    for (filename, res) in downloaded {
         let dest = dest_dir.join(&filename);
-        let (content, _ct) = match state.client.download_bytes(url).await {
+        let (content, _ct) = match res {
             Ok(t) => t,
             Err(e) => return Err(format!("download failed: {e}")),
         };
@@ -2342,15 +2382,26 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
 
     let mut items: Vec<Value> = Vec::new();
     let mut course_errors = Map::new();
-    for cid in &course_ids {
-        match calendar_items(&state.client, Some(cid), since.as_deref(), until.as_deref(), item_type.as_deref()).await {
+    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        let since = since.as_deref();
+        let until = until.as_deref();
+        let item_type = item_type.as_deref();
+        async move {
+            let res = calendar_items(c, Some(&cid), since, until, item_type).await;
+            (cid, res)
+        }
+    })
+    .await;
+    for (cid, res) in per_course {
+        match res {
             Ok(rows) => {
                 for raw in rows {
-                    items.push(strip_calendar_item(&raw, Some(cid)));
+                    items.push(strip_calendar_item(&raw, Some(&cid)));
                 }
             }
             Err(e) => {
-                course_errors.insert(cid.clone(), Value::String(e));
+                course_errors.insert(cid, Value::String(e));
             }
         }
     }
@@ -2397,8 +2448,16 @@ async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, St
 
     let mut rows: Vec<Value> = Vec::new();
     let mut course_errors = Map::new();
-    for cid in &course_ids {
-        match announcements(&state.client, cid).await {
+    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        async move {
+            let res = announcements(c, &cid).await;
+            (cid, res)
+        }
+    })
+    .await;
+    for (cid, anns_res) in per_course {
+        match anns_res {
             Ok(anns) => {
                 for a in anns {
                     let body_raw = a.get("body");
@@ -2481,25 +2540,37 @@ async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String
     if let Some(gfe) = &grade_fetch_error {
         grade_errors.push(gfe.clone());
     }
-    for cid in &course_ids {
-        let columns = match gradebook_columns(&state.client, cid).await {
+    // Fetch (columns, grades) for every course concurrently, then assemble
+    // below in course order.
+    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        let uid = user_id.clone();
+        async move {
+            let columns = gradebook_columns(c, &cid).await;
+            let grades = if let Some(uid) = &uid {
+                user_grades(c, &cid, uid).await
+            } else {
+                Ok(Vec::new())
+            };
+            (cid, columns, grades)
+        }
+    })
+    .await;
+    for (cid, columns_res, grades_res) in per_course {
+        let columns = match columns_res {
             Ok(cols) => cols,
             Err(e) => {
-                course_errors.insert(cid.clone(), Value::String(e));
+                course_errors.insert(cid, Value::String(e));
                 continue;
             }
         };
         let mut per_course_grade_error: Option<String> = None;
-        let grades_raw = if let Some(uid) = &user_id {
-            match user_grades(&state.client, cid, uid).await {
-                Ok(gs) => gs,
-                Err(e) => {
-                    per_course_grade_error = Some(e);
-                    Vec::new()
-                }
+        let grades_raw = match grades_res {
+            Ok(gs) => gs,
+            Err(e) => {
+                per_course_grade_error = Some(e);
+                Vec::new()
             }
-        } else {
-            Vec::new()
         };
         if let Some(pge) = &per_course_grade_error {
             grade_errors.push(pge.clone());
@@ -2809,8 +2880,16 @@ async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, S
     let _fmt = response_format(args)?;
     let mut matches: Vec<Value> = Vec::new();
     let course_errors = Map::new();
-    for cid in &course_ids {
-        let found = search_course(&state.client, cid, &query, max_depth as usize).await;
+    // Deep per-course walks are the slowest fan-out in the toolset — run the
+    // courses concurrently so all-courses searches finish in a fraction of
+    // the wall time.
+    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        let query = query.clone();
+        async move { search_course(c, &cid, &query, max_depth as usize).await }
+    })
+    .await;
+    for found in per_course {
         matches.extend(found);
     }
     if matches.len() > max_results as usize {
@@ -2991,88 +3070,103 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
 
     let mut per_course: Vec<Value> = Vec::new();
     let mut errors: Map<String, Value> = Map::new();
-    for cid in &course_ids {
-        let mut entry = Map::new();
-        entry.insert("courseId".to_string(), Value::String(cid.clone()));
-        // course name
-        match course(&state.client, cid).await {
-            Ok(crs) => {
-                let name = crs
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .or_else(|| crs.get("displayName").and_then(|v| v.as_str()))
-                    .unwrap_or(cid);
-                entry.insert("courseName".to_string(), Value::String(name.to_string()));
-            }
-            Err(e) => {
-                errors.insert(cid.clone(), Value::String(format!("course: {e}")));
-            }
-        }
-        // announcements
-        match announcements(&state.client, cid).await {
-            Ok(anns) => {
-                let mut list = Vec::new();
-                for a in anns {
-                    if !after_value(a.get("created"), &since) {
-                        continue;
-                    }
-                    let mut body = announcement_text(&a);
-                    if body.chars().count() > 500 {
-                        body = body.chars().take(500).collect();
-                    }
-                    list.push(json!({
-                        "id": a.get("id"),
-                        "title": a.get("title"),
-                        "created": a.get("created"),
-                        "body": body,
-                    }));
+    // One digest entry per course = 4 API calls. Courses run concurrently
+    // (bounded); within a course the sources stay sequential and only the
+    // first failure per course is reported, matching the original semantics.
+    let results = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        let since = since.clone();
+        async move {
+            let mut entry = Map::new();
+            entry.insert("courseId".to_string(), Value::String(cid.clone()));
+            let mut first_error: Option<String> = None;
+            // course name
+            match course(c, &cid).await {
+                Ok(crs) => {
+                    let name = crs
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| crs.get("displayName").and_then(|v| v.as_str()))
+                        .unwrap_or(&cid);
+                    entry.insert("courseName".to_string(), Value::String(name.to_string()));
                 }
-                entry.insert("announcements".to_string(), Value::Array(list));
-            }
-            Err(e) => {
-                if !errors.contains_key(cid) {
-                    errors.insert(cid.clone(), Value::String(format!("announcements: {e}")));
+                Err(e) => {
+                    first_error = Some(format!("course: {e}"));
                 }
             }
-        }
-        // calendar
-        match calendar_items(&state.client, Some(cid), Some(&since), None, None).await {
-            Ok(cal) => {
-                let mut list = Vec::new();
-                for i in cal {
-                    if after_value(i.get("start"), &since) {
-                        list.push(calendar_brief(&i));
-                    }
-                }
-                entry.insert("upcoming".to_string(), Value::Array(list));
-            }
-            Err(e) => {
-                if !errors.contains_key(cid) {
-                    errors.insert(cid.clone(), Value::String(format!("calendar: {e}")));
-                }
-            }
-        }
-        // new files (top-level only)
-        match course_contents(&state.client, cid).await {
-            Ok(root) => {
-                let mut list = Vec::new();
-                for item in root {
-                    if is_file_item(&item) && after_value(item.get("modified"), &since) {
+            // announcements
+            match announcements(c, &cid).await {
+                Ok(anns) => {
+                    let mut list = Vec::new();
+                    for a in anns {
+                        if !after_value(a.get("created"), &since) {
+                            continue;
+                        }
+                        let mut body = announcement_text(&a);
+                        if body.chars().count() > 500 {
+                            body = body.chars().take(500).collect();
+                        }
                         list.push(json!({
-                            "id": item.get("id"),
-                            "title": item_title(&item),
-                            "modified": item.get("modified").and_then(|v| v.as_str()).unwrap_or(""),
+                            "id": a.get("id"),
+                            "title": a.get("title"),
+                            "created": a.get("created"),
+                            "body": body,
                         }));
                     }
+                    entry.insert("announcements".to_string(), Value::Array(list));
                 }
-                entry.insert("newFiles".to_string(), Value::Array(list));
-            }
-            Err(e) => {
-                if !errors.contains_key(cid) {
-                    errors.insert(cid.clone(), Value::String(format!("contents: {e}")));
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(format!("announcements: {e}"));
+                    }
                 }
             }
+            // calendar
+            match calendar_items(c, Some(&cid), Some(&since), None, None).await {
+                Ok(cal) => {
+                    let mut list = Vec::new();
+                    for i in cal {
+                        if after_value(i.get("start"), &since) {
+                            list.push(calendar_brief(&i));
+                        }
+                    }
+                    entry.insert("upcoming".to_string(), Value::Array(list));
+                }
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(format!("calendar: {e}"));
+                    }
+                }
+            }
+            // new files (top-level only)
+            match course_contents(c, &cid).await {
+                Ok(root) => {
+                    let mut list = Vec::new();
+                    for item in root {
+                        if is_file_item(&item) && after_value(item.get("modified"), &since) {
+                            list.push(json!({
+                                "id": item.get("id"),
+                                "title": item_title(&item),
+                                "modified": item.get("modified").and_then(|v| v.as_str()).unwrap_or(""),
+                            }));
+                        }
+                    }
+                    entry.insert("newFiles".to_string(), Value::Array(list));
+                }
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(format!("contents: {e}"));
+                    }
+                }
+            }
+            (cid, entry, first_error)
+        }
+    })
+    .await;
+    for (cid, entry, first_error) in results {
+        if let Some(e) = first_error {
+            errors.insert(cid, Value::String(e));
         }
         per_course.push(Value::Object(entry));
     }
@@ -3115,8 +3209,18 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
 
     let mut items: Vec<Value> = Vec::new();
     let mut errors: Map<String, Value> = Map::new();
-    for cid in &course_ids {
-        match calendar_items(&state.client, Some(cid), Some(&since), Some(&until), None).await {
+    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        let since = since.clone();
+        let until = until.clone();
+        async move {
+            let res = calendar_items(c, Some(&cid), Some(&since), Some(&until), None).await;
+            (cid, res)
+        }
+    })
+    .await;
+    for (cid, res) in per_course {
+        match res {
             Ok(cal) => {
                 for mut i in cal {
                     let item_id = i.get("id").and_then(|v| v.as_str()).unwrap_or("x").to_string();
@@ -3128,7 +3232,7 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
                 }
             }
             Err(e) => {
-                errors.insert(cid.clone(), Value::String(e));
+                errors.insert(cid, Value::String(e));
             }
         }
     }
@@ -3151,13 +3255,23 @@ async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value,
     let user_id = me_user_id(&state.client).await.unwrap_or_default();
     let mut rows: Vec<Value> = Vec::new();
     let mut errors: Map<String, Value> = Map::new();
-    for cid in &course_ids {
-        match gradebook_columns(&state.client, cid).await {
+    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+        let c = &state.client;
+        let uid = user_id.clone();
+        async move {
+            let columns = gradebook_columns(c, &cid).await;
+            let grades = if let Some(uid) = &uid {
+                user_grades(c, &cid, uid).await.unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            (cid, columns, grades)
+        }
+    })
+    .await;
+    for (cid, columns_res, grades) in per_course {
+        match columns_res {
             Ok(columns) => {
-                let grades = match &user_id {
-                    Some(uid) => user_grades(&state.client, cid, uid).await.unwrap_or_default(),
-                    None => Vec::new(),
-                };
                 for col in &columns {
                     let col_id = col.get("id").and_then(|v| v.as_str()).unwrap_or("");
                     let own = grades.iter().find(|g| {

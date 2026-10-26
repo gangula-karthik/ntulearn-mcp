@@ -351,6 +351,23 @@ pub async fn run(verbose: bool) -> i32 {
     let _ = cli::run_one(&warm_state, &inv).await;
     println!("  courses warm (cached)   : {:>7.1?}", t0.elapsed());
 
+    // ---- 3b. All-courses fan-out latency ----------------------------------
+    // These commands fan out one request per enrolled course (announcements)
+    // or four per course (whats_new digest). Bounded-concurrency fan-out
+    // (handlers.rs) is what this section hill-climbs on.
+    println!("\n[fan-out] all-courses commands, cold cache, 6 mock courses");
+    for cmd in ["announcements", "whats_new"] {
+        let inv = parse_invocation_or_panic(cmd);
+        let mut dts: Vec<Duration> = Vec::new();
+        for _ in 0..3 {
+            let state = build_cold_state().await;
+            let t0 = Instant::now();
+            let _ = cli::run_one(&state, &inv).await;
+            dts.push(t0.elapsed());
+        }
+        println!("  {cmd:<14} cold median: {:>7.1?}", dts[1]);
+    }
+
     // ---- 4. Concurrency: sequential vs multi -----------------------------
     println!("\n[concurrency] 4 commands, cold cache each");
     let cmds = [
