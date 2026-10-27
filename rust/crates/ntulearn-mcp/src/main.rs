@@ -77,8 +77,20 @@ pub async fn build_state() -> anyhow::Result<Arc<AppState>> {
     }))
 }
 
+fn reset_sigpipe() {
+    // Rust ignores SIGPIPE by default, so printing after the reader end of a
+    // pipe exits (e.g. `ntulearn-mcp courses | head`) panics instead of
+    // exiting quietly. Restore the default disposition for the CLI paths; the
+    // MCP stdio loop does not print and handles write errors itself.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    reset_sigpipe();
     // Subcommands run without entering the stdio MCP loop:
     //   * setup/check/refresh — cookie lifecycle
     //   * everything else    — the agent-first CLI (see cli.rs), including
