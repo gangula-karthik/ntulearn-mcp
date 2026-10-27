@@ -280,21 +280,23 @@ fn channel_name(c: Channel) -> &'static str {
 // Release signatures (minisign)
 // ---------------------------------------------------------------------------
 
-/// Baked-in minisign public key (repo root `minisign.pub`). Releases sign
-/// `checksums.txt` with the matching secret key in CI; the updater verifies
-/// the signature BEFORE trusting the checksums (which in turn verify each
-/// downloaded asset). Forks/other distributions can override the key at
-/// runtime with NTULEARN_MCP_MINISIGN_PUBKEY (raw base64 or full file).
-const MINISIGN_PUB_FILE: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../minisign.pub");
-
 /// The base64 key line from a minisign pubkey file (skips comment lines).
+/// The release-signing public key, baked into the binary at compile time
+/// (repo root `minisign.pub`, via `include_str!` relative to this source
+/// file). Releases sign `checksums.txt` with the matching secret key in CI;
+/// the updater verifies the signature BEFORE trusting the checksums (which
+/// in turn verify each downloaded asset). Public keys are not secret; baking
+/// it in means every installed binary can verify signed updates without a
+/// checkout of the repository. Forks/other distributions can override the
+/// key at runtime with NTULEARN_MCP_MINISIGN_PUBKEY (raw base64 or full file).
+const BAKED_MINISIGN_PUB: &str = include_str!("../../../../minisign.pub");
+
 fn minisign_key_base64() -> Option<String> {
     if let Ok(v) = std::env::var("NTULEARN_MCP_MINISIGN_PUBKEY") {
         let line = v.lines().rev().find(|l| !l.trim().is_empty() && !l.starts_with("untrusted"))?;
         return Some(line.trim().to_string());
     }
-    let file = std::fs::read_to_string(MINISIGN_PUB_FILE).ok()?;
+    let file = BAKED_MINISIGN_PUB;
     let line = file
         .lines()
         .rev()
@@ -1135,18 +1137,16 @@ mod tests {
 
     #[test]
     fn minisign_pubkey_is_baked_and_wellformed() {
-        // The repo ships minisign.pub; the updater must be able to read it
-        // (forks without the file are allowed — verification is then off).
-        let key = minisign_key_base64();
-        if Path::new(MINISIGN_PUB_FILE).exists() {
-            assert!(key.is_some(), "minisign.pub exists but key extraction failed");
-            use base64::Engine as _;
-            let raw = base64::engine::general_purpose::STANDARD
-                .decode(key.unwrap())
-                .expect("pubkey must be valid base64");
-            assert!(raw.len() >= 42, "minisign pubkey payload too short: {}", raw.len());
-            assert_eq!(&raw[..2], b"Ed", "pubkey algorithm must be Ed");
-        }
+        // The public key is baked into the binary via include_str!, so every
+        // released binary can verify signed updates without a repo checkout.
+        let key = minisign_key_base64()
+            .expect("baked minisign.pub must yield a key");
+        use base64::Engine as _;
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&key)
+            .expect("pubkey must be valid base64");
+        assert!(raw.len() >= 42, "minisign pubkey payload too short: {}", raw.len());
+        assert_eq!(&raw[..2], b"Ed", "minisign pubkey must be Ed25519");
     }
     #[test]
     fn minisig_detection_regression() {
