@@ -13,7 +13,7 @@ The shipped server is a **single small Rust binary** with a built-in minimal MCP
 implementation (no heavyweight framework — see [the dependency diet](#a-single-small-binary)),
 22 tools, 2 prompt templates, and a course-resource URI. No Python, no pip, no virtualenv.
 
-**Website:** <https://ntulearn-mcp.krtk.app>
+**Website:** <https://ntulearn.krtk.app>
 
 ---
 
