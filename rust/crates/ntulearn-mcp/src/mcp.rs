@@ -96,7 +96,12 @@ pub struct Tool {
 
 impl Tool {
     pub fn new(name: String, description: String, input_schema: Value) -> Self {
-        Tool { name, description, input_schema, annotations: None }
+        Tool {
+            name,
+            description,
+            input_schema,
+            annotations: None,
+        }
     }
 
     pub fn with_annotations(mut self, annotations: ToolAnnotations) -> Self {
@@ -141,7 +146,11 @@ pub struct ResourceContent {
 
 impl ResourceContent {
     pub fn text(uri: impl Into<String>, text: impl Into<String>) -> Self {
-        ResourceContent { uri: uri.into(), mime_type: None, text: text.into() }
+        ResourceContent {
+            uri: uri.into(),
+            mime_type: None,
+            text: text.into(),
+        }
     }
 }
 
@@ -189,7 +198,10 @@ pub struct ReadResourceRequest {
 #[async_trait::async_trait]
 pub trait ResourceHandler: Send + Sync {
     async fn read_resource(&self, request: ReadResourceRequest) -> MCPResult<ReadResourceResponse>;
-    async fn list_resources(&self, request: ListResourcesRequest) -> MCPResult<ListResourcesResponse>;
+    async fn list_resources(
+        &self,
+        request: ListResourcesRequest,
+    ) -> MCPResult<ListResourcesResponse>;
     async fn list_resource_templates(
         &self,
         request: ListResourceTemplatesRequest,
@@ -236,7 +248,11 @@ pub struct PromptArgument {
 
 impl PromptArgument {
     pub fn new(name: String) -> Self {
-        PromptArgument { name, description: None, required: None }
+        PromptArgument {
+            name,
+            description: None,
+            required: None,
+        }
     }
 
     pub fn with_description(mut self, description: String) -> Self {
@@ -261,7 +277,11 @@ pub struct Prompt {
 
 impl Prompt {
     pub fn new(name: String) -> Self {
-        Prompt { name, description: None, arguments: None }
+        Prompt {
+            name,
+            description: None,
+            arguments: None,
+        }
     }
 
     pub fn with_description(mut self, description: String) -> Self {
@@ -391,11 +411,29 @@ impl McpServer {
     }
 
     /// Serve newline-delimited JSON-RPC 2.0 on stdin/stdout until EOF.
+    ///
+    /// Requests are dispatched concurrently: JSON-RPC ids make out-of-order
+    /// replies legal, and handling them serially meant one slow download
+    /// blocked every other tool call. Replies are funnelled through a single
+    /// writer task so stdout stays line-atomic.
     pub async fn run_stdio(self) -> anyhow::Result<()> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let server = Arc::new(self);
-        let mut stdout: tokio::io::BufWriter<tokio::io::Stdout> =
-            tokio::io::BufWriter::new(tokio::io::stdout());
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(256);
+        let writer = tokio::spawn(async move {
+            let mut stdout: tokio::io::BufWriter<tokio::io::Stdout> =
+                tokio::io::BufWriter::new(tokio::io::stdout());
+            while let Some(value) = rx.recv().await {
+                if Self::write(&mut stdout, &value).await.is_err() {
+                    break;
+                }
+            }
+            let _ = stdout.flush().await;
+        });
+
+        // Cap in-flight requests so a client cannot spawn unbounded fan-outs.
+        let limit = Arc::new(tokio::sync::Semaphore::new(32));
+        let mut tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
         let stdin = tokio::io::stdin();
         let mut lines = BufReader::new(stdin).lines();
         while let Some(line) = lines.next_line().await? {
@@ -405,33 +443,50 @@ impl McpServer {
             let msg: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
-                    Self::write(&mut stdout, &json!({
-                        "jsonrpc": "2.0", "id": null,
-                        "error": {"code": -32700, "message": format!("Parse error: {e}")}
-                    }))
-                    .await?;
+                    let _ = tx
+                        .send(json!({
+                            "jsonrpc": "2.0", "id": null,
+                            "error": {"code": -32700, "message": format!("Parse error: {e}")}
+                        }))
+                        .await;
                     continue;
                 }
             };
-            let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
-            let id = msg.get("id").cloned();
-            if id.is_none() {
+            let method = msg
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let Some(id) = msg.get("id").cloned() else {
                 continue; // notification — never reply
-            }
-            let id = id.unwrap();
-            let params = msg.get("params").cloned().unwrap_or(Value::Null);
-            let result = server.handle(method, &params).await;
-            let reply = match result {
-                Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}),
-                Err(e) => {
-                    // -32601 method not found, -32603 internal error otherwise.
-                    let code = if e.0 == "method not found" { -32601 } else { -32603 };
-                    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": e.0}})
-                }
             };
-            Self::write(&mut stdout, &reply).await?;
+            let params = msg.get("params").cloned().unwrap_or(Value::Null);
+            let permit = limit.clone().acquire_owned().await?;
+            let server = Arc::clone(&server);
+            let tx = tx.clone();
+            tasks.spawn(async move {
+                let _permit = permit;
+                let result = server.handle(&method, &params).await;
+                let reply = match result {
+                    Ok(v) => json!({"jsonrpc": "2.0", "id": id, "result": v}),
+                    Err(e) => {
+                        // -32601 method not found, -32603 internal error otherwise.
+                        let code = if e.0 == "method not found" {
+                            -32601
+                        } else {
+                            -32603
+                        };
+                        json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": e.0}})
+                    }
+                };
+                let _ = tx.send(reply).await;
+            });
+            // Reap finished tasks so the set does not grow without bound.
+            while tasks.try_join_next().is_some() {}
         }
-        stdout.flush().await?;
+        drop(tx);
+        while tasks.join_next().await.is_some() {}
+        let _ = writer.await;
         Ok(())
     }
 
@@ -464,35 +519,53 @@ impl McpServer {
             }
             "ping" => Ok(json!({})),
             "tools/list" => {
-                let handler = self.tool_handler.as_ref().ok_or_else(|| no_handler("tools"))?;
+                let handler = self
+                    .tool_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("tools"))?;
                 let resp = handler.list_tools(ListToolsRequest).await?;
                 to_value(&resp)
             }
             "tools/call" => {
-                let handler = self.tool_handler.as_ref().ok_or_else(|| no_handler("tools"))?;
+                let handler = self
+                    .tool_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("tools"))?;
                 let name = params
                     .get("name")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
-                let call = ToolCall { name, arguments: params.get("arguments").cloned() };
+                let call = ToolCall {
+                    name,
+                    arguments: params.get("arguments").cloned(),
+                };
                 let resp = handler.handle_tool_call(call).await?;
                 to_value(&resp)
             }
             "resources/list" => {
-                let handler = self.resource_handler.as_ref().ok_or_else(|| no_handler("resources"))?;
+                let handler = self
+                    .resource_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("resources"))?;
                 let resp = handler.list_resources(ListResourcesRequest).await?;
                 to_value(&resp)
             }
             "resources/templates/list" => {
-                let handler = self.resource_handler.as_ref().ok_or_else(|| no_handler("resources"))?;
+                let handler = self
+                    .resource_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("resources"))?;
                 let resp = handler
                     .list_resource_templates(ListResourceTemplatesRequest)
                     .await?;
                 to_value(&resp)
             }
             "resources/read" => {
-                let handler = self.resource_handler.as_ref().ok_or_else(|| no_handler("resources"))?;
+                let handler = self
+                    .resource_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("resources"))?;
                 let uri = params
                     .get("uri")
                     .and_then(Value::as_str)
@@ -502,12 +575,18 @@ impl McpServer {
                 to_value(&resp)
             }
             "prompts/list" => {
-                let handler = self.prompt_handler.as_ref().ok_or_else(|| no_handler("prompts"))?;
+                let handler = self
+                    .prompt_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("prompts"))?;
                 let resp = handler.list_prompts(ListPromptsRequest).await?;
                 to_value(&resp)
             }
             "prompts/get" => {
-                let handler = self.prompt_handler.as_ref().ok_or_else(|| no_handler("prompts"))?;
+                let handler = self
+                    .prompt_handler
+                    .as_ref()
+                    .ok_or_else(|| no_handler("prompts"))?;
                 let name = params
                     .get("name")
                     .and_then(Value::as_str)
@@ -550,7 +629,10 @@ mod tests {
 
     #[test]
     fn tool_result_serializes_camel_case() {
-        let r = ToolResult { content: vec![ToolContent::text("hi")], is_error: Some(false) };
+        let r = ToolResult {
+            content: vec![ToolContent::text("hi")],
+            is_error: Some(false),
+        };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["content"][0]["type"], "text");
         assert_eq!(v["content"][0]["text"], "hi");
@@ -559,11 +641,12 @@ mod tests {
 
     #[test]
     fn tool_schema_fields() {
-        let t = Tool::new("x".into(), "d".into(), json!({"type": "object"}))
-            .with_annotations(ToolAnnotations {
+        let t = Tool::new("x".into(), "d".into(), json!({"type": "object"})).with_annotations(
+            ToolAnnotations {
                 read_only_hint: Some(true),
                 ..Default::default()
-            });
+            },
+        );
         let v = serde_json::to_value(&t).unwrap();
         assert_eq!(v["name"], "x");
         assert_eq!(v["inputSchema"]["type"], "object");
@@ -605,7 +688,11 @@ mod tests {
     impl ToolHandler for EchoHandler {
         async fn list_tools(&self, _req: ListToolsRequest) -> MCPResult<ListToolsResponse> {
             Ok(ListToolsResponse {
-                tools: vec![Tool::new("echo".into(), "echo".into(), json!({"type": "object"}))],
+                tools: vec![Tool::new(
+                    "echo".into(),
+                    "echo".into(),
+                    json!({"type": "object"}),
+                )],
                 next_cursor: None,
             })
         }
@@ -654,7 +741,10 @@ mod tests {
 
         // tools/call
         let r = server
-            .handle("tools/call", &json!({"name": "echo", "arguments": {"a": 1}}))
+            .handle(
+                "tools/call",
+                &json!({"name": "echo", "arguments": {"a": 1}}),
+            )
             .await
             .unwrap();
         assert_eq!(r["content"][0]["text"], r#"{"a":1}"#);
@@ -664,7 +754,10 @@ mod tests {
         assert!(server.handle("bogus/method", &Value::Null).await.is_err());
 
         // handler error propagates as a wire error
-        let e = server.handle("tools/call", &json!({"name": "boom"})).await.unwrap_err();
+        let e = server
+            .handle("tools/call", &json!({"name": "boom"}))
+            .await
+            .unwrap_err();
         assert_eq!(e.0, "kaboom");
     }
 }

@@ -68,17 +68,21 @@ Measured with the built-in benchmark (`ntulearn-mcp selfbench`):
 
 | Metric | MCP | CLI | Improvement |
 |---|---|---|---|
-| Discovery tokens (per conversation) | 6,639 (every turn) | 586 (once, on demand) | **11.3x** |
+| Discovery tokens (per conversation) | 7,155 (every turn) | 633 (once, on demand) | **11.3x** |
 | Task output tokens (4-task suite) | 2,193 | 492 (compact TSV) | **4.5x** |
-| 10-turn conversation model | ~68,583 tok | ~1,078 tok | **63.6x** |
+| 10-turn conversation model | ~73,743 tok | ~1,125 tok | **65.5x** |
 
 Latency (mock API, 25 ms RTT, cold cache): all-courses tools fetch every enrolled course
-**concurrently** (bounded at 6 in flight) instead of one-by-one — `announcements` across 6 courses
-214 ms → 61 ms, the `whats_new` digest 703 ms → 147 ms; multi-file `download_file` fetches files in
-parallel too. Real-world effect scales with course count (a 44-course `whats_new` completes in ~2 s).
-| `courses` cold (2 RTTs, 25ms mock) | — | 59ms | **3.4x** vs v0.3 |
-| `courses` warm (SQLite cache) | — | 82µs | — |
-| 4 commands concurrently (`multi`) | 225ms sequential | 59ms (singleflight-deduped) | **3.8x** |
+**concurrently** (bounded at 48 in flight) instead of one-by-one. `announcements` across 6 courses
+drops from 214 ms to 60 ms, the `whats_new` digest from 703 ms to 65 ms, and a 44-course `whats_new`
+completes in ~0.10 s. Content trees walk one level per wave: a 403-node tree (13 weeks x 5 modules x
+5 files) drops from 2.3 s to 0.13 s. Multi-file downloads and attachment URL resolution run in parallel too.
+
+| Latency check | Before | Now | Gain |
+|---|---|---|---|
+| `courses` cold (2 RTTs, 25ms mock) | - | 58ms | **3.4x** vs v0.3 |
+| `courses` warm (SQLite cache) | - | 57µs | - |
+| 4 commands concurrently (`multi`) | 225ms sequential | 60ms (singleflight-deduped) | **3.8x** |
 
 The CLI shares the same handlers, cache, and cookie lifecycle as the MCP server. Point your agent at
 the binary and have it run `ntulearn-mcp help` (≈590 tokens, once) instead of registering 21 tools.
@@ -269,6 +273,7 @@ All optional — the defaults work for most users.
 | `NTULEARN_DOWNLOAD_DIR` | `./downloads` | Default `destination_dir` for `download_file` / `download_course`. |
 | `NTULEARN_CACHE_DIR` | `~/.cache/ntulearn-mcp/cache.sqlite3` | SQLite response cache (falls back to in-memory). |
 | `NTULEARN_CACHE_MODE` | `readwrite` | `readwrite`, `readonly`, or `off`. |
+| `NTULEARN_HTTP_CONCURRENCY` | `48` | Max in-flight HTTP requests. Lower it if a tenant rate-limits; raise it for large course lists. |
 | `NTULEARN_MCP_AUTOUPDATE` | `on` | `on`, `off`, or `ask`. |
 | `NTULEARN_ISSUE_REPO` | upstream repo | Where unexpected-error issues are filed. |
 | `NTULEARN_ISSUE_REPORTS` | — | Set to `off` to force-disable issue auto-filing. |
@@ -382,7 +387,7 @@ mock-RTT numbers unchanged (see "Why the CLI" above).
 
 ```bash
 cd rust
-cargo test                              # 53 unit tests
+cargo test                              # 111 unit tests
 cargo build --release
 target/release/ntulearn-mcp selfbench   # token + latency + concurrency benchmark
 ```
