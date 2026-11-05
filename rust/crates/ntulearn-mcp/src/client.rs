@@ -61,8 +61,16 @@ pub enum ClientError {
 impl ClientError {
     /// Build the LLM-actionable API error (mirrors Python `_format_api_error`).
     fn api(status: u16, body: &str, path: &str) -> Self {
-        let where_ = if path.is_empty() { String::new() } else { format!(" at {path}") };
-        let snippet: String = body.chars().take(300).collect::<String>().replace('\n', " ");
+        let where_ = if path.is_empty() {
+            String::new()
+        } else {
+            format!(" at {path}")
+        };
+        let snippet: String = body
+            .chars()
+            .take(300)
+            .collect::<String>()
+            .replace('\n', " ");
         let (class, hint): (&'static str, &'static str) = match status {
             403 => ("forbidden", "The current user lacks access to this resource (course not enrolled, instructor-only data, or unavailable). "),
             404 => ("not found", "Check the course_id / content_id is correct. "),
@@ -70,7 +78,13 @@ impl ClientError {
             s if s >= 500 => ("server error", "NTULearn may be down; retry shortly. "),
             _ => ("other", ""),
         };
-        ClientError::Api { status, class, path_desc: where_, hint: hint.to_string(), body: snippet }
+        ClientError::Api {
+            status,
+            class,
+            path_desc: where_,
+            hint: hint.to_string(),
+            body: snippet,
+        }
     }
 }
 
@@ -103,28 +117,53 @@ pub const DEFAULT_TTL_SECONDS: &[(&str, f64)] = &[
 const FIELDS: &[(&str, &str)] = &[
     ("enrollments", "courseId,availability,lastAccessed"),
     ("course", "id,name,displayName"),
-    ("contents", "id,title,contentHandler,hasChildren,description,modified"),
-    ("calendar", "id,type,title,description,location,start,end,calendarName,dynamicCalendarItemProps"),
-    ("announcements", "id,title,body,created,modified,availability"),
-    ("grade_columns", "id,name,displayName,score,availability,contentId"),
+    (
+        "contents",
+        "id,title,contentHandler,hasChildren,description,modified",
+    ),
+    (
+        "calendar",
+        "id,type,title,description,location,start,end,calendarName,dynamicCalendarItemProps",
+    ),
+    (
+        "announcements",
+        "id,title,body,created,modified,availability",
+    ),
+    (
+        "grade_columns",
+        "id,name,displayName,score,availability,contentId",
+    ),
     ("user_grades", "columnId,score,status,gradingStatus"),
-    ("course_users", "userId,user.userName,user.name.given,user.name.family,courseRoleId,availability"),
+    (
+        "course_users",
+        "userId,user.userName,user.name.given,user.name.family,courseRoleId,availability",
+    ),
     ("groups", "id,name,description,availability"),
     ("messages", "id,subject,body,created,read,folder,fromUserId"),
-    ("attempts", "id,userId,status,score,cumulatedScore,feedback,created,updated"),
+    (
+        "attempts",
+        "id,userId,status,score,cumulatedScore,feedback,created,updated",
+    ),
     ("term", "id,name,startDate,endDate"),
 ];
 
 fn env_flag(name: &str, default: bool) -> bool {
     match std::env::var(name) {
-        Ok(v) => !v.trim().is_empty()
-            && !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"),
+        Ok(v) => {
+            !v.trim().is_empty()
+                && !matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "0" | "false" | "no" | "off"
+                )
+        }
         Err(_) => default,
     }
 }
 
 fn default_fields(name: &str) -> Option<&'static str> {
-    if !env_flag("NTULEARN_FIELDS", true) { return None; }
+    if !env_flag("NTULEARN_FIELDS", true) {
+        return None;
+    }
     FIELDS.iter().find(|(n, _)| *n == name).map(|(_, f)| *f)
 }
 
@@ -159,10 +198,46 @@ fn is_success_status(s: u16) -> bool {
     (200..300).contains(&s)
 }
 
+/// Global cap on in-flight HTTP requests. `bounded_map` caps each individual
+/// fan-out; nested fan-outs multiply (24 courses x 4 calls per course), so the
+/// client also holds one process-wide semaphore. Override with
+/// `NTULEARN_HTTP_CONCURRENCY` (default 48).
+pub(crate) fn http_concurrency() -> usize {
+    std::env::var("NTULEARN_HTTP_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(48)
+}
+
+/// Order-preserving bounded fan-out (same contract as handlers::bounded_map,
+/// usable from the client where the handler helper is not in scope).
+async fn bounded_stream<T, R, F, Fut>(
+    items: impl IntoIterator<Item = T>,
+    limit: usize,
+    f: F,
+) -> Vec<R>
+where
+    F: FnMut(T) -> Fut,
+    Fut: std::future::Future<Output = R>,
+{
+    use futures_util::stream::StreamExt;
+    futures_util::stream::iter(items)
+        .map(f)
+        .buffered(limit.max(1))
+        .collect()
+        .await
+}
+
 fn build_query(params: &[(&str, &str)]) -> String {
     params
         .iter()
-        .map(|(k, v)| format!("{k}={}", percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC)))
+        .map(|(k, v)| {
+            format!(
+                "{k}={}",
+                percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC)
+            )
+        })
         .collect::<Vec<_>>()
         .join("&")
 }
@@ -225,7 +300,10 @@ fn user_display_name(user: &Value) -> String {
         }
     }
     let given = user.get("givenName").and_then(|v| v.as_str()).unwrap_or("");
-    let family = user.get("familyName").and_then(|v| v.as_str()).unwrap_or("");
+    let family = user
+        .get("familyName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let mut parts = Vec::new();
     if !given.is_empty() {
         parts.push(given);
@@ -236,7 +314,10 @@ fn user_display_name(user: &Value) -> String {
     if !parts.is_empty() {
         return parts.join(" ");
     }
-    user.get("userName").and_then(|v| v.as_str()).unwrap_or("").to_string()
+    user.get("userName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 struct RawResp {
@@ -264,8 +345,38 @@ pub struct NTULearnClient {
     in_flight: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Last silent re-capture attempted from the 401 path (rate limit).
     last_silent_capture: std::sync::Mutex<Option<std::time::Instant>>,
+    /// Bounds total concurrent HTTP requests across every nested fan-out.
+    http_limit: Arc<tokio::sync::Semaphore>,
 }
 
+/// RAII handle for one singleflight key. Drops the map entry when the last
+/// holder goes away (checked under the map lock, so a new waiter cannot race
+/// in between the count check and the removal).
+struct InFlightGuard<'a> {
+    client: &'a NTULearnClient,
+    key: String,
+    lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl InFlightGuard<'_> {
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lock.lock().await
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.client.in_flight.lock() {
+            let last = map
+                .get(&self.key)
+                .map(|a| Arc::strong_count(a) == 2)
+                .unwrap_or(false);
+            if last {
+                map.remove(&self.key);
+            }
+        }
+    }
+}
 
 impl NTULearnClient {
     #[cfg(test)]
@@ -289,6 +400,7 @@ impl NTULearnClient {
             user_scope: String::new(),
             in_flight: Default::default(),
             last_silent_capture: Default::default(),
+            http_limit: Arc::new(tokio::sync::Semaphore::new(http_concurrency())),
         }
     }
 
@@ -303,7 +415,11 @@ impl NTULearnClient {
         }
     }
 
-    pub fn new(base_url: String, cookie_value: String, cache: Arc<DataCache>) -> ClientResult<Self> {
+    pub fn new(
+        base_url: String,
+        cookie_value: String,
+        cache: Arc<DataCache>,
+    ) -> ClientResult<Self> {
         let mut value = cookie_value;
         if let Some(rest) = value.strip_prefix("BbRouter=") {
             value = rest.to_string();
@@ -325,10 +441,12 @@ impl NTULearnClient {
             .build()
             .map_err(|e| ClientError::Other(format!("reqwest external client build: {e}")))?;
         let user_scope = sha256_hex_first(&value, 16);
-        let refresh = Some(Box::new(cookie::resolve_cookie) as Box<dyn Fn() -> Option<String> + Send + Sync>);
+        let refresh =
+            Some(Box::new(cookie::resolve_cookie) as Box<dyn Fn() -> Option<String> + Send + Sync>);
         Ok(NTULearnClient {
             in_flight: Default::default(),
             last_silent_capture: Default::default(),
+            http_limit: Arc::new(tokio::sync::Semaphore::new(http_concurrency())),
             http,
             no_redirect,
             external,
@@ -375,7 +493,13 @@ impl NTULearnClient {
             }
             *last = Some(std::time::Instant::now());
         }
-        match crate::capture::capture_cookie(&self.base_url, crate::capture::CaptureMode::Silent, true).await {
+        match crate::capture::capture_cookie(
+            &self.base_url,
+            crate::capture::CaptureMode::Silent,
+            true,
+        )
+        .await
+        {
             Ok((val, browser)) => {
                 tracing::info!("401 healed by silent re-login via {browser}");
                 Some(val)
@@ -454,8 +578,15 @@ impl NTULearnClient {
         let mut attempt = 0usize;
         loop {
             attempt += 1;
+            // Hold a permit for the whole request (including body read) so
+            // nested fan-outs cannot exceed the global in-flight cap.
+            let _permit = self.http_limit.acquire().await.ok();
             let cookie = self.current_cookie().await;
-            let cookie_header = if cookie.is_empty() { String::new() } else { format!("BbRouter={cookie}") };
+            let cookie_header = if cookie.is_empty() {
+                String::new()
+            } else {
+                format!("BbRouter={cookie}")
+            };
             let send = self.http.get(url).header("Cookie", cookie_header);
             let resp = match send.send().await {
                 Ok(r) => r,
@@ -488,7 +619,10 @@ impl NTULearnClient {
                             let retry = self
                                 .http
                                 .get(url)
-                                .header("Cookie", format!("BbRouter={}", self.current_cookie().await))
+                                .header(
+                                    "Cookie",
+                                    format!("BbRouter={}", self.current_cookie().await),
+                                )
                                 .send()
                                 .await;
                             if let Ok(r) = retry {
@@ -496,11 +630,20 @@ impl NTULearnClient {
                                 if s2 != 401 {
                                     let headers = r.headers().clone();
                                     if !is_success_status(s2) {
-                                        let b = r.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
-                                        return Err(ClientError::api(s2, &String::from_utf8_lossy(&b), url));
+                                        let b =
+                                            r.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+                                        return Err(ClientError::api(
+                                            s2,
+                                            &String::from_utf8_lossy(&b),
+                                            url,
+                                        ));
                                     }
                                     let bytes = r.bytes().await.map(|b| b.to_vec())?;
-                                    return Ok(RawResp { status: s2, headers, bytes });
+                                    return Ok(RawResp {
+                                        status: s2,
+                                        headers,
+                                        bytes,
+                                    });
                                 }
                             }
                         }
@@ -528,12 +671,21 @@ impl NTULearnClient {
             }
             let headers = resp.headers().clone();
             let bytes = resp.bytes().await.map(|b| b.to_vec())?;
-            return Ok(RawResp { status, headers, bytes });
+            return Ok(RawResp {
+                status,
+                headers,
+                bytes,
+            });
         }
     }
 
     /// GET + parse JSON, with `fields` and one no-fields retry on 400/403.
-    async fn get_json_inner(&self, path: &str, params: &[(&str, &str)], fields: Option<&str>) -> ClientResult<Value> {
+    async fn get_json_inner(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+        fields: Option<&str>,
+    ) -> ClientResult<Value> {
         let try_with_fields = fields.is_some();
         let mut prm: Vec<(&str, &str)> = params.to_vec();
         if try_with_fields {
@@ -543,7 +695,9 @@ impl NTULearnClient {
         let url = self.build_authed_url(path, &prm);
         match self.authed_get_raw(&url).await {
             Ok(raw) => serde_json::from_slice(&raw.bytes).map_err(ClientError::Json),
-            Err(ClientError::Api { status, .. }) if try_with_fields && matches!(status, 400 | 403) => {
+            Err(ClientError::Api { status, .. })
+                if try_with_fields && matches!(status, 400 | 403) =>
+            {
                 let url2 = self.build_authed_url(path, params);
                 let raw = self.authed_get_raw(&url2).await?;
                 serde_json::from_slice(&raw.bytes).map_err(ClientError::Json)
@@ -551,7 +705,6 @@ impl NTULearnClient {
             Err(e) => Err(e),
         }
     }
-
 
     /// Python `_cache_key`: sha256("{namespace}|{path}?{canonical}"), user-scoped.
     fn cache_key(&self, namespace: &str, path: &str, params: &[(&str, &str)]) -> String {
@@ -581,16 +734,22 @@ impl NTULearnClient {
         }
     }
 
-
     /// Paginate through `paging.nextPage` and collect all results.
-    async fn paginated(&self, path: &str, params: &[(&str, &str)], fields: Option<&str>) -> ClientResult<Vec<Value>> {
+    async fn paginated(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+        fields: Option<&str>,
+    ) -> ClientResult<Vec<Value>> {
         let mut all: Vec<Value> = Vec::new();
         let mut current = path.to_string();
         let mut first = true;
         let mut guard = 0u32;
         loop {
             guard += 1;
-            if guard > 200 { break; }
+            if guard > 200 {
+                break;
+            }
             let prm: Vec<(&str, &str)> = if first {
                 // Python `_get_paginated`: params.setdefault("limit", 200).
                 let mut v = params.to_vec();
@@ -614,7 +773,9 @@ impl NTULearnClient {
                 Some(n) if !n.is_empty() => {
                     current = if let Some(stripped) = n.strip_prefix(&self.base_url) {
                         stripped.to_string()
-                    } else { n };
+                    } else {
+                        n
+                    };
                     first = false;
                 }
                 _ => break,
@@ -624,19 +785,43 @@ impl NTULearnClient {
     }
 
     /// Cache read; returns Some(value) on hit (honours ttl_for).
-    fn cache_read(&self, namespace: &str, path: &str, params: &[(&str, &str)], cache: Option<f64>) -> Option<Value> {
+    fn cache_read(
+        &self,
+        namespace: &str,
+        path: &str,
+        params: &[(&str, &str)],
+        cache: Option<f64>,
+    ) -> Option<Value> {
         let ttl = self.ttl_for(namespace, cache)?;
-        if self.cache_off() { return None; }
+        if self.cache_off() {
+            return None;
+        }
         let key = self.cache_key(namespace, path, params);
-        let max_age = if ttl > 0.0 && cache.is_none() { None } else { Some(ttl) };
+        let max_age = if ttl > 0.0 && cache.is_none() {
+            None
+        } else {
+            Some(ttl)
+        };
         self.cache.get(namespace, &key, max_age)
     }
 
-    fn cache_write(&self, namespace: &str, path: &str, params: &[(&str, &str)], cache: Option<f64>, value: &Value) {
-        let Some(ttl) = self.ttl_for(namespace, cache) else { return };
-        if self.cache_off() { return; }
+    fn cache_write(
+        &self,
+        namespace: &str,
+        path: &str,
+        params: &[(&str, &str)],
+        cache: Option<f64>,
+        value: &Value,
+    ) {
+        let Some(ttl) = self.ttl_for(namespace, cache) else {
+            return;
+        };
+        if self.cache_off() {
+            return;
+        }
         let key = self.cache_key(namespace, path, params);
-        self.cache.set(namespace, &key, value.clone(), ttl, Some(&self.user_scope));
+        self.cache
+            .set(namespace, &key, value.clone(), ttl, Some(&self.user_scope));
     }
 
     /// Simple list endpoint pattern: read cache, else paginate + cache.
@@ -665,16 +850,27 @@ impl NTULearnClient {
         Ok(value)
     }
 
-    /// Get (or create) the singleflight mutex for a cache key.
+    /// Get (or create) the singleflight mutex for a cache key. The returned
+    /// guard removes the map entry once the last waiter drops it, so a
+    /// long-lived MCP server does not accumulate one mutex per distinct query.
     fn acquire_in_flight(
         &self,
         namespace: &str,
         path: &str,
         params: &[(&str, &str)],
-    ) -> Arc<tokio::sync::Mutex<()>> {
+    ) -> InFlightGuard<'_> {
         let key = self.cache_key(namespace, path, params);
-        let mut map = self.in_flight.lock().expect("in_flight lock");
-        map.entry(key).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
+        let lock = {
+            let mut map = self.in_flight.lock().expect("in_flight lock");
+            map.entry(key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        InFlightGuard {
+            client: self,
+            key,
+            lock,
+        }
     }
 
     /// Simple object endpoint pattern: read cache, else GET + cache.
@@ -711,11 +907,29 @@ impl NTULearnClient {
     pub async fn get_my_enrollments(&self, cache: Option<f64>) -> ClientResult<Value> {
         let path = "/learn/api/public/v1/users/me/courses";
         let fields = default_fields("enrollments");
-        self.list_with_cache("get_my_enrollments", path, &[], fields, cache).await
+        self.list_with_cache("get_my_enrollments", path, &[], fields, cache)
+            .await
+    }
+
+    /// `/users/me/courses?expand=course` — one request that also carries each
+    /// course's name, so a digest does not need N extra `/courses/{id}` GETs.
+    /// If the server ignores `expand`, callers fall back per course.
+    pub async fn get_my_enrollments_expanded(&self, cache: Option<f64>) -> ClientResult<Value> {
+        let path = "/learn/api/public/v1/users/me/courses";
+        self.list_with_cache(
+            "get_my_enrollments_expanded",
+            path,
+            &[("expand", "course")],
+            None,
+            cache,
+        )
+        .await
     }
 
     pub async fn get_my_user_id(&self) -> ClientResult<String> {
-        let data = self.get_json_inner("/learn/api/public/v1/users/me", &[], None).await?;
+        let data = self
+            .get_json_inner("/learn/api/public/v1/users/me", &[], None)
+            .await?;
         data.get("id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
@@ -729,47 +943,72 @@ impl NTULearnClient {
     pub async fn get_course(&self, course_id: &str, cache: Option<f64>) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}");
         let fields = default_fields("course");
-        self.object_with_cache("get_course", &path, &[], fields, cache).await
+        self.object_with_cache("get_course", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_courses_batch(&self, course_ids: &[String], cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_courses_batch(
+        &self,
+        course_ids: &[String],
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = "/learn/api/public/v1/courses/_batch_";
-        if let Some(hit) = self.cache_read("get_courses_batch", path, &[], cache) {
-            return Ok(hit);
-        }
-        let guard = self.acquire_in_flight("get_courses_batch", path, &[]);
-        let _held = guard.lock().await;
-        if let Some(hit) = self.cache_read("get_courses_batch", path, &[], cache) {
-            return Ok(hit);
-        }
-        // Concurrent fan-out (order-preserving via join_all). The previous
-        // sequential loop cost sum(N * RTT); this runs the N lookups in
-        // parallel — `courses` on a 6-course load drops from ~7 RTTs to ~2.
-        let futs: Vec<_> = course_ids
+        // The cache key MUST include the requested ids: keying on the path
+        // alone served one batch's courses for a different course set.
+        let key_params: Vec<(&str, &str)> = course_ids
             .iter()
-            .map(|cid| async move {
-                (cid.clone(), self.get_course(cid, Some(0.0)).await)
-            })
+            .map(|s| ("courseId", s.as_str()))
             .collect();
-        let out: Vec<Value> = futures_util::future::join_all(futs)
-            .await
-            .into_iter()
-            .map(|(cid, r)| match r {
-                Ok(c) => c,
-                Err(_) => json!({"id": cid, "name": cid}),
-            })
-            .collect();
+        if let Some(hit) = self.cache_read("get_courses_batch", path, &key_params, cache) {
+            return Ok(hit);
+        }
+        let guard = self.acquire_in_flight("get_courses_batch", path, &key_params);
+        let _held = guard.lock().await;
+        if let Some(hit) = self.cache_read("get_courses_batch", path, &key_params, cache) {
+            return Ok(hit);
+        }
+        // Concurrent fan-out, bounded like every other fan-out (an unbounded
+        // join_all over 44 courses was the one place that ignored the cap).
+        let out: Vec<Value> = bounded_stream(
+            course_ids.iter().cloned(),
+            http_concurrency(),
+            |cid| async move {
+                match self.get_course(&cid, Some(0.0)).await {
+                    Ok(c) => c,
+                    Err(_) => json!({"id": cid, "name": cid}),
+                }
+            },
+        )
+        .await;
         let value = Value::Array(out);
-        self.cache_write("get_courses_batch", path, &[], cache, &value);
+        self.cache_write("get_courses_batch", path, &key_params, cache, &value);
         Ok(value)
     }
 
-    pub async fn get_course_search(&self, course_id: &str, query: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_course_search(
+        &self,
+        course_id: &str,
+        query: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/contents");
         let fields = default_fields("contents");
         let params: Vec<(&str, &str)> = vec![("search", query)];
+        // This used to write the cache but never read it, so every repeated
+        // search was a fresh round trip.
+        if let Some(hit) = self.cache_read("get_course_search", &path, &params, cache) {
+            return Ok(hit);
+        }
+        let guard = self.acquire_in_flight("get_course_search", &path, &params);
+        let _held = guard.lock().await;
+        if let Some(hit) = self.cache_read("get_course_search", &path, &params, cache) {
+            return Ok(hit);
+        }
         // Search failures return [] (matches Python: BlackboardAPIError -> []).
-        let items = self.paginated(&path, &params, fields).await.unwrap_or_default();
+        let items = self
+            .paginated(&path, &params, fields)
+            .await
+            .unwrap_or_default();
         let value = Value::Array(items);
         self.cache_write("get_course_search", &path, &params, cache, &value);
         Ok(value)
@@ -779,22 +1018,40 @@ impl NTULearnClient {
     // Contents
     // ==========================================================================
 
-    pub async fn get_course_contents(&self, course_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_course_contents(
+        &self,
+        course_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/contents");
         let fields = default_fields("contents");
-        self.list_with_cache("get_course_contents", &path, &[], fields, cache).await
+        self.list_with_cache("get_course_contents", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_content_children(&self, course_id: &str, content_id: &str, cache: Option<f64>) -> ClientResult<Value> {
-        let path = format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}/children");
+    pub async fn get_content_children(
+        &self,
+        course_id: &str,
+        content_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
+        let path =
+            format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}/children");
         let fields = default_fields("contents");
-        self.list_with_cache("get_content_children", &path, &[], fields, cache).await
+        self.list_with_cache("get_content_children", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_content_item(&self, course_id: &str, content_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_content_item(
+        &self,
+        course_id: &str,
+        content_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}");
         let fields = default_fields("contents");
-        self.object_with_cache("get_content_item", &path, &[], fields, cache).await
+        self.object_with_cache("get_content_item", &path, &[], fields, cache)
+            .await
     }
 
     /// Content item including the `body` HTML. The default `contents` field
@@ -809,13 +1066,26 @@ impl NTULearnClient {
     ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}");
         let fields = "id,title,contentHandler,hasChildren,description,modified,body";
-        self.object_with_cache("get_content_item_with_body", &path, &[], Some(fields), cache)
-            .await
+        self.object_with_cache(
+            "get_content_item_with_body",
+            &path,
+            &[],
+            Some(fields),
+            cache,
+        )
+        .await
     }
 
-    pub async fn get_attachments(&self, course_id: &str, content_id: &str, cache: Option<f64>) -> ClientResult<Value> {
-        let path = format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}/attachments");
-        self.list_with_cache("get_attachments", &path, &[], None, cache).await
+    pub async fn get_attachments(
+        &self,
+        course_id: &str,
+        content_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
+        let path =
+            format!("/learn/api/public/v1/courses/{course_id}/contents/{content_id}/attachments");
+        self.list_with_cache("get_attachments", &path, &[], None, cache)
+            .await
     }
 
     pub async fn get_attachment_download_url(
@@ -828,8 +1098,13 @@ impl NTULearnClient {
             "/learn/api/public/v1/courses/{course_id}/contents/{content_id}/attachments/{attachment_id}/download"
         );
         let url = self.url(&path);
+        let _permit = self.http_limit.acquire().await.ok();
         let cookie = self.current_cookie().await;
-        let cookie_header = if cookie.is_empty() { String::new() } else { format!("BbRouter={cookie}") };
+        let cookie_header = if cookie.is_empty() {
+            String::new()
+        } else {
+            format!("BbRouter={cookie}")
+        };
         let resp = self
             .no_redirect
             .get(url)
@@ -843,7 +1118,11 @@ impl NTULearnClient {
             return Err(ClientError::Auth);
         }
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            if let Some(loc) = resp.headers().get(reqwest::header::LOCATION).and_then(|h| h.to_str().ok()) {
+            if let Some(loc) = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|h| h.to_str().ok())
+            {
                 return Ok(loc.to_string());
             }
         }
@@ -902,7 +1181,10 @@ impl NTULearnClient {
         let all = self.mailbox_messages(cache).await?;
         let found = all
             .as_array()
-            .and_then(|arr| arr.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(message_id)))
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(message_id))
+            })
             .cloned();
         match found {
             Some(item) => {
@@ -915,21 +1197,40 @@ impl NTULearnClient {
         }
     }
 
-    pub async fn get_message_participants(&self, message_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_message_participants(
+        &self,
+        message_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         // Locate the message in the shared flatten to learn its course and
         // conversation, then read the conversation detail (cached under this
         // method's 600s namespace) and render participant/groups rows.
         let all = self.mailbox_messages(cache).await?;
         let found = all
             .as_array()
-            .and_then(|arr| arr.iter().find(|m| m.get("id").and_then(|v| v.as_str()) == Some(message_id)))
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(message_id))
+            })
             .cloned();
         let Some(msg) = found else {
             return Ok(Value::Array(Vec::new()));
         };
-        let course_id = msg.get("courseId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let conversation_id = msg.get("conversationId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let sender_id = msg.get("senderId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let course_id = msg
+            .get("courseId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let conversation_id = msg
+            .get("conversationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let sender_id = msg
+            .get("senderId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let mut rows: Vec<Value> = Vec::new();
         // Sender first so h_read_message can resolve senderName by userId == fromUserId.
         if let Some(sender) = msg.get("sender").cloned() {
@@ -937,9 +1238,21 @@ impl NTULearnClient {
                 || sender.get("givenName").is_some()
                 || sender.get("familyName").is_some()
             {
-                let uname = sender.get("userName").and_then(|v| v.as_str()).unwrap_or(sender_id.as_str()).to_string();
-                let given = sender.get("givenName").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let family = sender.get("familyName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let uname = sender
+                    .get("userName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(sender_id.as_str())
+                    .to_string();
+                let given = sender
+                    .get("givenName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let family = sender
+                    .get("familyName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 rows.push(json!({
                     "userId": sender_id,
                     "userName": uname,
@@ -951,8 +1264,12 @@ impl NTULearnClient {
         if course_id.is_empty() || conversation_id.is_empty() {
             return Ok(Value::Array(rows));
         }
-        let conv_path = format!("/learn/api/v1/courses/{course_id}/conversations/{conversation_id}");
-        let conv = match self.object_with_cache("get_message_participants", &conv_path, &[], None, cache).await {
+        let conv_path =
+            format!("/learn/api/v1/courses/{course_id}/conversations/{conversation_id}");
+        let conv = match self
+            .object_with_cache("get_message_participants", &conv_path, &[], None, cache)
+            .await
+        {
             Ok(v) => v,
             Err(_) => return Ok(Value::Array(rows)),
         };
@@ -966,8 +1283,16 @@ impl NTULearnClient {
         }
         if let Some(groups) = conv.get("groups").and_then(|v| v.as_array()) {
             for g in groups.iter().take(200) {
-                let gid = g.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let title = g.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let gid = g
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let title = g
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if gid.is_empty() {
                     continue;
                 }
@@ -987,13 +1312,28 @@ impl NTULearnClient {
                     continue;
                 }
                 let upath = format!("/learn/api/v1/users/{uid}");
-                let user = match self.object_with_cache("get_user", &upath, &[], None, cache).await {
+                let user = match self
+                    .object_with_cache("get_user", &upath, &[], None, cache)
+                    .await
+                {
                     Ok(u) => u,
                     Err(_) => continue,
                 };
-                let uname = user.get("userName").and_then(|v| v.as_str()).unwrap_or(uid).to_string();
-                let given = user.get("givenName").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let family = user.get("familyName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let uname = user
+                    .get("userName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(uid)
+                    .to_string();
+                let given = user
+                    .get("givenName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let family = user
+                    .get("familyName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 rows.push(json!({
                     "userId": uid,
                     "userName": uname,
@@ -1029,29 +1369,55 @@ impl NTULearnClient {
         let mut flat: Vec<Value> = Vec::new();
         // 401-refresh mutates the shared cookie; sequence the per-course fetches
         // so one refresh cannot race the other course walks.
-        let summaries = self.paginated("/learn/api/v1/messages/summary", &[], None).await?;
+        let summaries = self
+            .paginated("/learn/api/v1/messages/summary", &[], None)
+            .await?;
         for course in &summaries {
-            let course_id = course.get("courseId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let course_id = course
+                .get("courseId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if course_id.is_empty() {
                 continue;
             }
-            if course.get("isCourseMessagesEnabled").and_then(|v| v.as_bool()) == Some(false) {
+            if course
+                .get("isCourseMessagesEnabled")
+                .and_then(|v| v.as_bool())
+                == Some(false)
+            {
                 continue;
             }
-            let course_name = course.get("courseName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let course_name = course
+                .get("courseName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let conv_path = format!("/learn/api/v1/courses/{course_id}/conversations");
             let convs = match self.paginated(&conv_path, &[], None).await {
                 Ok(v) => v,
                 Err(_) => continue,
             };
             for conv in &convs {
-                let conversation_id = conv.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let conversation_id = conv
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if conversation_id.is_empty() {
                     continue;
                 }
-                let msgs = conv.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let msgs = conv
+                    .get("messages")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 for m in msgs {
-                    let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let id = m
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     if id.is_empty() {
                         continue;
                     }
@@ -1063,9 +1429,17 @@ impl NTULearnClient {
                         .unwrap_or("")
                         .to_string();
                     let sender_name = user_display_name(&sender);
-                    let created = m.get("postDate").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let created = m
+                        .get("postDate")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let read = m.get("isRead").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let folder = if !my_id.is_empty() && sender_id == my_id { "sent" } else { "inbox" };
+                    let folder = if !my_id.is_empty() && sender_id == my_id {
+                        "sent"
+                    } else {
+                        "inbox"
+                    };
                     flat.push(json!({
                         "id": id,
                         "conversationId": conversation_id,
@@ -1092,24 +1466,38 @@ impl NTULearnClient {
         Ok(value)
     }
 
-
     // ==========================================================================
     // Course users & groups
     // ==========================================================================
 
-    pub async fn get_course_users(&self, course_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_course_users(
+        &self,
+        course_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/users");
         let fields = default_fields("course_users");
-        self.list_with_cache("get_course_users", &path, &[], fields, cache).await
+        self.list_with_cache("get_course_users", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_course_groups(&self, course_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_course_groups(
+        &self,
+        course_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/groups");
         let fields = default_fields("groups");
-        self.list_with_cache("get_course_groups", &path, &[], fields, cache).await
+        self.list_with_cache("get_course_groups", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_group_users(&self, course_id: &str, group_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_group_users(
+        &self,
+        course_id: &str,
+        group_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         // The public REST group-users endpoint returns 403 for students on the
         // NTU instance; the internal v1 memberships endpoint is reachable and
         // returns the group's members (with names) via `expand=user,courseRole`.
@@ -1121,32 +1509,57 @@ impl NTULearnClient {
             ("expand", "user,courseRole"),
             ("includeCount", "true"),
         ];
-        self.list_with_cache("get_group_users", &path, &params, None, cache).await
+        self.list_with_cache("get_group_users", &path, &params, None, cache)
+            .await
     }
 
     // ==========================================================================
     // Gradebook
     // ==========================================================================
 
-    pub async fn get_gradebook_columns(&self, course_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_gradebook_columns(
+        &self,
+        course_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/gradebook/columns");
         let fields = default_fields("grade_columns");
-        self.list_with_cache("get_gradebook_columns", &path, &[], fields, cache).await
+        self.list_with_cache("get_gradebook_columns", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_user_grades(&self, course_id: &str, user_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_user_grades(
+        &self,
+        course_id: &str,
+        user_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/gradebook/users/{user_id}");
         let fields = default_fields("user_grades");
-        self.list_with_cache("get_user_grades", &path, &[], fields, cache).await
+        self.list_with_cache("get_user_grades", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_gradebook_attempts(&self, course_id: &str, column_id: &str, cache: Option<f64>) -> ClientResult<Value> {
-        let path = format!("/learn/api/public/v1/courses/{course_id}/gradebook/columns/{column_id}/attempts");
+    pub async fn get_gradebook_attempts(
+        &self,
+        course_id: &str,
+        column_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
+        let path = format!(
+            "/learn/api/public/v1/courses/{course_id}/gradebook/columns/{column_id}/attempts"
+        );
         let fields = default_fields("attempts");
-        self.list_with_cache("get_gradebook_attempts", &path, &[], fields, cache).await
+        self.list_with_cache("get_gradebook_attempts", &path, &[], fields, cache)
+            .await
     }
 
-    pub async fn get_user_attempts(&self, course_id: &str, column_id: &str, user_id: &str) -> ClientResult<Value> {
+    pub async fn get_user_attempts(
+        &self,
+        course_id: &str,
+        column_id: &str,
+        user_id: &str,
+    ) -> ClientResult<Value> {
         let path = format!(
             "/learn/api/public/v1/courses/{course_id}/gradebook/columns/{column_id}/users/{user_id}/attempts"
         );
@@ -1168,17 +1581,23 @@ impl NTULearnClient {
     pub async fn get_term(&self, term_id: &str, cache: Option<f64>) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/terms/{term_id}");
         let fields = default_fields("term");
-        self.object_with_cache("get_term", &path, &[], fields, cache).await
+        self.object_with_cache("get_term", &path, &[], fields, cache)
+            .await
     }
 
     // ==========================================================================
     // Announcements
     // ==========================================================================
 
-    pub async fn get_announcements(&self, course_id: &str, cache: Option<f64>) -> ClientResult<Value> {
+    pub async fn get_announcements(
+        &self,
+        course_id: &str,
+        cache: Option<f64>,
+    ) -> ClientResult<Value> {
         let path = format!("/learn/api/public/v1/courses/{course_id}/announcements");
         let fields = default_fields("announcements");
-        self.list_with_cache("get_announcements", &path, &[], fields, cache).await
+        self.list_with_cache("get_announcements", &path, &[], fields, cache)
+            .await
     }
 
     // ==========================================================================
@@ -1195,12 +1614,21 @@ impl NTULearnClient {
     ) -> ClientResult<Value> {
         let path = "/learn/api/public/v1/calendars/items";
         let mut params: Vec<(&str, &str)> = Vec::new();
-        if let Some(c) = course_id { params.push(("courseId", c)); }
-        if let Some(s) = since { params.push(("since", s)); }
-        if let Some(u) = until { params.push(("until", u)); }
-        if let Some(t) = item_type { params.push(("type", t)); }
+        if let Some(c) = course_id {
+            params.push(("courseId", c));
+        }
+        if let Some(s) = since {
+            params.push(("since", s));
+        }
+        if let Some(u) = until {
+            params.push(("until", u));
+        }
+        if let Some(t) = item_type {
+            params.push(("type", t));
+        }
         let fields = default_fields("calendar");
-        self.list_with_cache("get_calendar_items", path, &params, fields, cache).await
+        self.list_with_cache("get_calendar_items", path, &params, fields, cache)
+            .await
     }
 
     // ==========================================================================
@@ -1222,42 +1650,67 @@ impl NTULearnClient {
                 if looks_path {
                     let full = self.url(url);
                     let resp = self.authed_get_url_raw(&full).await?;
-                    let ct = resp.headers.get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+                    let ct = resp
+                        .headers
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string());
                     return Ok((resp.bytes, ct));
                 }
                 Err(ClientError::Other(format!("Unsafe download URL: {url}")))
             }
             Ok(parsed) => {
                 if !matches!(parsed.scheme(), "http" | "https") {
-                    return Err(ClientError::Other(format!("Unsafe download URL scheme: {}", parsed.scheme())));
+                    return Err(ClientError::Other(format!(
+                        "Unsafe download URL scheme: {}",
+                        parsed.scheme()
+                    )));
                 }
                 let base = reqwest::Url::parse(&self.base_url).ok();
-                let is_same_origin = base.map(|b| {
-                    b.scheme() == parsed.scheme()
-                        && b.host_str() == parsed.host_str()
-                        && b.port_or_known_default() == parsed.port_or_known_default()
-                }).unwrap_or(false);
+                let is_same_origin = base
+                    .map(|b| {
+                        b.scheme() == parsed.scheme()
+                            && b.host_str() == parsed.host_str()
+                            && b.port_or_known_default() == parsed.port_or_known_default()
+                    })
+                    .unwrap_or(false);
                 let host = parsed.host_str().unwrap_or("").to_string();
 
                 if is_same_origin {
                     let path_only = format!("{}?{}", parsed.path(), parsed.query().unwrap_or(""));
                     let full = self.url(&path_only);
                     let resp = self.authed_get_url_raw(&full).await?;
-                    let ct = resp.headers.get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+                    let ct = resp
+                        .headers
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string());
                     return Ok((resp.bytes, ct));
                 }
                 if host.ends_with(".blackboard.com") {
-                    let raw = self.external.get(url).send().await.map_err(ClientError::Network)?;
+                    let _permit = self.http_limit.acquire().await.ok();
+                    let raw = self
+                        .external
+                        .get(url)
+                        .send()
+                        .await
+                        .map_err(ClientError::Network)?;
                     let status = raw.status().as_u16();
                     if !is_success_status(status) {
                         let text = raw.text().await.unwrap_or_default();
                         return Err(ClientError::api(status, &text, url));
                     }
-                    let ct = raw.headers().get(reqwest::header::CONTENT_TYPE).and_then(|h| h.to_str().ok()).map(|s| s.to_string());
+                    let ct = raw
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string());
                     let bytes = raw.bytes().await.map(|b| b.to_vec())?;
                     return Ok((bytes, ct));
                 }
-                Err(ClientError::Other(format!("Unsafe download URL host: {host}")))
+                Err(ClientError::Other(format!(
+                    "Unsafe download URL host: {host}"
+                )))
             }
         }
     }
@@ -1293,13 +1746,18 @@ impl NTULearnClient {
             if let Some(hit) = self.cache.get("get_json", &key, Some(ttl)) {
                 return Ok(hit);
             }
-            let raw = self.authed_get_raw(&self.build_authed_url(path, params)).await?;
+            let raw = self
+                .authed_get_raw(&self.build_authed_url(path, params))
+                .await?;
             let value: Value = serde_json::from_slice(&raw.bytes).map_err(ClientError::Json)?;
             let key = self.cache_key("get_json", path, params);
-            self.cache.set("get_json", &key, value.clone(), ttl, Some(&self.user_scope));
+            self.cache
+                .set("get_json", &key, value.clone(), ttl, Some(&self.user_scope));
             return Ok(value);
         }
-        let raw = self.authed_get_raw(&self.build_authed_url(path, params)).await?;
+        let raw = self
+            .authed_get_raw(&self.build_authed_url(path, params))
+            .await?;
         serde_json::from_slice(&raw.bytes).map_err(ClientError::Json)
     }
 
@@ -1318,9 +1776,7 @@ impl NTULearnClient {
     pub async fn download_bytes_only(&self, url: &str) -> ClientResult<Vec<u8>> {
         self.download_bytes(url).await.map(|(b, _)| b)
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1342,7 +1798,10 @@ mod tests {
             assert!(is_retryable_status(s), "status {s} should be retryable");
         }
         for s in [200, 400, 401, 403, 404, 408, 425] {
-            assert!(!is_retryable_status(s), "status {s} should NOT be retryable");
+            assert!(
+                !is_retryable_status(s),
+                "status {s} should NOT be retryable"
+            );
         }
     }
 
@@ -1391,9 +1850,18 @@ mod tests {
     #[test]
     fn iso_iso_ge_compares_rfc3339_cutoffs() {
         // created >= since
-        assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-05-09T00:00:00Z"));
-        assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-08-29T04:15:00.000Z"));
-        assert!(!iso_iso_ge("2026-05-09T00:00:00Z", "2026-08-29T04:15:00.000Z"));
+        assert!(iso_iso_ge(
+            "2026-08-29T04:15:00.000Z",
+            "2026-05-09T00:00:00Z"
+        ));
+        assert!(iso_iso_ge(
+            "2026-08-29T04:15:00.000Z",
+            "2026-08-29T04:15:00.000Z"
+        ));
+        assert!(!iso_iso_ge(
+            "2026-05-09T00:00:00Z",
+            "2026-08-29T04:15:00.000Z"
+        ));
         // naive ISO datetime and date-only forms
         assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-05-09"));
         assert!(iso_iso_ge("2026-08-29T04:15:00.000Z", "2026-08-29"));
@@ -1417,7 +1885,9 @@ mod tests {
         );
         // mixed flat + nested -> nested wins
         assert_eq!(
-            user_display_name(&json!({"name": {"given": "A", "family": "B"}, "givenName": "X", "familyName": "Y"})),
+            user_display_name(
+                &json!({"name": {"given": "A", "family": "B"}, "givenName": "X", "familyName": "Y"})
+            ),
             "A B"
         );
         // empty names fall back to userName

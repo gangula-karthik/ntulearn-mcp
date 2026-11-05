@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
-use serde_json::{json, Map, Value};
 use crate::mcp::ToolContent;
+use serde_json::{json, Map, Value};
 
 use crate::client::{ClientError, NTULearnClient};
 use crate::{parsers, render, AppState};
@@ -71,7 +71,6 @@ const BB_ID_PATTERN: &str = r"^[\w:.-]+$";
 // What's-new "last seen" tracker (in-memory; matches tracker_get_last_seen()).
 static LAST_SEEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static DOWNLOAD_TIMESTAMP: AtomicU64 = AtomicU64::new(0);
-
 
 // ---------------------------------------------------------------------------
 // dispatch
@@ -138,10 +137,12 @@ pub async fn login(state: std::sync::Arc<AppState>, args: &Value) -> Result<Stri
         }
     }
     if !crate::capture::browser_available() {
-        return Err("No Chromium-based browser (Chrome, Edge, Brave, Arc, Vivaldi, Opera) found, so \
+        return Err(
+            "No Chromium-based browser (Chrome, Edge, Brave, Arc, Vivaldi, Opera) found, so \
                     the login window cannot open. Ask the user to run `ntulearn-mcp setup` in a \
                     terminal, which offers a manual cookie paste."
-            .to_string());
+                .to_string(),
+        );
     }
 
     // One login window at a time: if a capture is already running (a previous
@@ -161,7 +162,12 @@ pub async fn login(state: std::sync::Arc<AppState>, args: &Value) -> Result<Stri
         let state = state.clone();
         async move {
             let _claim = claim;
-            let res = crate::capture::capture_cookie(&base, crate::capture::CaptureMode::Interactive, true).await;
+            let res = crate::capture::capture_cookie(
+                &base,
+                crate::capture::CaptureMode::Interactive,
+                true,
+            )
+            .await;
             if let Ok((val, _)) = &res {
                 state.client.install_cookie(val).await;
             }
@@ -169,7 +175,9 @@ pub async fn login(state: std::sync::Arc<AppState>, args: &Value) -> Result<Stri
         }
     });
     match tokio::time::timeout(LOGIN_WAIT, task).await {
-        Ok(Ok(Ok((_, browser)))) => Ok(json!({ "status": "logged_in", "browser": browser }).to_string()),
+        Ok(Ok(Ok((_, browser)))) => {
+            Ok(json!({ "status": "logged_in", "browser": browser }).to_string())
+        }
         Ok(Ok(Err(e))) => Err(format!(
             "Login did not complete: {e}. Ask the user to run `ntulearn-mcp setup` in a terminal."
         )),
@@ -282,7 +290,9 @@ fn slice_with_pagination(items: &[Value], offset: usize, limit: usize) -> (Vec<V
 /// `common.validate_iso8601` — cheap sanity check + unchanged return.
 fn validate_iso8601(value: &str, name: &str) -> Result<String, String> {
     if value.trim().is_empty() {
-        return Err(format!("{name} must be a non-empty ISO-8601 timestamp string"));
+        return Err(format!(
+            "{name} must be a non-empty ISO-8601 timestamp string"
+        ));
     }
     let normalised = value.to_string();
     let ok = chrono::DateTime::parse_from_rfc3339(&normalised).is_ok()
@@ -328,7 +338,11 @@ fn parse_page_range(spec: Option<&Value>) -> Result<Option<HashSet<u32>>, String
     let text = match spec {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
-        other => return Err(format!("pages must be a string like '1,3-5', got {other:?}")),
+        other => {
+            return Err(format!(
+                "pages must be a string like '1,3-5', got {other:?}"
+            ))
+        }
     };
     let text = text.trim();
     if text.is_empty() {
@@ -360,7 +374,9 @@ fn parse_page_range(spec: Option<&Value>) -> Result<Option<HashSet<u32>>, String
                 format!("pages must be a set of 1-based page numbers, got {spec:?}")
             })?;
             if p == 0 {
-                return Err(format!("pages must be a set of 1-based page numbers, got {spec:?}"));
+                return Err(format!(
+                    "pages must be a set of 1-based page numbers, got {spec:?}"
+                ));
             }
             set.insert(p);
         }
@@ -379,7 +395,6 @@ fn str_or<'a>(v: &'a Value, key: &str, default: &'a str) -> &'a str {
 fn u64_or(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(|x| x.as_u64()).unwrap_or(0)
 }
-
 
 // ---------------------------------------------------------------------------
 // Time helpers (common.py)
@@ -404,12 +419,8 @@ fn iso_from_now(days: i64, minute_of_day: u32) -> String {
     let mut stamp = now + chrono::Duration::days(days);
     if minute_of_day <= 1439 {
         let date = stamp.date_naive();
-        let time = chrono::NaiveTime::from_hms_opt(
-            minute_of_day / 60,
-            minute_of_day % 60,
-            0,
-        )
-        .unwrap_or_else(|| stamp.time());
+        let time = chrono::NaiveTime::from_hms_opt(minute_of_day / 60, minute_of_day % 60, 0)
+            .unwrap_or_else(|| stamp.time());
         let ndt = chrono::NaiveDateTime::new(date, time);
         stamp = chrono::DateTime::from_naive_utc_and_offset(ndt, chrono::Utc);
     }
@@ -529,7 +540,6 @@ fn dbg_err(e: String) -> String {
     e
 }
 
-
 // ---------------------------------------------------------------------------
 // Generic JSON primitives through the Rust client
 // ---------------------------------------------------------------------------
@@ -565,6 +575,49 @@ async fn me_enrollments(c: &NTULearnClient) -> Result<Vec<Value>, String> {
     Ok(as_list(v))
 }
 
+/// Enrollments with `expand=course`: course ids plus id -> display name from
+/// the same response. The name map is empty when the server ignores `expand`,
+/// in which case callers fall back to a per-course GET.
+async fn enrollment_ids_and_names(
+    c: &NTULearnClient,
+) -> Result<(Vec<String>, HashMap<String, String>), String> {
+    // If the tenant rejects `expand=course` outright, fall back to the plain
+    // enrollment list; names then come from the per-course fallback.
+    let v = match c.get_my_enrollments_expanded(None).await {
+        Ok(v) => v,
+        Err(_) => c.get_my_enrollments(None).await.map_err(err_str)?,
+    };
+    let mut ids = Vec::new();
+    let mut names = HashMap::new();
+    for e in as_list(v) {
+        let avail = e
+            .get("availability")
+            .and_then(|v| v.get("available"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if avail != "Yes" {
+            continue;
+        }
+        let Some(cid) = e.get("courseId").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if cid.is_empty() {
+            continue;
+        }
+        ids.push(cid.to_string());
+        if let Some(name) = e
+            .get("course")
+            .and_then(|c| c.get("name"))
+            .and_then(|v| v.as_str())
+        {
+            if !name.is_empty() {
+                names.insert(cid.to_string(), name.to_string());
+            }
+        }
+    }
+    Ok((ids, names))
+}
+
 /// get_my_user_id — `/users/me` -> `id`.
 async fn me_user_id(c: &NTULearnClient) -> Result<Option<String>, String> {
     let id = c.get_my_user_id().await.map_err(err_str)?;
@@ -587,7 +640,10 @@ async fn courses_batch(c: &NTULearnClient, course_ids: &[String]) -> Vec<Value> 
 
 /// get_course_contents — `/courses/{id}/contents` (paginated).
 async fn course_contents(c: &NTULearnClient, course_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_course_contents(course_id, None).await.map_err(err_str)?;
+    let v = c
+        .get_course_contents(course_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
@@ -605,8 +661,14 @@ async fn content_children(
 }
 
 /// get_content_item — single content object.
-async fn content_item(c: &NTULearnClient, course_id: &str, content_id: &str) -> Result<Value, String> {
-    c.get_content_item(course_id, content_id, None).await.map_err(err_str)
+async fn content_item(
+    c: &NTULearnClient,
+    course_id: &str,
+    content_id: &str,
+) -> Result<Value, String> {
+    c.get_content_item(course_id, content_id, None)
+        .await
+        .map_err(err_str)
 }
 
 /// get_course_search — contents?search=… ; API errors become [] (Python does
@@ -649,7 +711,11 @@ async fn messages(
     unread_only: bool,
     since: Option<&str>,
 ) -> Result<Vec<Value>, String> {
-    let folder_arg = if folder.is_empty() { None } else { Some(folder) };
+    let folder_arg = if folder.is_empty() {
+        None
+    } else {
+        Some(folder)
+    };
     let v = c
         .get_messages(folder_arg, unread_only, since, None)
         .await
@@ -662,7 +728,10 @@ async fn message(c: &NTULearnClient, message_id: &str) -> Result<Value, String> 
 }
 
 async fn message_participants(c: &NTULearnClient, message_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_message_participants(message_id, None).await.map_err(err_str)?;
+    let v = c
+        .get_message_participants(message_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
@@ -672,26 +741,50 @@ async fn course_users(c: &NTULearnClient, course_id: &str) -> Result<Vec<Value>,
 }
 
 async fn course_groups(c: &NTULearnClient, course_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_course_groups(course_id, None).await.map_err(err_str)?;
+    let v = c
+        .get_course_groups(course_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
-async fn group_users(c: &NTULearnClient, course_id: &str, group_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_group_users(course_id, group_id, None).await.map_err(err_str)?;
+async fn group_users(
+    c: &NTULearnClient,
+    course_id: &str,
+    group_id: &str,
+) -> Result<Vec<Value>, String> {
+    let v = c
+        .get_group_users(course_id, group_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
 async fn gradebook_columns(c: &NTULearnClient, course_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_gradebook_columns(course_id, None).await.map_err(err_str)?;
+    let v = c
+        .get_gradebook_columns(course_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
-async fn user_grades(c: &NTULearnClient, course_id: &str, user_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_user_grades(course_id, user_id, None).await.map_err(err_str)?;
+async fn user_grades(
+    c: &NTULearnClient,
+    course_id: &str,
+    user_id: &str,
+) -> Result<Vec<Value>, String> {
+    let v = c
+        .get_user_grades(course_id, user_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
-async fn gradebook_attempts(c: &NTULearnClient, course_id: &str, column_id: &str) -> Result<Vec<Value>, String> {
+async fn gradebook_attempts(
+    c: &NTULearnClient,
+    course_id: &str,
+    column_id: &str,
+) -> Result<Vec<Value>, String> {
     let v = c
         .get_gradebook_attempts(course_id, column_id, None)
         .await
@@ -717,7 +810,10 @@ async fn term(c: &NTULearnClient, term_id: &str) -> Result<Value, String> {
 }
 
 async fn announcements(c: &NTULearnClient, course_id: &str) -> Result<Vec<Value>, String> {
-    let v = c.get_announcements(course_id, None).await.map_err(err_str)?;
+    let v = c
+        .get_announcements(course_id, None)
+        .await
+        .map_err(err_str)?;
     Ok(as_list(v))
 }
 
@@ -736,8 +832,12 @@ async fn calendar_items(
 }
 
 /// Max concurrent requests when a tool fans out across courses or files.
-/// 6 keeps the server polite (parallel speedup without hammering Blackboard).
-const FANOUT_CONCURRENCY: usize = 6;
+/// Shares the client's global cap (`NTULEARN_HTTP_CONCURRENCY`, default 48):
+/// per-fan-out limits below the global one were the real bottleneck, because
+/// 44 courses at 6 was still eight waves.
+fn fanout_limit() -> usize {
+    crate::client::http_concurrency()
+}
 
 /// Run an async fn over items with bounded concurrency, returning results in
 /// input order. Failures don't short-circuit — callers decide per result.
@@ -757,7 +857,10 @@ where
 }
 
 /// fan_out_course_ids — resolve `course_ids` arg (None/empty -> enrolled+available).
-async fn fan_out_course_ids(c: &NTULearnClient, course_ids_arg: Option<&Value>) -> Result<Vec<String>, String> {
+async fn fan_out_course_ids(
+    c: &NTULearnClient,
+    course_ids_arg: Option<&Value>,
+) -> Result<Vec<String>, String> {
     let is_none_or_empty_list = match course_ids_arg {
         None => true,
         Some(Value::Array(a)) => a.is_empty(),
@@ -796,7 +899,10 @@ async fn fan_out_course_ids(c: &NTULearnClient, course_ids_arg: Option<&Value>) 
 }
 
 /// resolve_enrolled_course_ids (server._resolve_enrolled_course_ids).
-async fn resolve_enrolled_course_ids(c: &NTULearnClient, include_disabled: bool) -> Result<Vec<String>, String> {
+async fn resolve_enrolled_course_ids(
+    c: &NTULearnClient,
+    include_disabled: bool,
+) -> Result<Vec<String>, String> {
     let enrollments = me_enrollments(c).await?;
     let mut ids = Vec::new();
     for e in enrollments {
@@ -818,7 +924,6 @@ async fn resolve_enrolled_course_ids(c: &NTULearnClient, include_disabled: bool)
     }
     Ok(ids)
 }
-
 
 // ---------------------------------------------------------------------------
 // Pure data helpers (handlers.py / server.py)
@@ -861,7 +966,11 @@ fn item_title(item: &Value) -> String {
     item.get("title")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .or_else(|| item.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()))
+        .or_else(|| {
+            item.get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or("untitled")
         .to_string()
 }
@@ -899,7 +1008,10 @@ fn user_name(user: &Value) -> String {
     }
     // Internal v1 user objects use flat givenName/familyName (no nested `name`).
     let given = user.get("givenName").and_then(|v| v.as_str()).unwrap_or("");
-    let family = user.get("familyName").and_then(|v| v.as_str()).unwrap_or("");
+    let family = user
+        .get("familyName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if !given.is_empty() || !family.is_empty() {
         let mut parts = Vec::new();
         if !given.is_empty() {
@@ -910,7 +1022,10 @@ fn user_name(user: &Value) -> String {
         }
         return parts.join(" ");
     }
-    user.get("userName").and_then(|v| v.as_str()).unwrap_or("").to_string()
+    user.get("userName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn user_role(user: &Value) -> String {
@@ -972,10 +1087,7 @@ fn strip_content(item: &Value) -> Value {
     let handler = item.get("contentHandler");
     let description_raw = item.get("description");
     let description = match description_raw {
-        Some(Value::Object(o)) => o
-            .get("rawText")
-            .cloned()
-            .unwrap_or(Value::Null),
+        Some(Value::Object(o)) => o.get("rawText").cloned().unwrap_or(Value::Null),
         Some(other) => other.clone(),
         None => Value::Null,
     };
@@ -1033,7 +1145,6 @@ fn announcement_text(ann: &Value) -> String {
     parsers::strip_html(raw)
 }
 
-
 // ---------------------------------------------------------------------------
 // Content-tree walker + search (handlers.py)
 // ---------------------------------------------------------------------------
@@ -1042,102 +1153,107 @@ struct ContentNode {
     item: Value,
     breadcrumb: Vec<String>,
     depth: usize,
+    /// Parent content id ("" for top-level items). Used to assemble the tree
+    /// in O(n) instead of rescanning every node at each level.
+    parent: String,
 }
 
 impl ContentNode {
     fn id(&self) -> String {
-        self.item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        self.item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     }
     fn title(&self) -> String {
         item_title(&self.item)
     }
 }
 
-type WalkBox<'b> = std::pin::Pin<
-    Box<
-        dyn std::future::Future<
-                    Output = (HashSet<String>, Vec<ContentNode>),
-                > + Send + 'b,
-    >,
->;
+/// walk_content — every reachable node in a course (bounded, cycle-guarded).
+///
+/// The previous implementation was a sequential DFS: each folder awaited its
+/// children before the next folder started, so a course with 13 weeks and 5
+/// folders per week cost ~70 round trips. This walks one *level* at a time in
+/// parallel (root -> weeks -> folders -> files = ~4 waves), stores each
+/// parent's children, then reconstructs the exact DFS pre-order in memory.
+async fn walk_content(c: &NTULearnClient, course_id: &str, max_depth: usize) -> Vec<ContentNode> {
+    let mut seen: HashSet<String> = HashSet::new();
+    // parent content id ("" = course root) -> its children, in API order.
+    let mut children_of: HashMap<String, Vec<Value>> = HashMap::new();
+    // (parent id, depth its children are reported at)
+    let mut frontier: Vec<(String, usize)> = vec![(String::new(), 0)];
 
-/// walk_rec — recursive pre-order walk; owned-state threading avoids the
-/// infinitely-sized future error without changing the DFS order or payload.
-#[allow(clippy::too_many_arguments)] // state threads through the recursion by design
-fn walk_rec<'b>(
-    c: &'b NTULearnClient,
-    course_id: &'b str,
-    max_depth: usize,
-    content_id: Option<String>,
-    depth: usize,
-    breadcrumb: Vec<String>,
-    seen: HashSet<String>,
-    nodes: Vec<ContentNode>,
-) -> WalkBox<'b> {
-    Box::pin(async move {
-        if depth > max_depth {
-            return (seen, nodes);
-        }
-        let children = match content_id {
-            None => course_contents(c, course_id).await,
-            Some(ref cid) => content_children(c, course_id, cid).await,
-        };
-        let Ok(children) = children else { return (seen, nodes) };
-        if children.is_empty() {
-            return (seen, nodes);
-        }
-        let mut seen = seen;
-        let mut nodes = nodes;
-        for raw in children {
-            let item = if raw.is_null() { json!({}) } else { raw };
-            let Some(cid) = item.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-                continue;
+    while !frontier.is_empty() {
+        let results = bounded_map(frontier, fanout_limit(), |(parent_id, depth)| async move {
+            let items = if parent_id.is_empty() {
+                course_contents(c, course_id).await
+            } else {
+                content_children(c, course_id, &parent_id).await
             };
-            if cid.is_empty() || seen.contains(&cid) {
-                continue;
+            (parent_id, depth, items)
+        })
+        .await;
+
+        let mut next: Vec<(String, usize)> = Vec::new();
+        for (parent_id, depth, items) in results {
+            let Ok(items) = items else { continue };
+            let mut kept: Vec<Value> = Vec::with_capacity(items.len());
+            for raw in items {
+                let item = if raw.is_null() { json!({}) } else { raw };
+                let Some(cid) = item
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                else {
+                    continue;
+                };
+                if cid.is_empty() || !seen.insert(cid.clone()) {
+                    continue;
+                }
+                // A folder at `depth` is expanded only when its children are
+                // still inside the depth budget (same rule as the old DFS).
+                if is_folder(&item) && depth + 1 <= max_depth {
+                    next.push((cid, depth + 1));
+                }
+                kept.push(item);
             }
-            seen.insert(cid.clone());
-            let title = item_title(&item);
-            let mut crumb = breadcrumb.clone();
+            children_of.insert(parent_id, kept);
+        }
+        frontier = next;
+    }
+
+    fn push_preorder(
+        parent: &str,
+        depth: usize,
+        breadcrumb: &[String],
+        children_of: &HashMap<String, Vec<Value>>,
+        out: &mut Vec<ContentNode>,
+    ) {
+        let Some(items) = children_of.get(parent) else {
+            return;
+        };
+        for item in items {
+            let title = item_title(item);
+            let mut crumb = breadcrumb.to_vec();
             crumb.push(title);
-            nodes.push(ContentNode {
+            out.push(ContentNode {
                 item: item.clone(),
                 breadcrumb: crumb.clone(),
                 depth,
+                parent: parent.to_string(),
             });
-            if is_folder(&item) {
-                let (s2, n2) = walk_rec(
-                    c,
-                    course_id,
-                    max_depth,
-                    Some(cid),
-                    depth + 1,
-                    crumb,
-                    seen,
-                    nodes,
-                )
-                .await;
-                seen = s2;
-                nodes = n2;
+            if is_folder(item) {
+                if let Some(cid) = item.get("id").and_then(|v| v.as_str()) {
+                    push_preorder(cid, depth + 1, &crumb, children_of, out);
+                }
             }
         }
-        (seen, nodes)
-    })
-}
+    }
 
-/// walk_content — every reachable node in a course (bounded, cycle-guarded).
-async fn walk_content(c: &NTULearnClient, course_id: &str, max_depth: usize) -> Vec<ContentNode> {
-    let (_seen, nodes) = walk_rec(
-        c,
-        course_id,
-        max_depth,
-        None,
-        0,
-        Vec::new(),
-        HashSet::new(),
-        Vec::new(),
-    )
-    .await;
+    let mut nodes = Vec::new();
+    push_preorder("", 0, &[], &children_of, &mut nodes);
     nodes
 }
 
@@ -1185,7 +1301,14 @@ async fn search_course(
     if !server_matches.is_empty() {
         for sm in &server_matches {
             let item = if sm.is_null() { json!({}) } else { sm.clone() };
-            search_add(&mut matches, &mut seen, &lowered, course_id, &item, vec![item_title(&item)]);
+            search_add(
+                &mut matches,
+                &mut seen,
+                &lowered,
+                course_id,
+                &item,
+                vec![item_title(&item)],
+            );
         }
         if !matches.is_empty() {
             return matches;
@@ -1193,11 +1316,17 @@ async fn search_course(
     }
 
     for node in walk_content(c, course_id, max_depth).await {
-        search_add(&mut matches, &mut seen, &lowered, course_id, &node.item, node.breadcrumb);
+        search_add(
+            &mut matches,
+            &mut seen,
+            &lowered,
+            course_id,
+            &node.item,
+            node.breadcrumb,
+        );
     }
     matches
 }
-
 
 // ---------------------------------------------------------------------------
 // Download machinery (handlers.py)
@@ -1214,7 +1343,11 @@ struct DownloadJob {
 }
 
 /// _collect_download_jobs — walk a course, resolve every file attachment.
-async fn collect_download_jobs(c: &NTULearnClient, course_id: &str, max_depth: usize) -> Vec<DownloadJob> {
+async fn collect_download_jobs(
+    c: &NTULearnClient,
+    course_id: &str,
+    max_depth: usize,
+) -> Vec<DownloadJob> {
     let mut jobs: Vec<DownloadJob> = Vec::new();
     let course_raw = course(c, course_id).await.unwrap_or_else(|_| json!({}));
     let course_name = parsers::safe_folder_name(
@@ -1226,34 +1359,72 @@ async fn collect_download_jobs(c: &NTULearnClient, course_id: &str, max_depth: u
             .unwrap_or(course_id),
     );
     let course_folder = format!("{course_id} - {course_name}");
-    for node in walk_content(c, course_id, max_depth).await {
-        if !is_file_item(&node.item) {
-            continue;
+    let file_nodes: Vec<ContentNode> = walk_content(c, course_id, max_depth)
+        .await
+        .into_iter()
+        .filter(|n| is_file_item(&n.item))
+        .collect();
+
+    // Resolve (attachments, download URL) for every file concurrently. This
+    // used to cost two sequential round trips per attachment; a 100-file
+    // course spent ~200 RTTs here before any bytes were downloaded.
+    let resolved = bounded_map(file_nodes, fanout_limit(), |node| async move {
+        let item = node.item;
+        let content_id = item
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if content_id.is_empty() {
+            return Vec::new();
         }
-        let item = &node.item;
-        let Some(content_id) = item.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
-            continue;
-        };
         let atts = attachments(c, course_id, &content_id).await;
-        for att in &atts {
-            let Some(att_id) = att.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
+        let resolved_atts = bounded_map(atts, fanout_limit(), |att| {
+            let content_id = content_id.clone();
+            async move {
+                let att_id = att
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let url = if att_id.is_empty() {
+                    String::new()
+                } else {
+                    attachment_download_url(c, course_id, &content_id, &att_id)
+                        .await
+                        .unwrap_or_default()
+                };
+                (att, url)
+            }
+        })
+        .await;
+        resolved_atts
+            .into_iter()
+            .map(|(att, url)| (item.clone(), att, url))
+            .collect::<Vec<_>>()
+    })
+    .await;
+
+    for per_file in resolved {
+        for (item, att, url) in per_file {
+            if url.is_empty() {
                 continue;
-            };
-            let url = match attachment_download_url(c, course_id, &content_id, &att_id).await {
-                Ok(u) => u,
-                Err(_) => continue,
-            };
+            }
             let raw_name = att
                 .get("fileName")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| item_title(item));
-            let raw_name = if raw_name.is_empty() { "file".to_string() } else { raw_name };
+                .unwrap_or_else(|| item_title(&item));
+            let raw_name = if raw_name.is_empty() {
+                "file".to_string()
+            } else {
+                raw_name
+            };
             jobs.push(DownloadJob {
                 course_id: course_id.to_string(),
                 course_folder: course_folder.clone(),
-                content_title: item_title(item),
+                content_title: item_title(&item),
                 url,
                 raw_name: raw_name.clone(),
                 safe_name: parsers::sanitize_filename(&raw_name),
@@ -1298,7 +1469,7 @@ async fn download_worker(
     ext_filter: Option<&HashSet<String>>,
 ) {
     let folder = dest_root.join(&job.course_folder);
-    let _ = std::fs::create_dir_all(&folder);
+    let _ = tokio::fs::create_dir_all(&folder).await;
     let name = job.target_name.clone();
 
     if let Some(filter) = ext_filter {
@@ -1328,7 +1499,7 @@ async fn download_worker(
         }));
         return;
     };
-    if std::fs::write(&local_path, &content).is_err() {
+    if tokio::fs::write(&local_path, &content).await.is_err() {
         skipped.push(json!({
             "filename": name,
             "courseFolder": job.course_folder,
@@ -1344,7 +1515,6 @@ async fn download_worker(
     }));
 }
 
-
 // ---------------------------------------------------------------------------
 // Gradebook helpers (handlers.py)
 // ---------------------------------------------------------------------------
@@ -1353,7 +1523,11 @@ fn column_name(col: &Value) -> String {
     col.get("name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .or_else(|| col.get("displayName").and_then(|v| v.as_str()).filter(|s| !s.is_empty()))
+        .or_else(|| {
+            col.get("displayName")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
         .or_else(|| col.get("id").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_string()
@@ -1382,10 +1556,7 @@ fn column_possible(col: &Value) -> Option<f64> {
 fn grade_score(grade: &Value) -> Option<f64> {
     let score = grade.get("score");
     let raw = match score {
-        Some(Value::Object(o)) => o
-            .get("score")
-            .or_else(|| o.get("value"))
-            .cloned(),
+        Some(Value::Object(o)) => o.get("score").or_else(|| o.get("value")).cloned(),
         _ => score.cloned(),
     };
     coerce_f64(raw.as_ref())
@@ -1442,7 +1613,6 @@ async fn grade_brief(c: &NTULearnClient, course_id: &str, user_id: Option<&str>)
     }
     Value::Object(out)
 }
-
 
 // ---------------------------------------------------------------------------
 // Content summary builder (handlers.py build_course_summary)
@@ -1607,7 +1777,6 @@ async fn build_course_summary(
     Value::Object(summary)
 }
 
-
 // ---------------------------------------------------------------------------
 // ICS / CSV builders (handlers.py)
 // ---------------------------------------------------------------------------
@@ -1634,8 +1803,10 @@ fn ics_dt(value: Option<&Value>) -> String {
     let parsed = chrono::DateTime::parse_from_rfc3339(raw)
         .or_else(|_| {
             // naive ISO without offset -> assume UTC
-            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
-                .map(|nd| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(nd, chrono::Utc).fixed_offset())
+            chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f").map(|nd| {
+                chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(nd, chrono::Utc)
+                    .fixed_offset()
+            })
         })
         .map(|dt| dt.with_timezone(&chrono::Utc));
     match parsed {
@@ -1664,7 +1835,10 @@ fn build_ics(items: &[Value], _scope: &str) -> String {
                     item.get("id").and_then(|v| v.as_str()).unwrap_or("x"),
                 )
             });
-        let title = ics_escape(Some(&json!(item.get("title").and_then(|v| v.as_str()).unwrap_or("Untitled event"))));
+        let title = ics_escape(Some(&json!(item
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Untitled event"))));
         let desc = ics_escape(item.get("description"));
         let location = ics_escape(item.get("location"));
         let start = ics_dt(item.get("start"));
@@ -1677,10 +1851,7 @@ fn build_ics(items: &[Value], _scope: &str) -> String {
             }
         };
         let fetched_value = match item.get("fetchedAt") {
-            Some(v)
-                if !(v.is_null()
-                    || v.as_str().map(|s| s.is_empty()).unwrap_or(false)) =>
-            {
+            Some(v) if !(v.is_null() || v.as_str().map(|s| s.is_empty()).unwrap_or(false)) => {
                 v.clone()
             }
             _ => json!(now_iso()),
@@ -1741,7 +1912,6 @@ fn build_gradebook_csv(rows: &[Value]) -> String {
     }
     out
 }
-
 
 // ---------------------------------------------------------------------------
 // Destination resolution (server._resolve_destination_dir / download_course)
@@ -1837,7 +2007,6 @@ fn deduplicate_filename(name: &str, used: &HashSet<String>, dest_dir: &Path) -> 
     candidate
 }
 
-
 // ---------------------------------------------------------------------------
 // Server-local tools (server.py)
 // ---------------------------------------------------------------------------
@@ -1860,21 +2029,30 @@ async fn h_list_courses(state: &AppState, args: &Value) -> Result<Value, String>
 
     let course_ids: Vec<String> = enrollments
         .iter()
-        .filter_map(|e| e.get("courseId").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter_map(|e| {
+            e.get("courseId")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
 
     if course_ids.is_empty() {
         let (_, meta) = slice_with_pagination(&[], offset, limit);
-        return Ok(json!({"courses": [], "total": meta["total"], "count": meta["count"],
+        return Ok(
+            json!({"courses": [], "total": meta["total"], "count": meta["count"],
             "offset": meta["offset"], "limit": meta["limit"], "hasMore": meta["hasMore"],
-            "nextOffset": meta["nextOffset"]}));
+            "nextOffset": meta["nextOffset"]}),
+        );
     }
 
     let mut last_accessed_map: HashMap<String, Value> = HashMap::new();
     let mut availability_map: HashMap<String, String> = HashMap::new();
     for e in &enrollments {
         if let Some(cid) = e.get("courseId").and_then(|v| v.as_str()) {
-            last_accessed_map.insert(cid.to_string(), e.get("lastAccessed").cloned().unwrap_or(Value::Null));
+            last_accessed_map.insert(
+                cid.to_string(),
+                e.get("lastAccessed").cloned().unwrap_or(Value::Null),
+            );
             let avail = e
                 .get("availability")
                 .and_then(|a| a.get("available"))
@@ -1962,8 +2140,9 @@ async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value
     // Sequential walk (mirrors the gather/semaphore version's payload exactly).
     // Owned-state recursion (Box::pin) — same pre-order walk as the Python
     // recursive gather, but without an infinitely-sized future.
-    type WalkFuture<'b> =
-        std::pin::Pin<Box<dyn std::future::Future<Output = (Vec<Value>, HashSet<String>)> + Send + 'b>>;
+    type WalkFuture<'b> = std::pin::Pin<
+        Box<dyn std::future::Future<Output = (Vec<Value>, HashSet<String>)> + Send + 'b>,
+    >;
 
     #[allow(clippy::too_many_arguments)] // state threads through the recursion by design
     fn rec_walk<'b>(
@@ -1998,21 +2177,36 @@ async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value
                 let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
                 let desc_raw = item.get("description");
                 let desc = match desc_raw {
-                    Some(Value::Object(o)) => o.get("rawText").and_then(|v| v.as_str()).unwrap_or(""),
+                    Some(Value::Object(o)) => {
+                        o.get("rawText").and_then(|v| v.as_str()).unwrap_or("")
+                    }
                     Some(Value::String(s)) => s.as_str(),
                     _ => "",
                 }
                 .to_string();
                 let mut current_path = path.clone();
                 current_path.push(title.to_string());
-                if query.contains(title.to_lowercase().as_str()) || query.contains(desc.to_lowercase().as_str()) {
+                if query.contains(title.to_lowercase().as_str())
+                    || query.contains(desc.to_lowercase().as_str())
+                {
                     let mut stripped = strip_content(item);
                     if let Some(s) = stripped.as_object_mut() {
-                        s.insert("breadcrumb".to_string(), Value::Array(current_path.iter().map(|x| Value::String(x.clone())).collect()));
+                        s.insert(
+                            "breadcrumb".to_string(),
+                            Value::Array(
+                                current_path
+                                    .iter()
+                                    .map(|x| Value::String(x.clone()))
+                                    .collect(),
+                            ),
+                        );
                     }
                     matches.push(stripped);
                 }
-                let has_children = item.get("hasChildren").and_then(|v| v.as_bool()).unwrap_or(false);
+                let has_children = item
+                    .get("hasChildren")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if has_children && (matches.len() as i64) < max_results && !item_id.is_empty() {
                     if let Ok(children) = content_children(c, course_id, item_id).await {
                         let (m2, v2) = rec_walk(
@@ -2054,7 +2248,6 @@ async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value
     Ok(json!({"matches": matches, "count": matches.len()}))
 }
 
-
 // ---------------------------------------------------------------------------
 // _resolve_content_files + download_file
 // ---------------------------------------------------------------------------
@@ -2078,13 +2271,28 @@ async fn resolve_content_files(
         .map(|s| s.to_string());
     let mut pairs: Vec<(String, Option<String>)> = Vec::new();
     if handler_id.as_deref() == Some("resource/x-bb-file") {
-        for att in attachments(c, course_id, content_id).await {
-            let Some(att_id) = att.get("id").and_then(|v| v.as_str()) else { continue };
-            let url = attachment_download_url(c, course_id, content_id, att_id)
-                .await
-                .unwrap_or_default();
+        let atts = attachments(c, course_id, content_id).await;
+        // Resolve every attachment URL concurrently (was one RTT each).
+        let resolved = bounded_map(atts, fanout_limit(), |att| async move {
+            let att_id = att
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let url = match &att_id {
+                Some(id) => attachment_download_url(c, course_id, content_id, id)
+                    .await
+                    .unwrap_or_default(),
+                None => String::new(),
+            };
+            let fname = att
+                .get("fileName")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            (url, fname)
+        })
+        .await;
+        for (url, fname) in resolved {
             if !url.is_empty() {
-                let fname = att.get("fileName").and_then(|v| v.as_str()).map(|s| s.to_string());
                 pairs.push((url, fname));
             }
         }
@@ -2101,7 +2309,10 @@ async fn resolve_content_files(
         if files.is_empty() {
             let desc = item.get("description");
             let body2 = match desc {
-                Some(Value::Object(o)) => o.get("rawText").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                Some(Value::Object(o)) => o
+                    .get("rawText")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 Some(Value::String(s)) => Some(s.clone()),
                 _ => None,
             };
@@ -2144,7 +2355,7 @@ async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String
         return Ok(payload);
     }
 
-    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+    if let Err(e) = tokio::fs::create_dir_all(&dest_dir).await {
         return Err(format!("{e}"));
     }
 
@@ -2176,7 +2387,7 @@ async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String
         plan.push((url.clone(), filename));
     }
 
-    let downloaded = bounded_map(plan, FANOUT_CONCURRENCY, |(url, filename)| {
+    let downloaded = bounded_map(plan, fanout_limit(), |(url, filename)| {
         let client = &state.client;
         async move {
             let res = client.download_bytes(&url).await;
@@ -2192,7 +2403,7 @@ async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String
             Ok(t) => t,
             Err(e) => return Err(format!("download failed: {e}")),
         };
-        if let Err(e) = std::fs::write(&dest, &content) {
+        if let Err(e) = tokio::fs::write(&dest, &content).await {
             return Err(format!("{e}"));
         }
         saved.push(json!({
@@ -2210,7 +2421,6 @@ async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String
         "destinationDir": resolved_dest,
     }))
 }
-
 
 async fn coerce_course_ids(args: &Value, c: &NTULearnClient) -> Result<Vec<String>, String> {
     let raw = args.get("course_ids");
@@ -2262,7 +2472,19 @@ async fn h_read_file_content(state: &AppState, args: &Value) -> Result<Value, St
     let mut skipped: Vec<Value> = Vec::new();
     let mut total_bytes: u64 = 0;
 
-    for (url, detected_filename) in &pairs {
+    // Fetch every file first (bounded), then apply the size caps in order.
+    // The old loop downloaded one file at a time; a page with 10 PDFs cost
+    // 10 sequential round trips.
+    let downloads = bounded_map(pairs.clone(), fanout_limit(), |(url, detected_filename)| {
+        let c = &state.client;
+        async move {
+            let res = c.download_bytes(&url).await;
+            (url, detected_filename, res)
+        }
+    })
+    .await;
+
+    for (url, detected_filename, res) in downloads {
         let mut filename = detected_filename.clone().unwrap_or_default();
         if filename.is_empty() {
             let url_path = url.split('?').next().unwrap_or("");
@@ -2270,7 +2492,11 @@ async fn h_read_file_content(state: &AppState, args: &Value) -> Result<Value, St
             let decoded = percent_encoding::percent_decode_str(last)
                 .decode_utf8_lossy()
                 .to_string();
-            filename = if decoded.is_empty() { "download".to_string() } else { decoded };
+            filename = if decoded.is_empty() {
+                "download".to_string()
+            } else {
+                decoded
+            };
         }
 
         if total_bytes >= MAX_TOTAL_BYTES {
@@ -2284,7 +2510,7 @@ async fn h_read_file_content(state: &AppState, args: &Value) -> Result<Value, St
             continue;
         }
 
-        let (content_bytes, ct_raw) = match state.client.download_bytes(url).await {
+        let (content_bytes, ct_raw) = match res {
             Ok(t) => t,
             Err(e) => return Err(format!("download failed: {e}")),
         };
@@ -2382,7 +2608,7 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
 
     let mut items: Vec<Value> = Vec::new();
     let mut course_errors = Map::new();
-    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let per_course = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
         let since = since.as_deref();
         let until = until.as_deref();
@@ -2406,8 +2632,14 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
         }
     }
     items.sort_by(|a, b| {
-        let sa = a.get("start").and_then(|v| v.as_str()).unwrap_or("\u{FFFF}");
-        let sb = b.get("start").and_then(|v| v.as_str()).unwrap_or("\u{FFFF}");
+        let sa = a
+            .get("start")
+            .and_then(|v| v.as_str())
+            .unwrap_or("\u{FFFF}");
+        let sb = b
+            .get("start")
+            .and_then(|v| v.as_str())
+            .unwrap_or("\u{FFFF}");
         sa.cmp(sb)
     });
 
@@ -2417,7 +2649,12 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
     merge_meta(&mut payload, meta);
     payload.insert(
         "courseIdsQueried".to_string(),
-        Value::Array(course_ids.iter().map(|x| Value::String(x.clone())).collect()),
+        Value::Array(
+            course_ids
+                .iter()
+                .map(|x| Value::String(x.clone()))
+                .collect(),
+        ),
     );
     payload.insert("courseErrors".to_string(), Value::Object(course_errors));
     Ok(Value::Object(payload))
@@ -2448,7 +2685,7 @@ async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, St
 
     let mut rows: Vec<Value> = Vec::new();
     let mut course_errors = Map::new();
-    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let per_course = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
         async move {
             let res = announcements(c, &cid).await;
@@ -2462,7 +2699,9 @@ async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, St
                 for a in anns {
                     let body_raw = a.get("body");
                     let body_html = match body_raw {
-                        Some(Value::Object(o)) => o.get("rawText").and_then(|v| v.as_str()).unwrap_or(""),
+                        Some(Value::Object(o)) => {
+                            o.get("rawText").and_then(|v| v.as_str()).unwrap_or("")
+                        }
                         Some(Value::String(s2)) => s2.as_str(),
                         _ => "",
                     };
@@ -2499,12 +2738,16 @@ async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, St
     merge_meta(&mut payload, meta);
     payload.insert(
         "courseIdsQueried".to_string(),
-        Value::Array(course_ids.iter().map(|x| Value::String(x.clone())).collect()),
+        Value::Array(
+            course_ids
+                .iter()
+                .map(|x| Value::String(x.clone()))
+                .collect(),
+        ),
     );
     payload.insert("courseErrors".to_string(), Value::Object(course_errors));
     Ok(Value::Object(payload))
 }
-
 
 async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = coerce_course_ids(args, &state.client).await?;
@@ -2528,7 +2771,10 @@ async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String
         payload.insert("columns".to_string(), Value::Array(Vec::new()));
         merge_meta(&mut payload, meta);
         payload.insert("gradesAvailable".to_string(), Value::Bool(grades_available));
-        payload.insert("gradeFetchError".to_string(), grade_fetch_error.map(Value::String).unwrap_or(Value::Null));
+        payload.insert(
+            "gradeFetchError".to_string(),
+            grade_fetch_error.map(Value::String).unwrap_or(Value::Null),
+        );
         payload.insert("courseIdsQueried".to_string(), Value::Array(Vec::new()));
         payload.insert("courseErrors".to_string(), json!({}));
         return Ok(Value::Object(payload));
@@ -2542,16 +2788,19 @@ async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String
     }
     // Fetch (columns, grades) for every course concurrently, then assemble
     // below in course order.
-    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let per_course = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
         let uid = user_id.clone();
         async move {
-            let columns = gradebook_columns(c, &cid).await;
-            let grades = if let Some(uid) = &uid {
-                user_grades(c, &cid, uid).await
-            } else {
-                Ok(Vec::new())
-            };
+            // Columns and grades are independent; fetching them together
+            // halves this course's contribution to the command's latency.
+            let (columns, grades) = tokio::join!(gradebook_columns(c, &cid), async {
+                if let Some(uid) = &uid {
+                    user_grades(c, &cid, uid).await
+                } else {
+                    Ok(Vec::new())
+                }
+            },);
             (cid, columns, grades)
         }
     })
@@ -2623,15 +2872,22 @@ async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String
     payload.insert("columns".to_string(), Value::Array(page));
     merge_meta(&mut payload, meta);
     payload.insert("gradesAvailable".to_string(), Value::Bool(grades_available));
-    payload.insert("gradeFetchError".to_string(), grade_fetch_error.map(Value::String).unwrap_or(Value::Null));
+    payload.insert(
+        "gradeFetchError".to_string(),
+        grade_fetch_error.map(Value::String).unwrap_or(Value::Null),
+    );
     payload.insert(
         "courseIdsQueried".to_string(),
-        Value::Array(course_ids.iter().map(|x| Value::String(x.clone())).collect()),
+        Value::Array(
+            course_ids
+                .iter()
+                .map(|x| Value::String(x.clone()))
+                .collect(),
+        ),
     );
     payload.insert("courseErrors".to_string(), Value::Object(course_errors));
     Ok(Value::Object(payload))
 }
-
 
 // ---------------------------------------------------------------------------
 // Registry handlers (handlers.py)
@@ -2684,33 +2940,53 @@ async fn h_read_message(state: &AppState, args: &Value) -> Result<Value, String>
     };
     let mut payload = Map::new();
     payload.insert("id".to_string(), Value::String(message_id.clone()));
-    let subject = msg.get("subject").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let subject = msg
+        .get("subject")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     payload.insert("subject".to_string(), Value::String(subject));
-    payload.insert("body".to_string(), Value::String(parsers::strip_html(&body_text)));
-    let created = msg.get("created").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    payload.insert(
+        "body".to_string(),
+        Value::String(parsers::strip_html(&body_text)),
+    );
+    let created = msg
+        .get("created")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     payload.insert("created".to_string(), Value::String(created));
     let read = msg.get("read").and_then(|v| v.as_bool()).unwrap_or(true);
     payload.insert("read".to_string(), Value::Bool(read));
-    let folder = msg.get("folder").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let folder = msg
+        .get("folder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     payload.insert("folder".to_string(), Value::String(folder));
-    let sender_id = msg.get("fromUserId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let sender_id = msg
+        .get("fromUserId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     payload.insert("senderId".to_string(), Value::String(sender_id.clone()));
     match message_participants(&state.client, &message_id).await {
         Ok(participants) => {
-            let recipients: Vec<Value> = participants.iter().map(|p| {
-                let row = render_user_row(p);
-                let id = row.get("id").cloned().unwrap_or(Value::Null);
-                json!({ "id": id, "name": row.get("name"), "role": row.get("role") })
-            }).collect();
-            payload.insert("recipients".to_string(), Value::Array(recipients));
-            let sender = participants
+            let recipients: Vec<Value> = participants
                 .iter()
-                .find(|p| {
-                    p.get("userId")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| p.get("id").and_then(|v| v.as_str()))
-                        == Some(sender_id.as_str())
-                });
+                .map(|p| {
+                    let row = render_user_row(p);
+                    let id = row.get("id").cloned().unwrap_or(Value::Null);
+                    json!({ "id": id, "name": row.get("name"), "role": row.get("role") })
+                })
+                .collect();
+            payload.insert("recipients".to_string(), Value::Array(recipients));
+            let sender = participants.iter().find(|p| {
+                p.get("userId")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| p.get("id").and_then(|v| v.as_str()))
+                    == Some(sender_id.as_str())
+            });
             match sender {
                 Some(s) => {
                     payload.insert("senderName".to_string(), Value::String(user_name(s)));
@@ -2727,7 +3003,6 @@ async fn h_read_message(state: &AppState, args: &Value) -> Result<Value, String>
     }
     Ok(Value::Object(payload))
 }
-
 
 async fn h_list_course_users(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
@@ -2755,7 +3030,10 @@ async fn h_list_course_groups(state: &AppState, args: &Value) -> Result<Value, S
     let mut rendered: Vec<Value> = Vec::new();
     for g in &page {
         let mut entry = Map::new();
-        entry.insert("id".to_string(), g.get("id").cloned().unwrap_or(Value::Null));
+        entry.insert(
+            "id".to_string(),
+            g.get("id").cloned().unwrap_or(Value::Null),
+        );
         let name = g
             .get("name")
             .and_then(|v| v.as_str())
@@ -2765,7 +3043,10 @@ async fn h_list_course_groups(state: &AppState, args: &Value) -> Result<Value, S
             .to_string();
         entry.insert("name".to_string(), Value::String(name));
         let desc = g.get("description").and_then(|v| v.as_str()).unwrap_or("");
-        entry.insert("description".to_string(), Value::String(parsers::strip_html(desc)));
+        entry.insert(
+            "description".to_string(),
+            Value::String(parsers::strip_html(desc)),
+        );
         let available = g
             .get("availability")
             .and_then(|a| a.get("available"))
@@ -2806,7 +3087,6 @@ async fn h_get_group_members(state: &AppState, args: &Value) -> Result<Value, St
     merge_meta(&mut payload, meta);
     Ok(Value::Object(payload))
 }
-
 
 async fn h_get_gradebook_attempts(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
@@ -2883,7 +3163,7 @@ async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, S
     // Deep per-course walks are the slowest fan-out in the toolset — run the
     // courses concurrently so all-courses searches finish in a fraction of
     // the wall time.
-    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let per_course = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
         let query = query.clone();
         async move { search_course(c, &cid, &query, max_depth as usize).await }
@@ -2904,7 +3184,6 @@ async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, S
     Ok(Value::Object(payload))
 }
 
-
 async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
@@ -2913,24 +3192,24 @@ async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, Str
     let _fmt = response_format(args)?;
     let nodes = walk_content(&state.client, &course_id, max_depth as usize).await;
 
-    // Group nodes by depth for O(n) child lookups.
-    let mut by_depth: HashMap<usize, Vec<&ContentNode>> = HashMap::new();
+    // Parent-id -> children, built in one pass. The previous version scanned
+    // every node at depth+1 for each node (O(n^2)) and matched on breadcrumb
+    // titles, which merged same-titled siblings.
+    let mut children_map: HashMap<String, Vec<&ContentNode>> = HashMap::new();
     for n in &nodes {
-        by_depth.entry(n.depth).or_default().push(n);
+        children_map.entry(n.parent.clone()).or_default().push(n);
     }
 
     fn to_node<'a>(
         node: &'a ContentNode,
-        by_depth: &HashMap<usize, Vec<&'a ContentNode>>,
+        children_map: &HashMap<String, Vec<&'a ContentNode>>,
     ) -> Value {
-        let children: Vec<Value> = by_depth
-            .get(&(node.depth + 1))
-            .map(|candidates| {
-                candidates
-                    .iter()
-                    .filter(|c| c.breadcrumb.len() > 1 && &c.breadcrumb[..c.breadcrumb.len() - 1] == node.breadcrumb.as_slice())
+        let children: Vec<Value> = children_map
+            .get(&node.id())
+            .map(|kids| {
+                kids.iter()
                     .take(100)
-                    .map(|c| to_node(c, by_depth))
+                    .map(|c| to_node(c, children_map))
                     .collect()
             })
             .unwrap_or_default();
@@ -2943,8 +3222,8 @@ async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, Str
         })
     }
 
-    let roots = by_depth.get(&0).cloned().unwrap_or_default();
-    let tree: Vec<Value> = roots.iter().map(|r| to_node(r, &by_depth)).collect();
+    let roots = children_map.get("").cloned().unwrap_or_default();
+    let tree: Vec<Value> = roots.iter().map(|r| to_node(r, &children_map)).collect();
     let mut payload = Map::new();
     payload.insert("courseId".to_string(), Value::String(course_id));
     payload.insert("count".to_string(), Value::from(tree.len()));
@@ -2952,7 +3231,6 @@ async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, Str
     payload.insert("tree".to_string(), Value::Array(tree));
     Ok(Value::Object(payload))
 }
-
 
 async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
@@ -2963,14 +3241,17 @@ async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, Stri
         .unwrap_or("")
         .trim()
         .to_string();
-    let crs = course(&state.client, &course_id).await.unwrap_or_else(|_| json!({}));
+    let crs = course(&state.client, &course_id)
+        .await
+        .unwrap_or_else(|_| json!({}));
     let course_name = parsers::safe_folder_name(
-        crs.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        crs.get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .or_else(|| crs.get("displayName").and_then(|v| v.as_str()))
             .unwrap_or(&course_id),
     );
     let dest_root: PathBuf = if dest_raw.is_empty() {
-        
         if let Some(home) = dirs::home_dir() {
             home.join("Downloads").join("NTULearn")
         } else {
@@ -3029,17 +3310,31 @@ async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, Stri
         .await;
     }
     results.sort_by(|a, b| {
-        let ka = a.get("courseFolder").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        let ka = a
+            .get("courseFolder")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
             + a.get("filename").and_then(|v| v.as_str()).unwrap_or("");
-        let kb = b.get("courseFolder").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        let kb = b
+            .get("courseFolder")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
             + b.get("filename").and_then(|v| v.as_str()).unwrap_or("");
         ka.cmp(&kb)
     });
-    let total_bytes: u64 = results.iter().map(|r| r.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0)).sum();
+    let total_bytes: u64 = results
+        .iter()
+        .map(|r| r.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0))
+        .sum();
     let mut payload = Map::new();
     payload.insert("courseId".to_string(), Value::String(course_id));
     payload.insert("courseName".to_string(), Value::String(course_name));
-    payload.insert("destinationDir".to_string(), Value::String(dest_root.to_string_lossy().to_string()));
+    payload.insert(
+        "destinationDir".to_string(),
+        Value::String(dest_root.to_string_lossy().to_string()),
+    );
     payload.insert("downloadCount".to_string(), Value::from(results.len()));
     payload.insert("skippedCount".to_string(), Value::from(skipped.len()));
     payload.insert("totalBytes".to_string(), Value::from(total_bytes));
@@ -3047,7 +3342,6 @@ async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, Stri
     payload.insert("skipped".to_string(), Value::Array(skipped));
     Ok(Value::Object(payload))
 }
-
 
 fn tracker_get_last_seen() -> Option<String> {
     LAST_SEEN.lock().ok().and_then(|g| g.clone())
@@ -3060,7 +3354,22 @@ fn tracker_set_last_seen(s: String) {
 }
 
 async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
-    let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
+    // Enrollments with `expand=course` give ids and names in the same request
+    // that `fan_out_course_ids` would have made anyway, removing the N extra
+    // `/courses/{id}` GETs the digest used to issue just for display names.
+    let explicit_ids = match args.get("course_ids") {
+        None => false,
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(_) => true,
+    };
+    let (course_ids, name_hints) = if explicit_ids {
+        (
+            fan_out_course_ids(&state.client, args.get("course_ids")).await?,
+            HashMap::new(),
+        )
+    } else {
+        enrollment_ids_and_names(&state.client).await?
+    };
     let since = match args.get("since").and_then(|v| v.as_str()) {
         Some(s) => validate_iso8601(s, "since")?,
         None => tracker_get_last_seen().unwrap_or_else(default_since),
@@ -3073,16 +3382,31 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
     // One digest entry per course = 4 API calls. Courses run concurrently
     // (bounded); within a course the sources stay sequential and only the
     // first failure per course is reported, matching the original semantics.
-    let results = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let fan = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
+        let name_hints = &name_hints;
         let since = since.clone();
         async move {
             let mut entry = Map::new();
             entry.insert("courseId".to_string(), Value::String(cid.clone()));
             let mut first_error: Option<String> = None;
+            // Announcements and contents are independent and run together.
+            // The course name usually arrives in the enrollment response, so
+            // only a miss costs a `/courses/{id}` round trip.
+            let name_hint = name_hints.get(&cid).cloned();
+            let (anns_res, contents_res, course_res) =
+                tokio::join!(announcements(c, &cid), course_contents(c, &cid), async {
+                    match &name_hint {
+                        Some(_) => None,
+                        None => Some(course(c, &cid).await),
+                    }
+                },);
             // course name
-            match course(c, &cid).await {
-                Ok(crs) => {
+            match (name_hint, course_res) {
+                (Some(name), _) => {
+                    entry.insert("courseName".to_string(), Value::String(name));
+                }
+                (None, Some(Ok(crs))) => {
                     let name = crs
                         .get("name")
                         .and_then(|v| v.as_str())
@@ -3091,12 +3415,13 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
                         .unwrap_or(&cid);
                     entry.insert("courseName".to_string(), Value::String(name.to_string()));
                 }
-                Err(e) => {
+                (None, Some(Err(e))) => {
                     first_error = Some(format!("course: {e}"));
                 }
+                (None, None) => {}
             }
             // announcements
-            match announcements(c, &cid).await {
+            match anns_res {
                 Ok(anns) => {
                     let mut list = Vec::new();
                     for a in anns {
@@ -3122,25 +3447,8 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
                     }
                 }
             }
-            // calendar
-            match calendar_items(c, Some(&cid), Some(&since), None, None).await {
-                Ok(cal) => {
-                    let mut list = Vec::new();
-                    for i in cal {
-                        if after_value(i.get("start"), &since) {
-                            list.push(calendar_brief(&i));
-                        }
-                    }
-                    entry.insert("upcoming".to_string(), Value::Array(list));
-                }
-                Err(e) => {
-                    if first_error.is_none() {
-                        first_error = Some(format!("calendar: {e}"));
-                    }
-                }
-            }
             // new files (top-level only)
-            match course_contents(c, &cid).await {
+            match contents_res {
                 Ok(root) => {
                     let mut list = Vec::new();
                     for item in root {
@@ -3162,9 +3470,39 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
             }
             (cid, entry, first_error)
         }
-    })
-    .await;
-    for (cid, entry, first_error) in results {
+    });
+    // One calendar request covers every course; the old code made one per
+    // course. It runs alongside the per-course fan-out.
+    let calendar_fut = calendar_items(&state.client, None, Some(&since), None, None);
+    let (results, cal_res) = tokio::join!(fan, calendar_fut);
+    let mut cal_by_course: HashMap<String, Vec<Value>> = HashMap::new();
+    let cal_error = match cal_res {
+        Ok(items) => {
+            for item in items {
+                if !after_value(item.get("start"), &since) {
+                    continue;
+                }
+                if let Some(cid) = item.get("courseId").and_then(|v| v.as_str()) {
+                    cal_by_course
+                        .entry(cid.to_string())
+                        .or_default()
+                        .push(calendar_brief(&item));
+                }
+            }
+            None
+        }
+        Err(e) => Some(e),
+    };
+    for (cid, mut entry, mut first_error) in results {
+        entry.insert(
+            "upcoming".to_string(),
+            Value::Array(cal_by_course.remove(&cid).unwrap_or_default()),
+        );
+        if first_error.is_none() {
+            if let Some(e) = &cal_error {
+                first_error = Some(format!("calendar: {e}"));
+            }
+        }
         if let Some(e) = first_error {
             errors.insert(cid, Value::String(e));
         }
@@ -3175,23 +3513,49 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
     if update_tracker {
         tracker_set_last_seen(fetched_at.clone());
     }
-    let count_ann: usize = per_course.iter().map(|e| e.get("announcements").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)).sum();
-    let count_up: usize = per_course.iter().map(|e| e.get("upcoming").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)).sum();
-    let count_files: usize = per_course.iter().map(|e| e.get("newFiles").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)).sum();
+    let count_ann: usize = per_course
+        .iter()
+        .map(|e| {
+            e.get("announcements")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
+        .sum();
+    let count_up: usize = per_course
+        .iter()
+        .map(|e| {
+            e.get("upcoming")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
+        .sum();
+    let count_files: usize = per_course
+        .iter()
+        .map(|e| {
+            e.get("newFiles")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0)
+        })
+        .sum();
     let mut payload = Map::new();
     payload.insert("since".to_string(), Value::String(since));
     payload.insert("fetchedAt".to_string(), Value::String(fetched_at));
     payload.insert("courseCount".to_string(), Value::from(per_course.len()));
-    payload.insert("summary".to_string(), json!({
-        "announcements": count_ann,
-        "upcoming": count_up,
-        "newFiles": count_files,
-    }));
+    payload.insert(
+        "summary".to_string(),
+        json!({
+            "announcements": count_ann,
+            "upcoming": count_up,
+            "newFiles": count_files,
+        }),
+    );
     payload.insert("courses".to_string(), Value::Array(per_course));
     payload.insert("courseErrors".to_string(), Value::Object(errors));
     Ok(Value::Object(payload))
 }
-
 
 async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
@@ -3209,7 +3573,7 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
 
     let mut items: Vec<Value> = Vec::new();
     let mut errors: Map<String, Value> = Map::new();
-    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let per_course = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
         let since = since.clone();
         let until = until.clone();
@@ -3223,10 +3587,17 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
         match res {
             Ok(cal) => {
                 for mut i in cal {
-                    let item_id = i.get("id").and_then(|v| v.as_str()).unwrap_or("x").to_string();
+                    let item_id = i
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("x")
+                        .to_string();
                     if let Some(o) = i.as_object_mut() {
                         o.insert("courseId".to_string(), Value::String(cid.clone()));
-                        o.insert("uid".to_string(), Value::String(format!("{}-{}", cid, item_id)));
+                        o.insert(
+                            "uid".to_string(),
+                            Value::String(format!("{}-{}", cid, item_id)),
+                        );
                     }
                     items.push(i);
                 }
@@ -3236,7 +3607,12 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
             }
         }
     }
-    let scope = course_ids.iter().take(5).cloned().collect::<Vec<_>>().join("; ");
+    let scope = course_ids
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
     let ics = build_ics(&items, &scope);
     let mut payload = Map::new();
     payload.insert("itemCount".to_string(), Value::from(items.len()));
@@ -3255,7 +3631,7 @@ async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value,
     let user_id = me_user_id(&state.client).await.unwrap_or_default();
     let mut rows: Vec<Value> = Vec::new();
     let mut errors: Map<String, Value> = Map::new();
-    let per_course = bounded_map(course_ids.clone(), FANOUT_CONCURRENCY, |cid| {
+    let per_course = bounded_map(course_ids.clone(), fanout_limit(), |cid| {
         let c = &state.client;
         let uid = user_id.clone();
         async move {
@@ -3274,11 +3650,18 @@ async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value,
             Ok(columns) => {
                 for col in &columns {
                     let col_id = col.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    let own = grades.iter().find(|g| {
-                        g.get("columnId").and_then(|v| v.as_str()) == Some(col_id)
-                    });
+                    let own = grades
+                        .iter()
+                        .find(|g| g.get("columnId").and_then(|v| v.as_str()) == Some(col_id));
                     let score = own.and_then(grade_score);
-                    let status = own.map(|o| o.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string()).unwrap_or_default();
+                    let status = own
+                        .map(|o| {
+                            o.get("status")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string()
+                        })
+                        .unwrap_or_default();
                     rows.push(json!({
                         "courseId": cid,
                         "columnId": col_id,
@@ -3312,7 +3695,6 @@ async fn h_summarize_course(state: &AppState, args: &Value) -> Result<Value, Str
     Ok(build_course_summary(&state.client, &course_id, include_contents).await)
 }
 
-
 // ---------------------------------------------------------------------------
 // render_for_tool — mirror of Python common.emit: markdown text (when
 // requested) followed by the pretty-JSON payload, or just the payload.
@@ -3330,32 +3712,62 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
     let text = if fmt == "markdown" {
         match short {
             "list_courses" => {
-                let courses = payload.get("courses").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let courses = payload
+                    .get("courses")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 render::md_courses_full(&courses, payload)
             }
             "get_course_contents" => {
-                let items = payload.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let items = payload
+                    .get("items")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 render::md_content_items_full(&items, payload)
             }
             "search_course_content" => {
-                let matches = payload.get("matches").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let matches = payload
+                    .get("matches")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 render::md_search_results(&matches)
             }
             "download_file" => render::md_files(payload, "Files downloaded"),
             "read_file_content" => render::md_files(payload, "File contents"),
             "get_upcoming" => {
-                let items = payload.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let items = payload
+                    .get("items")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 let errors = payload.get("courseErrors").cloned().unwrap_or(json!({}));
                 render::md_upcoming(&items, payload, &errors)
             }
             "get_announcements" => {
-                let items = payload.get("announcements").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let items = payload
+                    .get("announcements")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 render::md_announcements(&items, payload)
             }
             "get_gradebook" => {
-                let columns = payload.get("columns").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                let available = payload.get("gradesAvailable").and_then(|v| v.as_bool()).unwrap_or(true);
-                let err = payload.get("gradeFetchError").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let columns = payload
+                    .get("columns")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let available = payload
+                    .get("gradesAvailable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let err = payload
+                    .get("gradeFetchError")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 render::md_gradebook(&columns, payload, available, err.as_deref())
             }
             "list_messages" => render::md_messages(payload),
@@ -3389,7 +3801,6 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
     out.push(ToolContent::text(json_text));
     out
 }
-
 
 #[cfg(test)]
 mod args_guard_tests {
@@ -3484,7 +3895,10 @@ mod args_guard_tests {
         );
         // full names pass through unchanged (public REST courseRoleId)
         assert_eq!(user_role(&json!({"courseRoleId": "Student"})), "Student");
-        assert_eq!(user_role(&json!({"courseRoleId": "TeachingAssistant"})), "TeachingAssistant");
+        assert_eq!(
+            user_role(&json!({"courseRoleId": "TeachingAssistant"})),
+            "TeachingAssistant"
+        );
         // unhandled longer values pass through
         assert_eq!(user_role(&json!({"role": "BB_SPECTATOR"})), "BB_SPECTATOR");
         // empty
@@ -3496,7 +3910,9 @@ mod args_guard_tests {
         use serde_json::json;
         // internal v1 user object: flat givenName/familyName, no nested `name`
         assert_eq!(
-            user_name(&json!({"id": "_7770000_1", "userName": "fennec42", "givenName": "Fennec", "familyName": "Twobyte"})),
+            user_name(
+                &json!({"id": "_7770000_1", "userName": "fennec42", "givenName": "Fennec", "familyName": "Twobyte"})
+            ),
             "Fennec Twobyte"
         );
         // nested name object still wins
@@ -3508,24 +3924,24 @@ mod args_guard_tests {
         assert_eq!(user_name(&json!({"userName": "ju", "name": "plain"})), "ju");
     }
 
-#[test]
-fn toon_response_format_accepted_and_rendered() {
-    let args = serde_json::json!({"response_format": "toon"});
-    assert_eq!(response_format(&args).unwrap(), "toon");
-    // Invalid still rejected.
-    assert!(response_format(&serde_json::json!({"response_format": "yaml"})).is_err());
-    // render_for_tool emits TOON (tabular header) instead of pretty JSON.
-    let payload = serde_json::json!({
-        "courses": [
-            {"id": "_1_1", "name": "SC2002"},
-            {"id": "_2_1", "name": "SC3000"}
-        ]
-    });
-    let out = render_for_tool("list_courses", &args, &payload);
-    assert_eq!(out.len(), 1);
-    let ToolContent::Text { text } = &out[0];
-    let text = text.clone();
-    assert!(text.starts_with("courses[2]{id,name}:"), "got: {text}");
-    assert!(!text.contains("  \""), "should not be pretty JSON: {text}");
-}
+    #[test]
+    fn toon_response_format_accepted_and_rendered() {
+        let args = serde_json::json!({"response_format": "toon"});
+        assert_eq!(response_format(&args).unwrap(), "toon");
+        // Invalid still rejected.
+        assert!(response_format(&serde_json::json!({"response_format": "yaml"})).is_err());
+        // render_for_tool emits TOON (tabular header) instead of pretty JSON.
+        let payload = serde_json::json!({
+            "courses": [
+                {"id": "_1_1", "name": "SC2002"},
+                {"id": "_2_1", "name": "SC3000"}
+            ]
+        });
+        let out = render_for_tool("list_courses", &args, &payload);
+        assert_eq!(out.len(), 1);
+        let ToolContent::Text { text } = &out[0];
+        let text = text.clone();
+        assert!(text.starts_with("courses[2]{id,name}:"), "got: {text}");
+        assert!(!text.contains("  \""), "should not be pretty JSON: {text}");
+    }
 }
