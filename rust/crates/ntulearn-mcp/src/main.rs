@@ -18,6 +18,7 @@ mod handlers;
 mod issues;
 mod mcp;
 mod parsers;
+mod pcv;
 mod prompts;
 mod render;
 mod resources;

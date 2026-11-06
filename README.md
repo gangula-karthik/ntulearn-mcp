@@ -191,7 +191,22 @@ Every MCP tool accepts `response_format: "json"` or `"markdown"` too — and as 
 
 Read-only tools default to `response_format='toon'` (token-optimized); pass `'json'` for structured
 data or `'markdown'` for a readable summary.
-### FeedbackFruits peer evaluations (LTI tools)
+### Peerceptiv peer evaluations (LTI tools)
+
+Peer evaluations hosted on Peerceptiv surface as `resource/x-bb-bltiplacement-*`
+content items and are launched through a different LTI executor than FeedbackFruits
+(`launchPlacement`, not `launchLink`). The `pcv_*` tools walk that chain (an OIDC
+redirect walk that ends on `asia.app.peerceptiv.com`) and then talk to the
+Peerceptiv API on `sg.api.peerceptiv.com` directly: assignment status, your
+evaluation progress per teammate, the rubric (rating levels like "Always" = 9/10),
+your submitted ratings/comments, and — after the instructor releases results —
+what teammates gave you (pre-release the API 403s; the tools report
+`not yet released`).
+
+`pcv_rate` takes a level description or number ("Always", 9) and resolves it against
+the rubric. Writes (`pcv_rate`, `pcv_comment`) default to `dry_run=true`.
+
+## FeedbackFruits peer evaluations (LTI tools)
 
 Peer evaluations hosted on FeedbackFruits (and other `resource/x-bb-blti-link` LTI items)
 are invisible to the Blackboard gradebook until grades are released — the gradebook showed

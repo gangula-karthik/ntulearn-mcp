@@ -1,5 +1,5 @@
 
-//! ToolHandler for the 26 NTULearn tools: schema listing + dispatch.
+//! ToolHandler for the 30 NTULearn tools: schema listing + dispatch.
 
 use std::sync::Arc;
 

@@ -941,3 +941,241 @@ pub fn md_fbf_comment(payload: &Value) -> String {
     lines.join("\n")
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Peerceptiv peer evaluation (pcv_* handlers)
+// ---------------------------------------------------------------------------
+
+/// `pcv_status` — one section per activity: deadline, progress, group, and
+/// per-teammate done state.
+pub fn md_pcv_status(payload: &Value) -> String {
+    let course = _gs(payload, "courseId").unwrap_or("?");
+    let mut lines = vec![format!("# Peerceptiv — {course}")];
+    let activities = payload
+        .get("activities")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+        lines.push(String::new());
+        lines.push(format!("_{note}_"));
+    }
+    for a in &activities {
+        let title = _gs(a, "title").unwrap_or("untitled");
+        let done = a
+            .get("progress")
+            .and_then(|p| p.get("countEvaluationsComplete"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let required = a
+            .get("progress")
+            .and_then(|p| p.get("requiredEvaluationCount"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let deadline = _dt(a.get("deadlines").and_then(|d| d.get("peerEvaluationDeadline")));
+        let all_done = a
+            .get("progress")
+            .and_then(|p| p.get("completedAllEvaluations"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let flag = if all_done { "✅" } else { "⬜" };
+        lines.push(String::new());
+        lines.push(format!("## {flag} {title} · {done}/{required} evals · due {deadline}"));
+        if let Some(group) = _gs(a, "group").filter(|s| !s.is_empty()) {
+            lines.push(format!("- group: **{group}**"));
+        }
+        if let Some(missed) = a
+            .get("progress")
+            .and_then(|p| p.get("missedEvaluating"))
+            .and_then(|v| v.as_bool())
+        {
+            if missed {
+                lines.push("- ⚠️ missed evaluating deadline".to_string());
+            }
+        }
+        for t in a
+            .get("teammates")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let name = _gs(&t, "name").unwrap_or("?");
+            let mark = if t.get("done").and_then(|v| v.as_bool()) == Some(true) {
+                "✅"
+            } else {
+                "⬜"
+            };
+            lines.push(format!("- {mark} {name}"));
+        }
+    }
+    if activities.is_empty() && _gs(payload, "note").is_none_or(|s| s.is_empty()) {
+        lines.push(String::new());
+        lines.push("_No Peerceptiv activities found._".to_string());
+    }
+    let skipped = payload
+        .get("skippedLinks")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !skipped.is_empty() {
+        lines.push(String::new());
+        let names: Vec<String> = skipped
+            .iter()
+            .map(|s| {
+                _gs(s, "title")
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| _gs(s, "contentId").unwrap_or("?"))
+                    .to_string()
+            })
+            .collect();
+        lines.push(format!(
+            "_{} non-Peerceptiv LTI placement(s) skipped: {}_",
+            skipped.len(),
+            names.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
+
+/// `pcv_evals` — ratings grouped per teammate with resolved level
+/// descriptions; written comments in their own section.
+pub fn md_pcv_evals(payload: &Value) -> String {
+    let title = _gs(payload, "assignmentTitle").unwrap_or("Peerceptiv");
+    let dir = _gs(payload, "direction").unwrap_or("given");
+    let mut lines = vec![format!("# Peer evaluation — {title} (ratings {dir})")];
+    if dir == "received" && payload.get("released").and_then(|v| v.as_bool()) == Some(false) {
+        lines.push(String::new());
+        lines.push("_Teammate reviews are not yet released._".to_string());
+        if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+            lines.push(format!("_{note}_"));
+        }
+    }
+    let reviews = payload
+        .get("reviews")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if reviews.is_empty() {
+        lines.push(String::new());
+        lines.push("_No ratings._".to_string());
+    } else {
+        // Rows are emitted teammate-major; start a section on each change.
+        let mut current = String::new();
+        for r in &reviews {
+            let mate = _gs(r, "teammate").unwrap_or("?");
+            if mate != current {
+                current = mate.to_string();
+                lines.push(String::new());
+                lines.push(format!("## {mate}"));
+            }
+            let crit = _gs(r, "criterion").unwrap_or("?");
+            match r.get("score").and_then(|v| v.as_u64()) {
+                Some(score) => {
+                    let level = _gs(r, "level").unwrap_or("?");
+                    lines.push(format!("- {crit}: **{level}** ({score}/10)"));
+                }
+                _ => lines.push(format!("- {crit}: _(not yet rated)_")),
+            }
+        }
+    }
+    let comments = payload
+        .get("comments")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !comments.is_empty() {
+        lines.push(String::new());
+        lines.push("## Written comments".to_string());
+        for c in &comments {
+            let mate = _gs(c, "teammate").unwrap_or("?");
+            match _gs(c, "prompt").filter(|s| !s.is_empty()) {
+                Some(p) => lines.push(format!("- **{mate}** ({p}): {}", _gs(c, "comment").unwrap_or(""))),
+                _ => lines.push(format!("- **{mate}**: {}", _gs(c, "comment").unwrap_or(""))),
+            }
+        }
+    }
+    if dir != "received" {
+        if let Some(u) = payload.get("unrated").and_then(|v| v.as_u64()) {
+            if u > 0 {
+                lines.push(String::new());
+                lines.push(format!(
+                    "_{u} criterion slot(s) not yet rated — fill them with ntulearn_pcv_rate._"
+                ));
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+/// `pcv_rate` — the before→after change, and whether it was sent.
+pub fn md_pcv_rate(payload: &Value) -> String {
+    let title = _gs(payload, "assignmentTitle").unwrap_or("Peerceptiv");
+    let fmt_level = |v: Option<&Value>| -> String {
+        match v {
+            Some(Value::Object(o)) => {
+                let level = o.get("level").and_then(Value::as_str).unwrap_or("?");
+                match o.get("score").and_then(Value::as_u64) {
+                    Some(s) => format!("{level} ({s}/10)"),
+                    _ => level.to_string(),
+                }
+            }
+            _ => "— (not yet rated)".to_string(),
+        }
+    };
+    let mut lines = vec![format!("# Rating upsert — {title}")];
+    lines.push(String::new());
+    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
+    lines.push(format!("- criterion: **{}**", _gs(payload, "criterion").unwrap_or("?")));
+    lines.push(format!("- before: {}", fmt_level(payload.get("before"))));
+    lines.push(format!("- after: **{}**", fmt_level(payload.get("after"))));
+    if payload.get("createdEval").and_then(|v| v.as_bool()) == Some(true) {
+        lines.push("- peer evaluation: none existed yet — one will be created".to_string());
+    }
+    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    lines.push(String::new());
+    if dry {
+        lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
+    } else {
+        lines.push("_sent._".to_string());
+    }
+    lines.join("\n")
+}
+
+/// `pcv_comment` — the previous text(s), the new text, and whether it was sent.
+pub fn md_pcv_comment(payload: &Value) -> String {
+    let title = _gs(payload, "assignmentTitle").unwrap_or("Peerceptiv");
+    let mut lines = vec![format!("# Written comment upsert — {title}")];
+    lines.push(String::new());
+    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
+    if payload.get("createdEval").and_then(|v| v.as_bool()) == Some(true) {
+        lines.push("- peer evaluation: none existed yet — one will be created".to_string());
+    }
+    for c in payload
+        .get("comments")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        if let Some(p) = _gs(&c, "prompt").filter(|s| !s.is_empty()) {
+            lines.push(format!("- prompt: {p}"));
+        }
+        if let Some(b) = _gs(&c, "before").filter(|s| !s.is_empty()) {
+            let short: String = b.chars().take(200).collect();
+            let ellipsis = if b.chars().count() > 200 { "…" } else { "" };
+            lines.push(format!("- before: {short}{ellipsis}"));
+        } else {
+            lines.push("- before: — (no previous comment)".to_string());
+        }
+    }
+    lines.push(String::new());
+    lines.push(_gs(payload, "after").unwrap_or("").to_string());
+    lines.push(String::new());
+    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    if dry {
+        lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
+    } else {
+        lines.push("_sent._".to_string());
+    }
+    lines.join("\n")
+}
