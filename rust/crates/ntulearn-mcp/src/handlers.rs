@@ -4252,6 +4252,9 @@ async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> 
     validate_bb_id(&content_id, "content_id")?;
     let teammate = str_arg(args, "teammate").unwrap_or("").trim().to_string();
     let text = str_arg(args, "text").unwrap_or("").trim().to_string();
+    // Optional override for "areas to improve" style criteria, so the same
+    // praise is not pasted into an improvement box.
+    let improve_text = str_arg(args, "improve_text").unwrap_or("").trim().to_string();
     if teammate.is_empty() {
         return Err("teammate must be a non-empty substring of a teammate name".to_string());
     }
@@ -4282,7 +4285,9 @@ async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> 
         .find(|b| !b.trim().is_empty())
         .unwrap_or_default();
 
-    let result = session.upsert_review(alloc_id, &activity_id, &text, dry_run).await?;
+    let result = session
+        .upsert_review(alloc_id, &activity_id, &text, &improve_text, dry_run)
+        .await?;
 
     Ok(json!({
         "courseId": course_id,

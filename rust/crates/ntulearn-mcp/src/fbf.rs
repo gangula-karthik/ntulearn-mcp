@@ -712,6 +712,7 @@ fn parse_reviews(v: &Value) -> Vec<FbfReview> {
                 body: attr_str(r, "body").unwrap_or_default(),
                 kind: attr_str(r, "kind"),
                 user_id: rel_id(r, "user"),
+                criterion_id: rel_id(r, "criterion"),
             })
         })
         .collect()
@@ -822,6 +823,9 @@ pub struct FbfReview {
     pub kind: Option<String>,
     /// Author of the review.
     pub user_id: Option<String>,
+    /// Criterion the review is attached to (tasks may require one review
+    /// per criterion).
+    pub criterion_id: Option<String>,
 }
 
 /// An authenticated FeedbackFruits API session for one activity, obtained by
@@ -1306,88 +1310,118 @@ impl FbfSession {
         })
     }
 
-    /// Write the "Overall comments" review for one allocation: PATCH my
-    /// existing review, else POST a new one. The POST mirrors what the SPA's
-    /// `createRecord("review", …)` serializes: body + allocation, criterion,
-    /// parent (activity) and course relationships — no `kind` attribute (the
-    /// SPA never sets one). Not live-verified; on rejection the error carries
-    /// the full request so the payload can be adjusted.
+    /// Write the "Overall comments" reviews for one allocation. The task may
+    /// require one written review PER CRITERION (criteria-count can exceed
+    /// 1), so every criterion of the allocation receives `body`: existing
+    /// reviews of mine are PATCHed to it, missing ones are POSTed. Payloads
+    /// mirror the SPA's `createRecord("review", …)` — body + allocation,
+    /// criterion, parent and course relationships, no `kind` attribute. The
+    /// POST branch is live-verified; PATCH needs the full record too.
     pub async fn upsert_review(
         &self,
         allocation_id: &str,
         activity_id: &str,
         body: &str,
+        improve_text: &str,
         dry_run: bool,
     ) -> Result<Value, String> {
-        let existing = self.reviews(allocation_id).await?;
-        let mine = existing
-            .iter()
-            .find(|r| r.user_id.as_deref() == Some(self.user_id.as_str()))
-            .cloned();
-        let (method, url, payload) = match mine {
-            Some(review) => (
-                "PATCH",
-                format!("{}/v1/assignments/reviews/{}", self.api_base, review.id),
-                json!({
-                    "data": {
+        let mine: Vec<FbfReview> = self
+            .reviews(allocation_id)
+            .await?
+            .into_iter()
+            .filter(|r| r.user_id.as_deref() == Some(self.user_id.as_str()))
+            .collect();
+        let criteria = self.criteria(allocation_id).await?;
+        if criteria.is_empty() {
+            return Err(format!(
+                "allocation {allocation_id} has no criteria; cannot attach a review"
+            ));
+        }
+        let course_id = self.course_id_of(activity_id).await?;
+
+        let improve_body = if improve_text.is_empty() {
+            body.to_string()
+        } else {
+            improve_text.to_string()
+        };
+        let mut actions: Vec<Value> = Vec::new();
+        for crit in &criteria {
+            let body = if crit.title.to_lowercase().contains("improve") {
+                &improve_body
+            } else {
+                body
+            };
+            let existing = mine
+                .iter()
+                .find(|r| r.criterion_id.as_deref() == Some(crit.id.as_str()));
+            let (method, url, data) = match existing {
+                Some(review) => (
+                    "PATCH",
+                    format!("{}/v1/assignments/reviews/{}", self.api_base, review.id),
+                    json!({
                         "id": review.id,
                         "type": "reviews",
-                        "attributes": {"body": body}
-                    }
-                }),
-            ),
-            None => {
-                let criterion_id = self
-                    .criteria(allocation_id)
-                    .await?
-                    .into_iter()
-                    .map(|c| c.id)
-                    .next()
-                    .ok_or_else(|| {
-                        format!(
-                            "allocation {allocation_id} has no criteria; cannot attach the \
-                             review to a criterion"
-                        )
-                    })?;
-                let course_id = self.course_id_of(activity_id).await?;
-                (
+                        "attributes": {"body": body},
+                        "relationships": {
+                            "allocation": {"data": {"id": allocation_id, "type": "assignments/allocation"}},
+                            "criterion": {"data": {"id": crit.id, "type": "assignments/rubric-criterion"}},
+                            "parent": {"data": {"id": activity_id, "type": "activities"}},
+                            "course": {"data": {"id": course_id, "type": "lti/course"}}
+                        }
+                    }),
+                ),
+                None => (
                     "POST",
                     format!("{}/v1/assignments/reviews", self.api_base),
                     json!({
-                        "data": {
-                            "type": "reviews",
-                            "attributes": {"body": body},
-                            "relationships": {
-                                "allocation": {"data": {"id": allocation_id, "type": "assignments/allocation"}},
-                                "criterion": {"data": {"id": criterion_id, "type": "assignments/rubric-criterion"}},
-                                "parent": {"data": {"id": activity_id, "type": "activities"}},
-                                "course": {"data": {"id": course_id, "type": "lti/course"}}
-                            }
+                        "type": "reviews",
+                        "attributes": {"body": body},
+                        "relationships": {
+                            "allocation": {"data": {"id": allocation_id, "type": "assignments/allocation"}},
+                            "criterion": {"data": {"id": crit.id, "type": "assignments/rubric-criterion"}},
+                            "parent": {"data": {"id": activity_id, "type": "activities"}},
+                            "course": {"data": {"id": course_id, "type": "lti/course"}}
                         }
                     }),
-                )
-            }
-        };
+                ),
+            };
+            actions.push(json!({
+                "method": method,
+                "url": url,
+                "criterion": crit.title.clone(),
+                "payload": {"data": data},
+            }));
+        }
+
         if dry_run {
             return Ok(json!({
                 "dryRun": true,
-                "method": method,
-                "url": url,
-                "payload": payload,
+                "actions": actions,
                 "note": "dry run: nothing was sent",
             }));
         }
-        let (status, response) = self.api_send(method, &url, &payload).await?;
+
+        let mut results: Vec<Value> = Vec::new();
+        for action in &actions {
+            let payload = action.get("payload").cloned().unwrap_or(Value::Null);
+            let (status, response) = self
+                .api_send(action["method"].as_str().unwrap_or("POST"), action["url"].as_str().unwrap_or_default(), &payload)
+                .await?;
+            results.push(json!({
+                "method": action["method"],
+                "url": action["url"],
+                "criterion": action["criterion"],
+                "status": status,
+                "response": response,
+            }));
+        }
         Ok(json!({
             "dryRun": false,
-            "method": method,
-            "url": url,
-            "payload": payload,
-            "status": status,
-            "response": response,
+            "actions": results,
         }))
     }
 }
+
 
 // ===========================================================================
 // Tests — fixture-driven, no network (see FBF_SPEC.md fixtures)
