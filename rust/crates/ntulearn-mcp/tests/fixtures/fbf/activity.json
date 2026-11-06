@@ -1,0 +1,112 @@
+{
+ "data": {
+  "id": "01b7f224-af0f-463b-9b28-63e721e7f37d",
+  "type": "activities",
+  "attributes": {
+   "created-at": "2026-10-20T01:46:36.499Z",
+   "updated-at": "2026-10-20T02:02:35.427Z",
+   "order": null,
+   "views-count": 1650,
+   "comments-count": 0,
+   "upvotes-count": 0,
+   "code": null,
+   "title": "Week 13 Final Peer Evaluation: FeedbackFruits",
+   "description": null,
+   "legacy-tool": "custom-activity",
+   "has-keyword-insights": true,
+   "is-implemented": true,
+   "published-at": "2026-10-20T01:46:36.000Z",
+   "kind": null,
+   "submitted-for-share": false,
+   "tool": "custom-activity",
+   "viewed": true,
+   "upvoted": false
+  },
+  "relationships": {
+   "user": {
+    "data": {
+     "id": "680eab9e-d19e-43bb-b3d1-6949a35b4155",
+     "type": "users"
+    }
+   },
+   "course": {
+    "data": {
+     "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+     "type": "lti/course"
+    }
+   },
+   "folder": {
+    "data": null
+   },
+   "group-set": {
+    "data": {
+     "id": "41c0b47e-a0f8-44d0-9272-7c25f3c0c28e",
+     "type": "group-sets"
+    }
+   },
+   "placement": {
+    "data": {
+     "id": "e1d3843b-af82-4f9c-b872-33e2e873dc71",
+     "type": "lti/placement"
+    }
+   },
+   "progress": {
+    "data": {
+     "id": "a49113bf-43b0-4e62-9f8a-96d2f5644e1b",
+     "type": "progress"
+    }
+   },
+   "latest-template": {
+    "data": null
+   },
+   "tasks": {
+    "data": [
+     {
+      "id": "3d484ea1-ae0e-4070-b978-ccc3608ec271",
+      "type": "instruct-tasks"
+     },
+     {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     },
+     {
+      "id": "411ff59f-3a4f-47cd-aaf9-e0f6ddb5291c",
+      "type": "user-review-view-tasks"
+     },
+     {
+      "id": "d996f5c6-5e53-4569-b5e5-e46778aadb05",
+      "type": "user-review-tasks"
+     },
+     {
+      "id": "39e51f87-9aa5-4f61-bacb-bb610bd60775",
+      "type": "user-review-view-tasks"
+     },
+     {
+      "id": "7a32e18d-3922-45fb-bf91-8cc301279209",
+      "type": "summative-grade-tasks"
+     }
+    ]
+   },
+   "views": {
+    "links": {
+     "related": "/v1/activities/01b7f224-af0f-463b-9b28-63e721e7f37d/views"
+    }
+   },
+   "comments": {
+    "links": {
+     "related": "/v1/activities/01b7f224-af0f-463b-9b28-63e721e7f37d/comments"
+    }
+   },
+   "upvotes": {
+    "links": {
+     "related": "/v1/activities/01b7f224-af0f-463b-9b28-63e721e7f37d/upvotes"
+    }
+   },
+   "flags": {
+    "links": {
+     "related": "/v1/activities/01b7f224-af0f-463b-9b28-63e721e7f37d/flags"
+    }
+   }
+  }
+ }
+}

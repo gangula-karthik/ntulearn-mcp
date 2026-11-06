@@ -13,6 +13,7 @@ mod cli;
 mod capture;
 mod client;
 mod cookie;
+mod fbf;
 mod handlers;
 mod issues;
 mod mcp;

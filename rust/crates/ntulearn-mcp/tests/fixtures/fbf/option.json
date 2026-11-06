@@ -1,0 +1,28 @@
+{
+ "data": {
+  "id": "e99105d4-219e-478c-bc1b-1447ee2fd77b",
+  "type": "assignments/criterion-option",
+  "attributes": {
+   "created-at": "2026-10-20T01:46:36.815Z",
+   "title": "Never",
+   "order": 0,
+   "description": "Did not participate actively in team meetings at all (even though he/she might still be present.) Did not contribute any useful ideas that were relevant for getting the project completed. Did not submit any or usable work on time and never did so without prompting.",
+   "description-rendered": "<p>Did not participate actively in team meetings at all (even though he/she might still be present.) Did not contribute any useful ideas that were relevant for getting the project completed. Did not submit any or usable work on time and never did so without prompting.</p>\n",
+   "weight": 1
+  },
+  "relationships": {
+   "criterion": {
+    "data": {
+     "id": "e1afa0fb-b486-429d-b2ed-2a5581a84301",
+     "type": "assignments/rubric-criterion"
+    }
+   },
+   "copy-of": {
+    "data": {
+     "id": "d2a575c6-e5d8-4650-aaf8-2d8f8a99de33",
+     "type": "assignments/criterion-option"
+    }
+   }
+  }
+ }
+}

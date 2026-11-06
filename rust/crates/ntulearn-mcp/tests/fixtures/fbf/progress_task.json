@@ -1,0 +1,120 @@
+{
+ "data": {
+  "id": "a6a8d10e-06d9-4f61-beeb-eeaaf690194e",
+  "type": "progresses",
+  "attributes": {
+   "progress": 100,
+   "metadata": {
+    "criteria": {
+     "8d115789-ec88-4a47-b538-5a723b3bfe44": {
+      "count": 5,
+      "average": 1.0,
+      "introspective": {
+       "count": 0,
+       "average": null
+      },
+      "dab1e81a-63d3-400e-a2da-6fdab14836e5": [
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92"
+      ]
+     },
+     "bea02a1c-772a-464f-ac2c-aa742a0110db": {
+      "count": 5,
+      "average": 1.0,
+      "introspective": {
+       "count": 0,
+       "average": null
+      },
+      "7cd33450-4513-48fb-9da0-5373e6ca5621": [
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92"
+      ]
+     },
+     "c97e5568-0de1-420b-bf9e-d21b6488d8fa": {
+      "count": 5,
+      "average": 1.0,
+      "introspective": {
+       "count": 0,
+       "average": null
+      },
+      "3d17d98d-6bfe-4e1e-a345-fc1b1caa31a7": [
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92"
+      ]
+     },
+     "e1afa0fb-b486-429d-b2ed-2a5581a84301": {
+      "count": 5,
+      "average": 1.0,
+      "introspective": {
+       "count": 0,
+       "average": null
+      },
+      "a8e3503e-5be3-4c04-9a80-149715886704": [
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+       "a4fa313b-b6b6-476f-a496-8ed98934ae92"
+      ]
+     }
+    },
+    "progresses": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "total-time": 66,
+    "average-time": 66,
+    "total-ratings": 20,
+    "total-reviews": 0,
+    "average-rating": 1.0,
+    "required-allocations": 5,
+    "average-feedback-grade": null,
+    "total-introspective-ratings": 0,
+    "average-introspective-rating": null,
+    "criterion-8d115789-ec88-4a47-b538-5a723b3bfe44": 1.0,
+    "criterion-bea02a1c-772a-464f-ac2c-aa742a0110db": 1.0,
+    "criterion-c97e5568-0de1-420b-bf9e-d21b6488d8fa": 1.0,
+    "criterion-e1afa0fb-b486-429d-b2ed-2a5581a84301": 1.0,
+    "criterion-introspective-8d115789-ec88-4a47-b538-5a723b3bfe44": null,
+    "criterion-introspective-bea02a1c-772a-464f-ac2c-aa742a0110db": null,
+    "criterion-introspective-c97e5568-0de1-420b-bf9e-d21b6488d8fa": null,
+    "criterion-introspective-e1afa0fb-b486-429d-b2ed-2a5581a84301": null
+   },
+   "grades": {
+    "done": 0.0,
+    "reviews": 0,
+    "criterion-8d115789-ec88-4a47-b538-5a723b3bfe44": 28.889,
+    "criterion-bea02a1c-772a-464f-ac2c-aa742a0110db": 30.0,
+    "criterion-c97e5568-0de1-420b-bf9e-d21b6488d8fa": 25.0,
+    "criterion-e1afa0fb-b486-429d-b2ed-2a5581a84301": 15.0
+   },
+   "grades-published-at": null
+  },
+  "relationships": {
+   "actor": {
+    "data": {
+     "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+     "type": "users"
+    }
+   },
+   "progressable": {
+    "data": {
+     "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+     "type": "user-review-tasks"
+    }
+   }
+  }
+ }
+}

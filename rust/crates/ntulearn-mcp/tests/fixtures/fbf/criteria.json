@@ -1,0 +1,349 @@
+{
+ "data": [
+  {
+   "id": "8d115789-ec88-4a47-b538-5a723b3bfe44",
+   "type": "assignments/rubric-criterion",
+   "attributes": {
+    "title": "Managing interpersonal relationships (30%)",
+    "description": "Listened attentively to and sought inputs from others; helped team resolve conflicts and achieved common understanding to function effectively; promoted respect for others and differences; fostered camaraderie.\n- Listened attentively to and sought inputs from others during group meetings/discussions\n- Shared their perspectives/opinions during group discussions\n- Maintained good interpersonal dynamics of the group, such as helping resolve group conflicts if and as they arose; played a pivotal role in establishing a common understanding and working principle for the entire group\n- Exhibited group citizenship behaviour, such as helping and inspiring others to learn and complete their work through guidance and encouragement",
+    "created-at": "2026-10-20T01:46:36.917Z",
+    "order": 2,
+    "required-reviews": 0,
+    "reviews-allowed": false,
+    "facet-weight": 30.0,
+    "introspective-facet-weight": 0.0,
+    "acaiable": true,
+    "has-levels": true
+   },
+   "relationships": {
+    "allocate-task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "criterion-set": {
+     "data": {
+      "id": "d17b484a-89ad-4d41-b802-e847782c0546",
+      "type": "assignments/rubric-criterion-set"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "copy-of": {
+     "data": {
+      "id": "d68013bb-cb3d-4d47-b30f-767ad658a48b",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "options": {
+     "data": [
+      {
+       "id": "92044f52-adcd-45c6-8353-aa6acfb240c4",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "3a52ba79-c86b-4670-9be8-5b542d4f7e23",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "7befce78-39c4-438e-85f0-295b99c4428b",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "fb08d736-f669-49be-a532-6d8aa4e77444",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "23d4fb85-656d-47e2-9bff-80a99c35ebda",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "a1752879-2b2f-4ba5-8d86-afab4df61f03",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "979d2c9e-8c1a-46e3-ab5b-469f93e70121",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "1c80f410-fb04-4c2b-8091-66e63a3d4ffa",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "dab1e81a-63d3-400e-a2da-6fdab14836e5",
+       "type": "assignments/criterion-option"
+      }
+     ]
+    },
+    "copies": {
+     "links": {
+      "related": "/v1/assignments/criteria/8d115789-ec88-4a47-b538-5a723b3bfe44/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "e1afa0fb-b486-429d-b2ed-2a5581a84301",
+   "type": "assignments/rubric-criterion",
+   "attributes": {
+    "title": "Fulfilling one\u2019s responsibilities duly (15%)",
+    "description": "Behaved responsibly--such as attend meetings punctually and regularly; participate in discussion; complete assigned tasks/roles punctually.",
+    "created-at": "2026-10-20T01:46:36.746Z",
+    "order": 0,
+    "required-reviews": 0,
+    "reviews-allowed": false,
+    "facet-weight": 15.0,
+    "introspective-facet-weight": 0.0,
+    "acaiable": false,
+    "has-levels": true
+   },
+   "relationships": {
+    "allocate-task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "criterion-set": {
+     "data": {
+      "id": "d17b484a-89ad-4d41-b802-e847782c0546",
+      "type": "assignments/rubric-criterion-set"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "copy-of": {
+     "data": {
+      "id": "18c84f59-a9e1-4f94-9e72-442a35eaac73",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "options": {
+     "data": [
+      {
+       "id": "e99105d4-219e-478c-bc1b-1447ee2fd77b",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "3e7c22a6-54db-4959-8999-4eb95f2143fc",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "af253278-32e0-4247-b0cd-7c744f59248e",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "edda35e8-f3b3-4eff-938a-fff5f07002b2",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "3e68e604-0c84-462e-82eb-944fbe8b3b2d",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "d3fc08da-c2e7-4fbf-8e9d-2170259d933f",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "ff90da55-5df7-452d-9912-ef2b1891fccd",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "5ea2bbbe-af2a-418c-96f1-d5c558426fcb",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "a8e3503e-5be3-4c04-9a80-149715886704",
+       "type": "assignments/criterion-option"
+      }
+     ]
+    },
+    "copies": {
+     "links": {
+      "related": "/v1/assignments/criteria/e1afa0fb-b486-429d-b2ed-2a5581a84301/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "bea02a1c-772a-464f-ac2c-aa742a0110db",
+   "type": "assignments/rubric-criterion",
+   "attributes": {
+    "title": "Providing support to others to achieve goals (30%)",
+    "description": "Behaved fairly and ethically\u2014such as sharing responsibilities, and giving credits. Exhibited group citizenship behavior--such as helping others to learn and complete their work through guidance and encouragement; standing up for others when needed.\n",
+    "created-at": "2026-10-20T01:46:37.038Z",
+    "order": 3,
+    "required-reviews": 0,
+    "reviews-allowed": false,
+    "facet-weight": 30.0,
+    "introspective-facet-weight": 0.0,
+    "acaiable": false,
+    "has-levels": true
+   },
+   "relationships": {
+    "allocate-task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "criterion-set": {
+     "data": {
+      "id": "d17b484a-89ad-4d41-b802-e847782c0546",
+      "type": "assignments/rubric-criterion-set"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "copy-of": {
+     "data": null
+    },
+    "options": {
+     "data": [
+      {
+       "id": "51ae945f-ccbe-4623-aaa5-b3e39c12b54b",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "dae6a369-3570-4f61-9a55-5e7c801a986c",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "a52ac9bc-fbf4-4f08-970d-a06f37f6e517",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "42cea7ac-cd51-4272-b224-bf1b83d9d61e",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "7dd8f3c7-e5f9-4850-a61a-094a494bb11b",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "bf6971c9-cef2-48d8-93b6-4cf0d71c2635",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "ed208562-a282-40a1-9b5b-50fd09a6609d",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "ea78aced-4bbf-4115-939f-76a381266d18",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "7cd33450-4513-48fb-9da0-5373e6ca5621",
+       "type": "assignments/criterion-option"
+      }
+     ]
+    },
+    "copies": {
+     "links": {
+      "related": "/v1/assignments/criteria/bea02a1c-772a-464f-ac2c-aa742a0110db/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "c97e5568-0de1-420b-bf9e-d21b6488d8fa",
+   "type": "assignments/rubric-criterion",
+   "attributes": {
+    "title": "Fulfilling one\u2019s responsibilities effectively (25%)",
+    "description": "Behaved and contributed effectively--such as quality of work produced; creativity of ideas; extensiveness of research and thinking.\n\n\n- Completed all assigned tasks/group work on time;\n- Submitted all assigned tasks/pieces of work on time and in an agreed-upon format with the team;\n- Attended group meetings/discussions regularly (in-person/online/ chat discussions).",
+    "created-at": "2026-10-20T01:46:36.868Z",
+    "order": 1,
+    "required-reviews": 0,
+    "reviews-allowed": false,
+    "facet-weight": 25.0,
+    "introspective-facet-weight": 0.0,
+    "acaiable": false,
+    "has-levels": true
+   },
+   "relationships": {
+    "allocate-task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "criterion-set": {
+     "data": {
+      "id": "d17b484a-89ad-4d41-b802-e847782c0546",
+      "type": "assignments/rubric-criterion-set"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "copy-of": {
+     "data": {
+      "id": "0f4f128d-b5ce-4f87-8dc8-898df24b1387",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "options": {
+     "data": [
+      {
+       "id": "9721e902-79a4-4174-8a62-b21f2c2f24bd",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "6ef98d48-4da3-4e30-9dee-fabdb6d0818d",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "3ccb631b-489e-4a3b-a1d6-087556d175df",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "801023ce-a2cc-4d1e-8c86-075b24e340eb",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "2c49e4e5-6d65-4997-bd37-bae76579152b",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "ac8ccc48-831d-4b7e-b495-312575f39425",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "b0336ecc-820d-477e-bffe-57dbf0322837",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "ce2c035e-0ae4-47e7-96d5-431c2c193a9a",
+       "type": "assignments/criterion-option"
+      },
+      {
+       "id": "3d17d98d-6bfe-4e1e-a345-fc1b1caa31a7",
+       "type": "assignments/criterion-option"
+      }
+     ]
+    },
+    "copies": {
+     "links": {
+      "related": "/v1/assignments/criteria/c97e5568-0de1-420b-bf9e-d21b6488d8fa/criteria"
+     }
+    }
+   }
+  }
+ ]
+}

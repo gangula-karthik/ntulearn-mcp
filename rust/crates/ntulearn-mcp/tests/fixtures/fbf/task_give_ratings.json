@@ -1,0 +1,116 @@
+{
+ "data": {
+  "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+  "type": "user-review-tasks",
+  "attributes": {
+   "created-at": "2026-10-20T01:46:36.586Z",
+   "order": 1,
+   "deadline-calendar-event-sync-scheduled-at": "2026-10-22T03:11:57.620Z",
+   "deadline-calendar-event-sync-started-at": "2026-10-22T03:11:57.698Z",
+   "deadline-calendar-event-sync-completed-at": "2026-10-22T03:12:02.739Z",
+   "title": "Give ratings",
+   "type": "user-review-task",
+   "deadline-at": "2026-11-17T01:00:00.000Z",
+   "automatic-allocations": true,
+   "admin-allocations": false,
+   "admin-actors": false,
+   "introspective": false,
+   "within-group": true,
+   "as-group": false,
+   "actor-type": "Person",
+   "allocable-type": "Person",
+   "allocations-required": 1,
+   "max-allocations": null,
+   "allocation-invitations-enabled": false,
+   "require-all-allocables": true,
+   "eager-allocations": true,
+   "student-allocations": false,
+   "group-sets-allocations": null,
+   "students-select-criteria": false,
+   "criteria-count": 0,
+   "rubric-criteria-count": 4,
+   "scale-criteria-count": 0,
+   "acaiable-criteria-count": 1,
+   "provider-allocation-unavailable-fallback": false,
+   "description": null,
+   "description-rendered": null,
+   "introspective-allocation-required": false,
+   "reviewer-anonymous": true,
+   "student-averages-visible": false,
+   "done-facet-weight": 0.0,
+   "reviews-facet-weight": 0.0,
+   "reviewer-feedback-ratings-facet-weight": 0.0,
+   "reviews-facet-amount": 1,
+   "nudging-tips": [],
+   "nudging-tips-enabled": false,
+   "nudging-checklist": [],
+   "nudging-checklist-enabled": false,
+   "detect-outliers-enabled": false,
+   "generative-ai-coach-enabled": false,
+   "review-separate-groups": false,
+   "reviewed-count": 5
+  },
+  "relationships": {
+   "activity": {
+    "data": {
+     "id": "01b7f224-af0f-463b-9b28-63e721e7f37d",
+     "type": "activities"
+    }
+   },
+   "course": {
+    "data": {
+     "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+     "type": "lti/course"
+    }
+   },
+   "progress": {
+    "data": {
+     "id": "a6a8d10e-06d9-4f61-beeb-eeaaf690194e",
+     "type": "progress"
+    }
+   },
+   "deadline-extensions": {
+    "links": {
+     "related": "/v1/tasks/05ea2270-a202-4dae-a342-f5af28fbef42/deadline_extensions"
+    }
+   },
+   "allocation-set": {
+    "data": {
+     "id": "72b8aebe-560c-440b-ab58-6978c0137edd",
+     "type": "assignments/allocation-set"
+    }
+   },
+   "provider-allocation-set": {
+    "data": null
+   },
+   "reviewable-sets": {
+    "data": []
+   },
+   "allocation-invitations": {
+    "links": {
+     "related": "/v1/assignments/tasks/05ea2270-a202-4dae-a342-f5af28fbef42/allocation_invitations"
+    }
+   },
+   "allocations": {
+    "links": {
+     "related": "/v1/assignments/tasks/05ea2270-a202-4dae-a342-f5af28fbef42/allocations?filtered=true"
+    }
+   },
+   "criteria": {
+    "links": {
+     "related": "/v1/assignments/tasks/05ea2270-a202-4dae-a342-f5af28fbef42/criteria"
+    }
+   },
+   "criterion-sets": {
+    "links": {
+     "related": "/v1/assignments/tasks/05ea2270-a202-4dae-a342-f5af28fbef42/criterion_sets"
+    }
+   },
+   "explanations": {
+    "links": {
+     "related": "/v1/assignments/tasks/05ea2270-a202-4dae-a342-f5af28fbef42/explanations"
+    }
+   }
+  }
+ }
+}

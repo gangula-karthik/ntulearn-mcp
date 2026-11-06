@@ -1,0 +1,329 @@
+{
+ "data": [
+  {
+   "id": "c5b735de-7494-4347-8b16-4c68d4c30c7c",
+   "type": "assignments/allocation",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:05.424Z",
+    "required": true,
+    "introspective": false,
+    "manual": false,
+    "published-at": null,
+    "ratings-published-at": null,
+    "reviews-published-at": null,
+    "pseudonym-seed": "c5b735de-7494-4347-8b16-4c68d4c30c7c",
+    "ratings-count": 4,
+    "reviews-count": 0
+   },
+   "relationships": {
+    "actor": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "allocable": {
+     "data": {
+      "id": "112f2114-677c-4950-bde9-6dc8d136b5ff",
+      "type": "users"
+     }
+    },
+    "copy-of": {
+     "data": null
+    },
+    "reviews": {
+     "links": {
+      "related": "/v1/assignments/allocations/c5b735de-7494-4347-8b16-4c68d4c30c7c/reviews"
+     }
+    },
+    "ratings": {
+     "links": {
+      "related": "/v1/assignments/allocations/c5b735de-7494-4347-8b16-4c68d4c30c7c/ratings"
+     }
+    },
+    "reviewer-feedback": {
+     "links": {
+      "related": "/v1/assignments/allocations/c5b735de-7494-4347-8b16-4c68d4c30c7c/reviewer_feedbacks"
+     }
+    },
+    "criteria": {
+     "links": {
+      "related": "/v1/assignments/allocations/c5b735de-7494-4347-8b16-4c68d4c30c7c/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "4dcec814-659b-4647-9612-fe16433cf614",
+   "type": "assignments/allocation",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:05.483Z",
+    "required": true,
+    "introspective": false,
+    "manual": false,
+    "published-at": null,
+    "ratings-published-at": null,
+    "reviews-published-at": null,
+    "pseudonym-seed": "4dcec814-659b-4647-9612-fe16433cf614",
+    "ratings-count": 4,
+    "reviews-count": 0
+   },
+   "relationships": {
+    "actor": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "allocable": {
+     "data": {
+      "id": "252395eb-eb84-4f49-b47f-760a13372966",
+      "type": "users"
+     }
+    },
+    "copy-of": {
+     "data": null
+    },
+    "reviews": {
+     "links": {
+      "related": "/v1/assignments/allocations/4dcec814-659b-4647-9612-fe16433cf614/reviews"
+     }
+    },
+    "ratings": {
+     "links": {
+      "related": "/v1/assignments/allocations/4dcec814-659b-4647-9612-fe16433cf614/ratings"
+     }
+    },
+    "reviewer-feedback": {
+     "links": {
+      "related": "/v1/assignments/allocations/4dcec814-659b-4647-9612-fe16433cf614/reviewer_feedbacks"
+     }
+    },
+    "criteria": {
+     "links": {
+      "related": "/v1/assignments/allocations/4dcec814-659b-4647-9612-fe16433cf614/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "eeb47812-3c1c-4261-ae1d-24c8bcd8ae81",
+   "type": "assignments/allocation",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:05.534Z",
+    "required": true,
+    "introspective": false,
+    "manual": false,
+    "published-at": null,
+    "ratings-published-at": null,
+    "reviews-published-at": null,
+    "pseudonym-seed": "eeb47812-3c1c-4261-ae1d-24c8bcd8ae81",
+    "ratings-count": 4,
+    "reviews-count": 0
+   },
+   "relationships": {
+    "actor": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "allocable": {
+     "data": {
+      "id": "324e502b-d5c3-452f-be79-9ce6e68ea1db",
+      "type": "users"
+     }
+    },
+    "copy-of": {
+     "data": null
+    },
+    "reviews": {
+     "links": {
+      "related": "/v1/assignments/allocations/eeb47812-3c1c-4261-ae1d-24c8bcd8ae81/reviews"
+     }
+    },
+    "ratings": {
+     "links": {
+      "related": "/v1/assignments/allocations/eeb47812-3c1c-4261-ae1d-24c8bcd8ae81/ratings"
+     }
+    },
+    "reviewer-feedback": {
+     "links": {
+      "related": "/v1/assignments/allocations/eeb47812-3c1c-4261-ae1d-24c8bcd8ae81/reviewer_feedbacks"
+     }
+    },
+    "criteria": {
+     "links": {
+      "related": "/v1/assignments/allocations/eeb47812-3c1c-4261-ae1d-24c8bcd8ae81/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "0bc6a7b4-b643-47eb-b3d7-94dce26041d0",
+   "type": "assignments/allocation",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:05.591Z",
+    "required": true,
+    "introspective": false,
+    "manual": false,
+    "published-at": null,
+    "ratings-published-at": null,
+    "reviews-published-at": null,
+    "pseudonym-seed": "0bc6a7b4-b643-47eb-b3d7-94dce26041d0",
+    "ratings-count": 4,
+    "reviews-count": 0
+   },
+   "relationships": {
+    "actor": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "allocable": {
+     "data": {
+      "id": "4ecd686b-b5ec-4f87-b884-4c5bb02e5080",
+      "type": "users"
+     }
+    },
+    "copy-of": {
+     "data": null
+    },
+    "reviews": {
+     "links": {
+      "related": "/v1/assignments/allocations/0bc6a7b4-b643-47eb-b3d7-94dce26041d0/reviews"
+     }
+    },
+    "ratings": {
+     "links": {
+      "related": "/v1/assignments/allocations/0bc6a7b4-b643-47eb-b3d7-94dce26041d0/ratings"
+     }
+    },
+    "reviewer-feedback": {
+     "links": {
+      "related": "/v1/assignments/allocations/0bc6a7b4-b643-47eb-b3d7-94dce26041d0/reviewer_feedbacks"
+     }
+    },
+    "criteria": {
+     "links": {
+      "related": "/v1/assignments/allocations/0bc6a7b4-b643-47eb-b3d7-94dce26041d0/criteria"
+     }
+    }
+   }
+  },
+  {
+   "id": "9006b3b9-f93e-4dcc-8d64-bb40ebab477d",
+   "type": "assignments/allocation",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:05.644Z",
+    "required": true,
+    "introspective": false,
+    "manual": false,
+    "published-at": null,
+    "ratings-published-at": null,
+    "reviews-published-at": null,
+    "pseudonym-seed": "9006b3b9-f93e-4dcc-8d64-bb40ebab477d",
+    "ratings-count": 4,
+    "reviews-count": 0
+   },
+   "relationships": {
+    "actor": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "task": {
+     "data": {
+      "id": "05ea2270-a202-4dae-a342-f5af28fbef42",
+      "type": "user-review-tasks"
+     }
+    },
+    "allocable": {
+     "data": {
+      "id": "99c612fe-8f32-4231-8e0b-420128c9d1a2",
+      "type": "users"
+     }
+    },
+    "copy-of": {
+     "data": null
+    },
+    "reviews": {
+     "links": {
+      "related": "/v1/assignments/allocations/9006b3b9-f93e-4dcc-8d64-bb40ebab477d/reviews"
+     }
+    },
+    "ratings": {
+     "links": {
+      "related": "/v1/assignments/allocations/9006b3b9-f93e-4dcc-8d64-bb40ebab477d/ratings"
+     }
+    },
+    "reviewer-feedback": {
+     "links": {
+      "related": "/v1/assignments/allocations/9006b3b9-f93e-4dcc-8d64-bb40ebab477d/reviewer_feedbacks"
+     }
+    },
+    "criteria": {
+     "links": {
+      "related": "/v1/assignments/allocations/9006b3b9-f93e-4dcc-8d64-bb40ebab477d/criteria"
+     }
+    }
+   }
+  }
+ ]
+}
