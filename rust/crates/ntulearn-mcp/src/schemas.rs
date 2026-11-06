@@ -7,7 +7,7 @@ use crate::mcp::{Tool, ToolAnnotations};
 /// calls clone from here — no schema reconstruction or re-parsing per request.
 static TOOL_CATALOG: OnceLock<Vec<Tool>> = OnceLock::new();
 
-/// All 22 NTULearn tool definitions with their exact input schemas.
+/// All 26 NTULearn tool definitions with their exact input schemas.
 ///
 /// Built **once** and cached in a `OnceLock`, so every `tools/list` (tool
 /// discovery) is an O(1) cache hit instead of reconstructing all schemas and
@@ -326,6 +326,62 @@ fn build_tool_catalog() -> Vec<Tool> {
             idempotent_hint: Some(true),
             open_world_hint: Some(true),
         })
+        
+        ,
+        Tool::new(
+            r####"ntulearn_fbf_status"####.to_string(),
+            r####"FeedbackFruits peer-evaluation status for a course: activity titles, per-task deadlines, your progress % and done state, overall completion, and whether grades have been released. Omit content_id to auto-discover FeedbackFruits items in the course content tree (every LTI link is probed; non-FeedbackFruits tools are skipped, not errors). Use this first when checking peer-evaluation deadlines or what you still owe. Example: ntulearn_fbf_status(course_id='_2706844_1')"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of one specific FeedbackFruits activity (e.g. _67890_1). Omit to auto-discover FeedbackFruits items in the course content tree.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"FeedbackFruits activity status"####.to_string()),
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
+
+        ,
+        Tool::new(
+            r####"ntulearn_fbf_reviews"####.to_string(),
+            r####"Read your FeedbackFruits peer-evaluation reviews for one activity. direction='given': the rubric ratings you gave each teammate (criterion → option + weight; unrated criteria show a null option). direction='received': what teammates gave you — empty with an explicit 'not yet released' note until the teacher publishes ratings/grades, which is normal, not an error. Get content_id from ntulearn_fbf_status. Example: ntulearn_fbf_reviews(course_id='_2706844_1', content_id='_6208502_1', direction='given')"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of the FeedbackFruits activity (e.g. _67890_1). Find it with ntulearn_fbf_status.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"direction":{"type":"string","description":"'given' = ratings you gave teammates; 'received' = ratings teammates gave you (empty until released).","enum":["given","received"],"default":"given"},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id","content_id"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"FeedbackFruits reviews (given/received)"####.to_string()),
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
+
+        ,
+        Tool::new(
+            r####"ntulearn_fbf_rate"####.to_string(),
+            r####"Set ONE rubric rating for ONE teammate in a FeedbackFruits peer evaluation (upsert: patches the existing rating for that teammate+criterion pair, else creates it). teammate, criterion and option match case-insensitively by substring against names/titles; option also accepts the exact weight number (e.g. 4). dry_run=true (default) resolves everything and shows the before→after change WITHOUT sending it. See current values first with ntulearn_fbf_reviews direction='given'. Example: ntulearn_fbf_rate(course_id='_2706844_1', content_id='_6208502_1', teammate='Cheryl', criterion='interpersonal', option='Always', dry_run=false)"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of the FeedbackFruits activity (e.g. _67890_1). Find it with ntulearn_fbf_status.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"teammate":{"type":"string","description":"Teammate to rate — case-insensitive substring of their name (e.g. 'Cheryl' matches 'WONG YUET LENG, CHERYL').","minLength":1,"maxLength":200},"criterion":{"type":"string","description":"Rubric criterion — case-insensitive substring of its title (e.g. 'interpersonal').","minLength":1,"maxLength":200},"option":{"type":"string","description":"Rating option — case-insensitive substring of its title (e.g. 'Always') or the exact weight number as a string (e.g. '4').","minLength":1,"maxLength":200},"dry_run":{"type":"boolean","description":"Resolve teammate/criterion/option and show the change WITHOUT sending it (default true). Set false to actually submit.","default":true},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id","content_id","teammate","criterion","option"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"FeedbackFruits rate teammate"####.to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
+
+        ,
+        Tool::new(
+            r####"ntulearn_fbf_comment"####.to_string(),
+            r####"Write (upsert) your 'Overall comments' written review for ONE teammate in a FeedbackFruits peer evaluation; submitting again replaces your previous text. dry_run=true (default) resolves the teammate and shows the text WITHOUT sending it; dry_run=false submits. Check which teammates still need comments with ntulearn_fbf_status first. Example: ntulearn_fbf_comment(course_id='_2706844_1', content_id='_6208502_1', teammate='Cheryl', text='Cheryl consistently delivered her parts early and mediated disagreements well.', dry_run=true)"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of the FeedbackFruits activity (e.g. _67890_1). Find it with ntulearn_fbf_status.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"teammate":{"type":"string","description":"Teammate to comment on — case-insensitive substring of their name (e.g. 'Cheryl' matches 'WONG YUET LENG, CHERYL').","minLength":1,"maxLength":200},"text":{"type":"string","description":"The written review text for the teammate (plain text; replaces any previous comment you wrote).","minLength":1,"maxLength":8000},"dry_run":{"type":"boolean","description":"Resolve the teammate and show the text WITHOUT sending it (default true). Set false to actually submit.","default":true},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id","content_id","teammate","text"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"FeedbackFruits comment on teammate"####.to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
         ,
     ]
 }
@@ -341,7 +397,7 @@ mod discovery_quality {
     #[test]
     fn every_tool_is_intern_test_ready() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 22, "tool surface changed; update this test");
+        assert_eq!(tools.len(), 26, "tool surface changed; update this test");
         for t in &tools {
             assert!(!t.name.is_empty(), "tool name empty");
             assert!(

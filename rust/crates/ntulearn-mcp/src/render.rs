@@ -725,3 +725,219 @@ pub fn generic_list(title: &str, items: &[Value], total: usize) -> String {
 pub fn format_bytes(n: u64) -> String {
     crate::parsers::format_bytes(n)
 }
+
+// ---------------------------------------------------------------------------
+// FeedbackFruits peer evaluation (fbf_* handlers)
+// ---------------------------------------------------------------------------
+
+/// `fbf_status` — one section per activity: completion, release state, tasks.
+pub fn md_fbf_status(payload: &Value) -> String {
+    let course = _gs(payload, "courseId").unwrap_or("?");
+    let mut lines = vec![format!("# FeedbackFruits — {course}")];
+    let activities = payload
+        .get("activities")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+        lines.push(String::new());
+        lines.push(format!("_{note}_"));
+    }
+    for a in &activities {
+        let title = _gs(a, "title").unwrap_or("untitled");
+        let comp = match a.get("completion") {
+            Some(serde_json::Value::Number(n)) => format!("{n}%"),
+            _ => "—".to_string(),
+        };
+        let released = match _gs(a, "gradesPublishedAt") {
+            Some(s) if !s.is_empty() => format!("grades released {s}"),
+            _ => "grades not yet released".to_string(),
+        };
+        lines.push(String::new());
+        lines.push(format!("## {title} — {comp} · {released}"));
+        for t in a
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+        {
+            let ttitle = _gs(&t, "title").unwrap_or("task");
+            let deadline = _dt(t.get("deadline"));
+            let prog = match t.get("progress") {
+                Some(serde_json::Value::Number(n)) => format!("{n}%"),
+                _ => "—".to_string(),
+            };
+            let done = match t.get("done") {
+                Some(serde_json::Value::Bool(true)) => "✅",
+                Some(serde_json::Value::Bool(false)) => "⬜",
+                _ => "·",
+            };
+            lines.push(format!("- {done} {ttitle} · due {deadline} · progress {prog}"));
+        }
+    }
+    if activities.is_empty() && _gs(payload, "note").is_none_or(|s| s.is_empty()) {
+        lines.push(String::new());
+        lines.push("_No FeedbackFruits activities found._".to_string());
+    }
+    let skipped = payload
+        .get("skippedLinks")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !skipped.is_empty() {
+        lines.push(String::new());
+        let names: Vec<String> = skipped
+            .iter()
+            .map(|s| {
+                _gs(s, "title")
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| _gs(s, "contentId").unwrap_or("?"))
+                    .to_string()
+            })
+            .collect();
+        lines.push(format!(
+            "_{} non-FeedbackFruits LTI link(s) skipped: {}_",
+            skipped.len(),
+            names.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
+
+/// `fbf_reviews` — ratings grouped per teammate; explicit not-yet-released
+/// note for the received direction.
+pub fn md_fbf_reviews(payload: &Value) -> String {
+    let title = _gs(payload, "activityTitle").unwrap_or("FeedbackFruits");
+    let dir = _gs(payload, "direction").unwrap_or("given");
+    let mut lines = vec![format!("# Peer evaluation — {title} (ratings {dir})")];
+    if dir == "received" && payload.get("released").and_then(|v| v.as_bool()) == Some(false) {
+        lines.push(String::new());
+        lines.push("_Teammate reviews are not yet released._".to_string());
+        for k in ["ratingsPublishedAt", "reviewsPublishedAt", "gradesPublishedAt"] {
+            let v = payload.get("releaseState").and_then(|r| r.get(k));
+            lines.push(format!("- {k}: {}", _dt(v)));
+        }
+        if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+            lines.push(format!("_{note}_"));
+        }
+    }
+    let reviews = payload
+        .get("reviews")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if reviews.is_empty() {
+        lines.push(String::new());
+        lines.push("_No ratings._".to_string());
+    } else {
+        // Rows are emitted teammate-major; start a section on each change.
+        let mut current = String::new();
+        for r in &reviews {
+            let mate = _gs(r, "teammate").unwrap_or("?");
+            if mate != current {
+                current = mate.to_string();
+                lines.push(String::new());
+                lines.push(format!("## {mate}"));
+            }
+            let crit = _gs(r, "criterion").unwrap_or("?");
+            let weight = match r.get("weight") {
+                Some(serde_json::Value::Number(n)) => format!(" ({n})"),
+                _ => String::new(),
+            };
+            match _gs(r, "option") {
+                Some(opt) if !opt.is_empty() => {
+                    lines.push(format!("- {crit}: **{opt}**{weight}"));
+                }
+                _ => lines.push(format!("- {crit}: _(not yet rated)_")),
+            }
+        }
+    }
+    let comments = payload
+        .get("comments")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !comments.is_empty() {
+        lines.push(String::new());
+        lines.push("## Written comments received".to_string());
+        for c in &comments {
+            lines.push(format!(
+                "- **{}**: {}",
+                _gs(c, "teammate").unwrap_or("?"),
+                _gs(c, "comment").unwrap_or("")
+            ));
+        }
+    }
+    if dir != "received" {
+        if let Some(u) = payload.get("unrated").and_then(|v| v.as_u64()) {
+            if u > 0 {
+                lines.push(String::new());
+                lines.push(format!(
+                    "_{u} criterion slot(s) not yet rated — fill them with ntulearn_fbf_rate._"
+                ));
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+/// `fbf_rate` — the before→after change, and whether it was sent.
+pub fn md_fbf_rate(payload: &Value) -> String {
+    let title = _gs(payload, "activityTitle").unwrap_or("FeedbackFruits");
+    let fmt_opt = |v: Option<&Value>| -> String {
+        match v {
+            Some(Value::Object(o)) => {
+                let opt = o.get("option").and_then(Value::as_str).unwrap_or("?");
+                match o.get("weight") {
+                    Some(Value::Number(n)) => format!("{opt} ({n})"),
+                    _ => opt.to_string(),
+                }
+            }
+            _ => "— (not yet rated)".to_string(),
+        }
+    };
+    let mut lines = vec![format!("# Rating upsert — {title}")];
+    lines.push(String::new());
+    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
+    lines.push(format!("- criterion: **{}**", _gs(payload, "criterion").unwrap_or("?")));
+    lines.push(format!("- before: {}", fmt_opt(payload.get("before"))));
+    lines.push(format!("- after: **{}**", fmt_opt(payload.get("after"))));
+    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    lines.push(String::new());
+    if dry {
+        lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
+    } else {
+        lines.push("_sent._".to_string());
+    }
+    lines.join("\n")
+}
+
+/// `fbf_comment` — the previous text, the new text, and whether it was sent.
+pub fn md_fbf_comment(payload: &Value) -> String {
+    let title = _gs(payload, "activityTitle").unwrap_or("FeedbackFruits");
+    let mut lines = vec![format!("# Written review upsert — {title}")];
+    lines.push(String::new());
+    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
+    lines.push(format!(
+        "- task: {}",
+        _gs(payload, "task").unwrap_or("Overall comments")
+    ));
+    if let Some(b) = _gs(payload, "before").filter(|s| !s.is_empty()) {
+        let short: String = b.chars().take(200).collect();
+        let ellipsis = if b.chars().count() > 200 { "…" } else { "" };
+        lines.push(format!("- before: {short}{ellipsis}"));
+    } else {
+        lines.push("- before: — (no previous comment)".to_string());
+    }
+    lines.push(String::new());
+    lines.push(_gs(payload, "after").unwrap_or("").to_string());
+    lines.push(String::new());
+    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    if dry {
+        lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
+    } else {
+        lines.push("_sent._".to_string());
+    }
+    lines.join("\n")
+}
+

@@ -369,7 +369,7 @@ pub async fn run(verbose: bool) -> i32 {
     let help = cli::help_text();
     println!("[discovery] (injected/read per conversation)");
     println!(
-        "  MCP tools/list payload : {:>7} chars ≈ {:>6} tok (every turn, all 21 tools)",
+        "  MCP tools/list payload : {:>7} chars ≈ {:>6} tok (every turn, all 26 tools)",
         mcp_catalog.len(),
         est_tokens(mcp_catalog.len())
     );

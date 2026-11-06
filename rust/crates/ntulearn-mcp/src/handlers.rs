@@ -1,4 +1,4 @@
-//! Tool dispatch: maps the 21 MCP tool names to typed handler functions.
+//! Tool dispatch: maps the 25 MCP tool names to typed handler functions.
 //!
 //! Port of `src/ntulearn_mcp/handlers.py` (registry: list_messages … summarize_course)
 //! and the server-local tools in `src/ntulearn_mcp/server.py` (list_courses …
@@ -22,6 +22,7 @@ use crate::mcp::ToolContent;
 use serde_json::{json, Map, Value};
 
 use crate::client::{ClientError, NTULearnClient};
+use crate::fbf::{FbfCriterion, FbfOption, FbfRating, FbfReview, FbfSession, FbfTask};
 use crate::{parsers, render, AppState};
 
 // ---------------------------------------------------------------------------
@@ -102,6 +103,10 @@ pub async fn dispatch_value(state: &AppState, name: &str, args: &Value) -> Resul
         "export_calendar_ics" => h_export_calendar_ics(state, args).await?,
         "export_gradebook_csv" => h_export_gradebook_csv(state, args).await?,
         "summarize_course" => h_summarize_course(state, args).await?,
+        "fbf_status" => h_fbf_status(state, args).await?,
+        "fbf_reviews" => h_fbf_reviews(state, args).await?,
+        "fbf_rate" => h_fbf_rate(state, args).await?,
+        "fbf_comment" => h_fbf_comment(state, args).await?,
         other => {
             return Err(format!("unknown tool: ntulearn_{other}"));
         }
@@ -3696,6 +3701,604 @@ async fn h_summarize_course(state: &AppState, args: &Value) -> Result<Value, Str
 }
 
 // ---------------------------------------------------------------------------
+// FeedbackFruits peer evaluation (fbf.rs) — fbf_status / fbf_reviews /
+// fbf_rate / fbf_comment. FeedbackFruits activities are LTI placements in
+// the Blackboard content tree; fbf.rs owns the launch chain (content_id ->
+// FBF access token + activity id, cached in fbf.json), these handlers own
+// argument resolution and payload assembly. API semantics: FBF_SPEC.md §2-§4.
+// ---------------------------------------------------------------------------
+
+/// LTI tool placement content type — every FeedbackFruits activity (and every
+/// other LTI tool) surfaces as one of these in the content tree.
+const BLTI_LINK_HANDLER: &str = "resource/x-bb-blti-link";
+
+/// Find the FBF task a tool operates on by title substring. "Give ratings"
+/// (rubric ratings) and "Overall comments" (written reviews) share the kind
+/// `user-review-tasks`, so the title is the only discriminator.
+fn fbf_find_task<'a>(tasks: &'a [FbfTask], needle: &str) -> Result<&'a FbfTask, String> {
+    let n = needle.to_lowercase();
+    let hits: Vec<&FbfTask> = tasks
+        .iter()
+        .filter(|t| {
+            t.title
+                .as_deref()
+                .map(|s| s.to_lowercase().contains(&n))
+                .unwrap_or(false)
+        })
+        .collect();
+    match hits.len() {
+        0 => {
+            let names: Vec<String> = tasks
+                .iter()
+                .map(|t| t.title.clone().unwrap_or_else(|| t.kind.clone()))
+                .collect();
+            Err(format!(
+                "no FeedbackFruits task titled like {needle:?}; this activity has: {}",
+                names.join("; ")
+            ))
+        }
+        1 => Ok(hits[0]),
+        _ => Err(format!(
+            "multiple tasks match {needle:?}: {}",
+            hits.iter()
+                .map(|t| t.title.clone().unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+    }
+}
+
+/// Resolve a case-insensitive substring against candidate labels. Exactly one
+/// hit wins; zero or many return an error listing the candidates so the
+/// agent can retry with a longer substring instead of guessing.
+fn fbf_resolve_unique(what: &str, needle: &str, labels: &[String]) -> Result<usize, String> {
+    let n = needle.to_lowercase();
+    let hits: Vec<usize> = labels
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.to_lowercase().contains(&n))
+        .map(|(i, _)| i)
+        .collect();
+    match hits.len() {
+        0 => Err(format!(
+            "no {what} matches {needle:?}. Available: {}",
+            labels.join("; ")
+        )),
+        1 => Ok(hits[0]),
+        _ => Err(format!(
+            "{what} {needle:?} is ambiguous — matches: {}. Use a longer substring.",
+            hits.iter()
+                .map(|&i| labels[i].as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+    }
+}
+
+/// My allocations on a task with counterpart names resolved. A failed name
+/// lookup must not hide the allocation — the raw user id is a usable label
+/// and every write path only needs the allocation id.
+async fn fbf_given_with_names(
+    session: &FbfSession,
+    task: &FbfTask,
+) -> Result<Vec<(String, String, String)>, String> {
+    let allocations = session.allocations_given(&task.id).await?;
+    let mut out = Vec::with_capacity(allocations.len());
+    for (alloc_id, ratee) in allocations {
+        let name = session.user_name(&ratee).await.unwrap_or_else(|_| ratee.clone());
+        out.push((alloc_id, ratee, name));
+    }
+    Ok(out)
+}
+
+/// Rating rows for a set of allocations. Given direction: `user_id` is the
+/// ratee; received direction: the giver — the tuple shape is identical, so
+/// one builder serves both. Criteria are fetched per allocation (they are
+/// allocation-scoped in the API); option objects are fetched once per
+/// distinct id because the same rubric repeats for every teammate.
+/// `include_unrated` emits a null-option row per unrated criterion (given
+/// direction uses this to show what is still owed).
+async fn fbf_rating_rows(
+    session: &FbfSession,
+    allocations: Vec<(String, String)>,
+    include_unrated: bool,
+) -> Result<(Vec<Value>, usize), String> {
+    if allocations.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let fetched: Vec<(String, Vec<FbfCriterion>, Vec<FbfRating>)> =
+        bounded_map(allocations, fanout_limit(), |(alloc_id, user_id)| async move {
+            let name = session
+                .user_name(&user_id)
+                .await
+                .unwrap_or_else(|_| user_id.clone());
+            let criteria = session.criteria(&alloc_id).await?;
+            let ratings = session.ratings(&alloc_id).await?;
+            Ok::<_, String>((name, criteria, ratings))
+        })
+        .await
+        .into_iter()
+        .collect::<Result<_, String>>()?;
+
+    // Distinct option ids across every criteria set plus every rated option,
+    // each fetched exactly once.
+    let mut option_ids: Vec<String> = Vec::new();
+    for (_, criteria, ratings) in &fetched {
+        for c in criteria {
+            for oid in &c.option_ids {
+                if !option_ids.contains(oid) {
+                    option_ids.push(oid.clone());
+                }
+            }
+        }
+        for r in ratings {
+            if !option_ids.contains(&r.option_id) {
+                option_ids.push(r.option_id.clone());
+            }
+        }
+    }
+    let options: HashMap<String, FbfOption> = bounded_map(option_ids, fanout_limit(), |oid| {
+        async move {
+            let o = session.option(&oid).await?;
+            Ok::<_, String>((oid, o))
+        }
+    })
+    .await
+    .into_iter()
+    .collect::<Result<HashMap<_, _>, String>>()?;
+
+    let mut rows: Vec<Value> = Vec::new();
+    let mut unrated = 0usize;
+    for (name, criteria, ratings) in fetched {
+        for c in &criteria {
+            let existing = ratings.iter().find(|r| r.criterion_id == c.id);
+            let (option, weight) = match existing {
+                Some(r) => match options.get(&r.option_id) {
+                    // An unknown option id still reports the id itself, never
+                    // a silently wrong title.
+                    Some(o) => (Value::String(o.title.clone()), Value::from(o.weight)),
+                    None => (Value::String(r.option_id.clone()), Value::Null),
+                },
+                None => {
+                    if include_unrated {
+                        unrated += 1;
+                        (Value::Null, Value::Null)
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            rows.push(json!({
+                "teammate": name,
+                "criterion": c.title,
+                "option": option,
+                "weight": weight,
+            }));
+        }
+    }
+    Ok((rows, unrated))
+}
+
+/// Written reviews received on the "Overall comments" task (empty until the
+/// teacher publishes, same as received ratings).
+async fn fbf_received_comments(session: &FbfSession, task: Option<&FbfTask>) -> Result<Vec<Value>, String> {
+    let Some(task) = task else {
+        return Ok(Vec::new());
+    };
+    let allocations = session.allocations_received(&task.id).await?;
+    let fetched: Vec<(String, Vec<FbfReview>)> =
+        bounded_map(allocations, fanout_limit(), |(alloc_id, giver)| async move {
+            let name = session
+                .user_name(&giver)
+                .await
+                .unwrap_or_else(|_| giver.clone());
+            let reviews = session.reviews(&alloc_id).await?;
+            Ok::<_, String>((name, reviews))
+        })
+        .await
+        .into_iter()
+        .collect::<Result<_, String>>()?;
+    let mut rows: Vec<Value> = Vec::new();
+    for (name, reviews) in fetched {
+        for rev in reviews {
+            if rev.body.trim().is_empty() {
+                continue;
+            }
+            rows.push(json!({ "teammate": name, "comment": rev.body }));
+        }
+    }
+    Ok(rows)
+}
+
+/// `ntulearn_fbf_status` — FeedbackFruits peer-evaluation status: per-task
+/// deadlines, my progress and done state, activity-level completion, and
+/// whether grades have been released. With content_id omitted, every LTI
+/// link in the course content tree is probed; non-FeedbackFruits tools are
+/// skipped, not errors.
+async fn h_fbf_status(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").map(|s| s.to_string());
+    if let Some(cid) = &content_id {
+        validate_bb_id(cid, "content_id")?;
+    }
+    let _fmt = response_format(args)?;
+
+    let candidates: Vec<(String, String)> = match &content_id {
+        Some(cid) => vec![(cid.clone(), String::new())],
+        None => {
+            // Discovery: the full content walk (same primitive as
+            // get_content_tree) filtered to LTI placements — the only items
+            // a FeedbackFruits launch could succeed on.
+            let nodes = walk_content(&state.client, &course_id, MAX_DEPTH).await;
+            nodes
+                .iter()
+                .filter(|n| handler_id(&n.item) == BLTI_LINK_HANDLER)
+                .filter_map(|n| {
+                    n.item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| (id.to_string(), item_title(&n.item)))
+                })
+                .collect()
+        }
+    };
+
+    let mut activities: Vec<Value> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    for (cid, title) in &candidates {
+        // Launches run sequentially on purpose: each writes the shared
+        // fbf.json session cache and the LTI chain rides the same NTULearn
+        // cookie — concurrent chains would race on both.
+        match crate::fbf::FbfSession::launch(state, &course_id, cid).await {
+            Ok(session) => match fbf_activity_report(&session, cid).await {
+                Ok(report) => activities.push(report),
+                Err(e) => {
+                    if content_id.is_some() {
+                        // An explicit content_id the caller asked for must
+                        // fail loudly rather than vanish into "skipped".
+                        return Err(format!(
+                            "content_id {cid} opened as FeedbackFruits but its activity could not be read: {e}"
+                        ));
+                    }
+                    skipped.push(json!({"contentId": cid, "title": title, "reason": e}));
+                }
+            },
+            Err(e) => {
+                if content_id.is_some() {
+                    return Err(format!(
+                        "content_id {cid} is not a FeedbackFruits activity (launch failed): {e}"
+                    ));
+                }
+                skipped.push(json!({"contentId": cid, "title": title, "reason": e}));
+            }
+        }
+    }
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    if let Some(cid) = &content_id {
+        payload.insert("contentId".to_string(), Value::String(cid.clone()));
+    }
+    if candidates.is_empty() {
+        // A course with no LTI placements is a valid (boring) answer.
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "no LTI tool links (resource/x-bb-blti-link) found in this course's content tree — there is no FeedbackFruits activity to report"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("activities".to_string(), Value::Array(activities));
+    payload.insert("skippedLinks".to_string(), Value::Array(skipped));
+    Ok(Value::Object(payload))
+}
+
+/// One activity rendered for fbf_status: per-task deadline / progress / done,
+/// activity-level completion (the same number the FBF UI shows, from the
+/// activity's own progress object) and the grades release state.
+async fn fbf_activity_report(session: &FbfSession, content_id: &str) -> Result<Value, String> {
+    let activity_id = session.activity_id().to_string();
+    let activity = session.activity(&activity_id).await?;
+    let tasks = session.tasks(&activity_id).await?;
+
+    // Task progress lookups run together; a task without a progress
+    // relationship (e.g. instructions) reports null, not a fabricated 0.
+    let task_rows = bounded_map(tasks, fanout_limit(), |t| {
+        async move {
+            let progress = match &t.progress_id {
+                Some(pid) => session.progress(pid).await.ok(),
+                None => None,
+            };
+            json!({
+                "title": t.title.clone().unwrap_or_else(|| t.kind.clone()),
+                "type": t.kind,
+                "deadline": t.deadline,
+                "progress": progress,
+                "done": progress.map(|p| p >= 100),
+            })
+        }
+    })
+    .await;
+
+    let completion = match &activity.progress_id {
+        Some(pid) => session.progress(pid).await.ok(),
+        None => None,
+    };
+    // grades-published-at stays null until the teacher releases results; a
+    // failed release-state read must not sink the whole report.
+    let release = session.release_state(&activity_id).await.unwrap_or_else(|_| json!({}));
+
+    Ok(json!({
+        "contentId": content_id,
+        "activityId": activity.id,
+        "title": activity.title,
+        "completion": completion,
+        "gradesPublishedAt": release.get("gradesPublishedAt").cloned().unwrap_or(Value::Null),
+        "tasks": task_rows,
+    }))
+}
+
+/// `ntulearn_fbf_reviews` — rubric ratings on one FBF activity.
+/// direction='given': what I rated each teammate, one row per criterion
+/// (unrated criteria show a null option). direction='received': what
+/// teammates rated me — empty until the teacher publishes, which is
+/// reported explicitly, never as an error (FBF answers data: [] until then).
+async fn h_fbf_reviews(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let direction = str_arg(args, "direction").unwrap_or("given").to_lowercase();
+    if direction != "given" && direction != "received" {
+        return Err("direction must be 'given' or 'received'".to_string());
+    }
+    let _fmt = response_format(args)?;
+
+    let session = crate::fbf::FbfSession::launch(state, &course_id, &content_id).await?;
+    let activity_id = session.activity_id().to_string();
+    let activity = session.activity(&activity_id).await?;
+    let tasks = session.tasks(&activity_id).await?;
+    let ratings_task = fbf_find_task(&tasks, "rating")?;
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    payload.insert("contentId".to_string(), Value::String(content_id));
+    payload.insert("activityId".to_string(), Value::String(activity_id.clone()));
+    payload.insert("activityTitle".to_string(), Value::String(activity.title));
+    payload.insert("direction".to_string(), Value::String(direction.clone()));
+
+    if direction == "given" {
+        let allocations = session.allocations_given(&ratings_task.id).await?;
+        let teammates = allocations.len();
+        let (rows, unrated) = fbf_rating_rows(&session, allocations, true).await?;
+        payload.insert("teammates".to_string(), Value::from(teammates as u64));
+        payload.insert("unrated".to_string(), Value::from(unrated as u64));
+        payload.insert("reviews".to_string(), Value::Array(rows));
+        return Ok(Value::Object(payload));
+    }
+
+    // direction == "received". Ratings-published-at / grades-published-at
+    // stay null until the teacher releases; until then FBF returns no data
+    // and the honest report is "not yet released", not an error.
+    let release = session.release_state(&activity_id).await?;
+    let any_published = ["ratingsPublishedAt", "reviewsPublishedAt", "gradesPublishedAt"]
+        .iter()
+        .any(|k| release.get(k).is_some_and(|v| !v.is_null()));
+    let received_allocations = session.allocations_received(&ratings_task.id).await?;
+    let (rows, _) = fbf_rating_rows(&session, received_allocations, false).await?;
+
+    // Written reviews received live on the "Overall comments" task's own
+    // allocations; its absence just means this activity collects none.
+    let comments_task = tasks
+        .iter()
+        .find(|t| {
+            t.title
+                .as_deref()
+                .map(|s| s.to_lowercase().contains("overall comment"))
+                .unwrap_or(false)
+        });
+    let comments = fbf_received_comments(&session, comments_task).await?;
+
+    let released = any_published || !rows.is_empty() || !comments.is_empty();
+    payload.insert("releaseState".to_string(), release);
+    payload.insert("released".to_string(), Value::Bool(released));
+    if !released {
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "reviews from teammates are not yet released — FeedbackFruits returns no data until the teacher publishes ratings/grades (ratingsPublishedAt / gradesPublishedAt are still null)"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("reviews".to_string(), Value::Array(rows));
+    payload.insert("comments".to_string(), Value::Array(comments));
+    Ok(Value::Object(payload))
+}
+
+/// `ntulearn_fbf_rate` — upsert ONE rubric rating for ONE teammate.
+/// teammate/criterion/option resolve case-insensitively by substring
+/// (option also accepts its exact weight number); dry_run=true (default)
+/// resolves everything and shows the request without sending it.
+async fn h_fbf_rate(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let teammate = str_arg(args, "teammate").unwrap_or("").trim().to_string();
+    let criterion = str_arg(args, "criterion").unwrap_or("").trim().to_string();
+    // The schema declares a string, but an agent may send the weight as a
+    // JSON number; accept both (same convention as parse_page_range).
+    let option_arg = match args.get("option") {
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+    .trim()
+    .to_string();
+    if teammate.is_empty() {
+        return Err("teammate must be a non-empty substring of a teammate name".to_string());
+    }
+    if criterion.is_empty() {
+        return Err("criterion must be a non-empty substring of a criterion title".to_string());
+    }
+    if option_arg.is_empty() {
+        return Err("option must be a non-empty option title substring or the exact weight number".to_string());
+    }
+    let dry_run = bool_arg(args, "dry_run", true);
+    let _fmt = response_format(args)?;
+
+    let session = crate::fbf::FbfSession::launch(state, &course_id, &content_id).await?;
+    let activity_id = session.activity_id().to_string();
+    let activity = session.activity(&activity_id).await?;
+    let tasks = session.tasks(&activity_id).await?;
+    let task = fbf_find_task(&tasks, "rating")?;
+
+    let allocations = fbf_given_with_names(&session, task).await?;
+    let names: Vec<String> = allocations.iter().map(|(_, _, n)| n.clone()).collect();
+    let idx = fbf_resolve_unique("teammate", &teammate, &names)?;
+    let (alloc_id, _ratee, ratee_name) = &allocations[idx];
+
+    let criteria = session.criteria(alloc_id).await?;
+    let crit_labels: Vec<String> = criteria.iter().map(|c| c.title.clone()).collect();
+    let crit = &criteria[fbf_resolve_unique("criterion", &criterion, &crit_labels)?];
+
+    // Option: substring on titles, or the exact weight number (matched by
+    // value, so rubrics with other scales than 0-4 still resolve).
+    let weight_filter = option_arg.parse::<i64>().ok();
+    let needle = option_arg.to_lowercase();
+    let sess = &session;
+    let options = bounded_map(crit.option_ids.clone(), fanout_limit(), |oid| async move {
+        sess.option(&oid).await
+    })
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>, String>>()?;
+    let mut hits: Vec<&FbfOption> = Vec::new();
+    for o in &options {
+        let by_title = o.title.to_lowercase().contains(&needle);
+        let by_weight = weight_filter.map(|w| o.weight == w).unwrap_or(false);
+        if by_title || by_weight {
+            hits.push(o);
+        }
+    }
+    let opt = match hits.len() {
+        0 => {
+            let labels: Vec<String> = options
+                .iter()
+                .map(|o| format!("{} (weight {})", o.title, o.weight))
+                .collect();
+            return Err(format!(
+                "no option matches {option_arg:?} on criterion {:?}. Available: {}",
+                crit.title,
+                labels.join("; ")
+            ));
+        }
+        1 => hits[0],
+        _ => {
+            let labels: Vec<String> = hits
+                .iter()
+                .map(|o| format!("{} (weight {})", o.title, o.weight))
+                .collect();
+            return Err(format!(
+                "option {option_arg:?} is ambiguous — matches: {}. Use the exact title or the weight number.",
+                labels.join("; ")
+            ));
+        }
+    };
+
+    // before → after: the existing rating for this (teammate, criterion)
+    // pair, so the agent sees what it is about to change.
+    let existing = session
+        .ratings(alloc_id)
+        .await?
+        .into_iter()
+        .find(|r| r.criterion_id == crit.id);
+    let before = match &existing {
+        Some(r) => match options.iter().find(|o| o.id == r.option_id) {
+            Some(o) => json!({"option": o.title, "weight": o.weight}),
+            None => json!({"option": r.option_id, "weight": null}),
+        },
+        None => Value::Null,
+    };
+
+    let result = session
+        .upsert_rating(alloc_id, &crit.id, &opt.id, &activity_id, dry_run)
+        .await?;
+
+    Ok(json!({
+        "courseId": course_id,
+        "contentId": content_id,
+        "activityId": activity_id,
+        "activityTitle": activity.title,
+        "teammate": ratee_name,
+        "criterion": crit.title,
+        "before": before,
+        "after": {"option": opt.title, "weight": opt.weight},
+        "dryRun": dry_run,
+        "result": result,
+    }))
+}
+
+/// `ntulearn_fbf_comment` — upsert the written "Overall comments" review for
+/// ONE teammate. dry_run=true (default) resolves the teammate/task and shows
+/// the text without sending it.
+async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let teammate = str_arg(args, "teammate").unwrap_or("").trim().to_string();
+    let text = str_arg(args, "text").unwrap_or("").trim().to_string();
+    if teammate.is_empty() {
+        return Err("teammate must be a non-empty substring of a teammate name".to_string());
+    }
+    if text.is_empty() {
+        return Err("text must be a non-empty review".to_string());
+    }
+    let dry_run = bool_arg(args, "dry_run", true);
+    let _fmt = response_format(args)?;
+
+    let session = crate::fbf::FbfSession::launch(state, &course_id, &content_id).await?;
+    let activity_id = session.activity_id().to_string();
+    let activity = session.activity(&activity_id).await?;
+    let tasks = session.tasks(&activity_id).await?;
+    let task = fbf_find_task(&tasks, "overall comment")?;
+
+    let allocations = fbf_given_with_names(&session, task).await?;
+    let names: Vec<String> = allocations.iter().map(|(_, _, n)| n.clone()).collect();
+    let idx = fbf_resolve_unique("teammate", &teammate, &names)?;
+    let (alloc_id, _ratee, ratee_name) = &allocations[idx];
+
+    // The existing written review (upsert replaces it); shown so the agent
+    // sees what it is about to overwrite.
+    let before = session
+        .reviews(alloc_id)
+        .await?
+        .into_iter()
+        .map(|r| r.body)
+        .find(|b| !b.trim().is_empty())
+        .unwrap_or_default();
+
+    let result = session.upsert_review(alloc_id, &activity_id, &text, dry_run).await?;
+
+    Ok(json!({
+        "courseId": course_id,
+        "contentId": content_id,
+        "activityId": activity_id,
+        "activityTitle": activity.title,
+        "teammate": ratee_name,
+        "task": task.title.clone().unwrap_or_else(|| "Overall comments".to_string()),
+        "before": if before.is_empty() { Value::Null } else { Value::String(before) },
+        "after": text,
+        "dryRun": dry_run,
+        "result": result,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // render_for_tool — mirror of Python common.emit: markdown text (when
 // requested) followed by the pretty-JSON payload, or just the payload.
 // ---------------------------------------------------------------------------
@@ -3783,6 +4386,10 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
             "export_calendar_ics" => render::md_export_calendar(payload),
             "export_gradebook_csv" => render::md_export_gradebook(payload),
             "summarize_course" => render::md_summarize_course(payload),
+            "fbf_status" => render::md_fbf_status(payload),
+            "fbf_reviews" => render::md_fbf_reviews(payload),
+            "fbf_rate" => render::md_fbf_rate(payload),
+            "fbf_comment" => render::md_fbf_comment(payload),
             _ => String::new(),
         }
     } else {

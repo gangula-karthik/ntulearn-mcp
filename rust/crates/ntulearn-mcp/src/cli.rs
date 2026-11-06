@@ -1,9 +1,9 @@
 //! Agent-first CLI surface for ntulearn-mcp.
 //!
 //! Motivation (measured, see `selfbench`): MCP hosts inject **every** tool
-//! schema into the model's context on **every** turn. With 21 tools that is
-//! tens of thousands of tokens before the agent does any work. A CLI pays
-//! zero standing cost: the agent reads `ntulearn-mcp help` (~600 tokens) only
+//! schema into the model's context on **every** turn. With 26 tools that is
+//! thousands of tokens before the agent does any work. A CLI pays
+//! zero standing cost: the agent reads `ntulearn-mcp help` (~700 tokens) only
 //! when it needs it and runs commands directly.
 //!
 //! Design rules (token-efficiency first):
@@ -315,6 +315,58 @@ pub const COMMANDS: &[CmdSpec] = &[
         alias: "grades-csv",
         summary: "export gradebook to .csv",
         args: &[a("course_ids", "scope to course ids")],
+        list_key: "",
+        cols: &[],
+    },
+    CmdSpec {
+        short: "fbf_status",
+        alias: "fbf",
+        summary: "FeedbackFruits peer-evaluation status (tasks, deadlines, progress)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", false, "fbf content item id (omit = auto-discover)"),
+        ],
+        list_key: "activities",
+        cols: &["contentId", "title", "completion", "gradesPublishedAt"],
+    },
+    CmdSpec {
+        short: "fbf_reviews",
+        alias: "fbf-reviews",
+        summary: "peer-evaluation reviews given/received",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "fbf content item id"),
+            e("direction", &["given", "received"], "given = you rated teammates; received = ratings for you"),
+        ],
+        list_key: "reviews",
+        cols: &["teammate", "criterion", "option", "weight"],
+    },
+    CmdSpec {
+        short: "fbf_rate",
+        alias: "fbf-rate",
+        summary: "set one rubric rating for a teammate (dry-run by default)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "fbf content item id"),
+            s("teammate", true, "substring of teammate name"),
+            s("criterion", true, "substring of criterion title"),
+            s("option", true, "option title substring or weight number"),
+            b("dry_run", "resolve + show only (default true)"),
+        ],
+        list_key: "",
+        cols: &[],
+    },
+    CmdSpec {
+        short: "fbf_comment",
+        alias: "fbf-comment",
+        summary: "write the 'Overall comments' review for a teammate",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "fbf content item id"),
+            s("teammate", true, "substring of teammate name"),
+            s("text", true, "review text"),
+            b("dry_run", "resolve + show only (default true)"),
+        ],
         list_key: "",
         cols: &[],
     },

@@ -11,7 +11,7 @@ on disk.
 
 The shipped server is a **single small Rust binary** with a built-in minimal MCP stdio
 implementation (no heavyweight framework — see [the dependency diet](#a-single-small-binary)),
-22 tools, 2 prompt templates, and a course-resource URI. No Python, no pip, no virtualenv.
+26 tools, 2 prompt templates, and a course-resource URI. No Python, no pip, no virtualenv.
 
 **Website:** <https://ntulearn.krtk.app>
 
@@ -53,8 +53,8 @@ That's it. The same binary serves MCP with no arguments and acts as a CLI with a
 
 ## Why the CLI: about 64x fewer tokens
 
-MCP hosts inject every tool's JSON schema into context **every turn** — about 6.6k tokens for this
-server's 21 tools. The same binary doubles as a plain CLI, whose terse tabular output an agent reads
+MCP hosts inject every tool's JSON schema into context **every turn** — about 8.8k tokens for this
+server's 26 tools. The same binary doubles as a plain CLI, whose terse tabular output an agent reads
 in a few hundred tokens:
 
 ```bash
@@ -85,7 +85,7 @@ completes in ~0.10 s. Content trees walk one level per wave: a 403-node tree (13
 | 4 commands concurrently (`multi`) | 225ms sequential | 60ms (singleflight-deduped) | **3.8x** |
 
 The CLI shares the same handlers, cache, and cookie lifecycle as the MCP server. Point your agent at
-the binary and have it run `ntulearn-mcp help` (≈590 tokens, once) instead of registering 21 tools.
+the binary and have it run `ntulearn-mcp help` (≈740 tokens, once) instead of registering 26 tools.
 
 ---
 
@@ -159,7 +159,7 @@ Every MCP tool accepts `response_format: "json"` or `"markdown"` too — and as 
 
 ## Tools
 
-21 tools, most doing cross-course aggregation by default — you rarely pass course IDs by hand.
+26 tools, most doing cross-course aggregation by default — you rarely pass course IDs by hand.
 
 | Tool | What it does |
 |---|---|
@@ -184,9 +184,28 @@ Every MCP tool accepts `response_format: "json"` or `"markdown"` too — and as 
 | `ntulearn_export_calendar_ics` | Export calendar items as an iCalendar `.ics` string. |
 | `ntulearn_export_gradebook_csv` | Export your gradebook as a CSV string. |
 | `ntulearn_summarize_course` | Briefing for one course: instructors, upcoming, announcements, grades, top folders. |
+| `ntulearn_fbf_status` | FeedbackFruits peer-evaluation status: deadlines, your progress, grade release. Omit `content_id` to auto-discover. |
+| `ntulearn_fbf_reviews` | Read your peer-evaluation reviews. `direction='given'` (you rated teammates) or `'received'` (empty until released). |
+| `ntulearn_fbf_rate` | Set one rubric rating for one teammate (upsert, dry-run by default). |
+| `ntulearn_fbf_comment` | Write the 'Overall comments' review for one teammate (upsert, dry-run by default). |
 
 Read-only tools default to `response_format='toon'` (token-optimized); pass `'json'` for structured
 data or `'markdown'` for a readable summary.
+### FeedbackFruits peer evaluations (LTI tools)
+
+Peer evaluations hosted on FeedbackFruits (and other `resource/x-bb-blti-link` LTI items)
+are invisible to the Blackboard gradebook until grades are released — the gradebook showed
+`attempts: []` for an evaluation the tool itself reported as Completed. These tools launch
+the LTI 1.3 chain with your existing session and talk to the FeedbackFruits JSON:API
+directly, so status, your submitted ratings, and (after release) received ratings are all
+readable without a browser.
+
+The FBF session token is cached next to the NTULearn cookie and re-launched automatically
+when it expires. Received ratings stay hidden until the instructor publishes them
+(`grades-published-at`); the tools report `not yet released` rather than an error.
+Write tools (`fbf_rate`, `fbf_comment`) default to `dry_run=true` — pass `dry_run=false`
+to actually submit.
+
 List-returning tools accept `limit`/`offset`. A resource URI,
 `ntulearn://courses/{course_id}`, returns a JSON course briefing, and two prompts
 (`ntulearn-weekly-brief`, `ntulearn-assignment-triage`) chain the tools for you.

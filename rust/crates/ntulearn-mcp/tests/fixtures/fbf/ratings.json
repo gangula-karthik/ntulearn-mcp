@@ -1,0 +1,248 @@
+{
+ "data": [
+  {
+   "id": "6d206de6-e457-46ca-816d-5efce5bac75f",
+   "type": "ratings",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:34.133Z",
+    "updated-at": "2026-11-06T13:49:34.133Z",
+    "views-count": 0,
+    "user-role": "peer",
+    "viewed": false,
+    "pseudonym-seed": "c5b735de-7494-4347-8b16-4c68d4c30c7c"
+   },
+   "relationships": {
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "parent": {
+     "data": {
+      "id": "01b7f224-af0f-463b-9b28-63e721e7f37d",
+      "type": "activities"
+     }
+    },
+    "criterion": {
+     "data": {
+      "id": "8d115789-ec88-4a47-b538-5a723b3bfe44",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "criterion-set-folder": {
+     "data": {
+      "id": "bdbe9130-2b68-4545-b3f6-584894bc9795",
+      "type": "assignments/criterion-set-folder"
+     }
+    },
+    "allocation": {
+     "data": {
+      "id": "c5b735de-7494-4347-8b16-4c68d4c30c7c",
+      "type": "assignments/allocation"
+     }
+    },
+    "option": {
+     "data": {
+      "id": "dab1e81a-63d3-400e-a2da-6fdab14836e5",
+      "type": "assignments/criterion-option"
+     }
+    },
+    "views": {
+     "links": {
+      "related": "/v1/ratings/6d206de6-e457-46ca-816d-5efce5bac75f/views"
+     }
+    }
+   }
+  },
+  {
+   "id": "ea6013d3-6a63-4192-8078-45f986b1489a",
+   "type": "ratings",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:36.220Z",
+    "updated-at": "2026-11-06T13:49:36.220Z",
+    "views-count": 0,
+    "user-role": "peer",
+    "viewed": false,
+    "pseudonym-seed": "c5b735de-7494-4347-8b16-4c68d4c30c7c"
+   },
+   "relationships": {
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "parent": {
+     "data": {
+      "id": "01b7f224-af0f-463b-9b28-63e721e7f37d",
+      "type": "activities"
+     }
+    },
+    "criterion": {
+     "data": {
+      "id": "bea02a1c-772a-464f-ac2c-aa742a0110db",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "criterion-set-folder": {
+     "data": {
+      "id": "bdbe9130-2b68-4545-b3f6-584894bc9795",
+      "type": "assignments/criterion-set-folder"
+     }
+    },
+    "allocation": {
+     "data": {
+      "id": "c5b735de-7494-4347-8b16-4c68d4c30c7c",
+      "type": "assignments/allocation"
+     }
+    },
+    "option": {
+     "data": {
+      "id": "7cd33450-4513-48fb-9da0-5373e6ca5621",
+      "type": "assignments/criterion-option"
+     }
+    },
+    "views": {
+     "links": {
+      "related": "/v1/ratings/ea6013d3-6a63-4192-8078-45f986b1489a/views"
+     }
+    }
+   }
+  },
+  {
+   "id": "7cb39192-fbc9-4c13-8df1-6ec8a8569c69",
+   "type": "ratings",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:32.191Z",
+    "updated-at": "2026-11-06T13:49:32.191Z",
+    "views-count": 0,
+    "user-role": "peer",
+    "viewed": false,
+    "pseudonym-seed": "c5b735de-7494-4347-8b16-4c68d4c30c7c"
+   },
+   "relationships": {
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "parent": {
+     "data": {
+      "id": "01b7f224-af0f-463b-9b28-63e721e7f37d",
+      "type": "activities"
+     }
+    },
+    "criterion": {
+     "data": {
+      "id": "c97e5568-0de1-420b-bf9e-d21b6488d8fa",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "criterion-set-folder": {
+     "data": {
+      "id": "bdbe9130-2b68-4545-b3f6-584894bc9795",
+      "type": "assignments/criterion-set-folder"
+     }
+    },
+    "allocation": {
+     "data": {
+      "id": "c5b735de-7494-4347-8b16-4c68d4c30c7c",
+      "type": "assignments/allocation"
+     }
+    },
+    "option": {
+     "data": {
+      "id": "3d17d98d-6bfe-4e1e-a345-fc1b1caa31a7",
+      "type": "assignments/criterion-option"
+     }
+    },
+    "views": {
+     "links": {
+      "related": "/v1/ratings/7cb39192-fbc9-4c13-8df1-6ec8a8569c69/views"
+     }
+    }
+   }
+  },
+  {
+   "id": "879b9386-2d1b-4089-87f1-6f6527660eaf",
+   "type": "ratings",
+   "attributes": {
+    "created-at": "2026-11-06T13:49:30.097Z",
+    "updated-at": "2026-11-06T13:49:30.097Z",
+    "views-count": 0,
+    "user-role": "peer",
+    "viewed": false,
+    "pseudonym-seed": "c5b735de-7494-4347-8b16-4c68d4c30c7c"
+   },
+   "relationships": {
+    "user": {
+     "data": {
+      "id": "a4fa313b-b6b6-476f-a496-8ed98934ae92",
+      "type": "users"
+     }
+    },
+    "course": {
+     "data": {
+      "id": "fee00823-f520-45e7-8b9a-381086efc6bb",
+      "type": "lti/course"
+     }
+    },
+    "parent": {
+     "data": {
+      "id": "01b7f224-af0f-463b-9b28-63e721e7f37d",
+      "type": "activities"
+     }
+    },
+    "criterion": {
+     "data": {
+      "id": "e1afa0fb-b486-429d-b2ed-2a5581a84301",
+      "type": "assignments/rubric-criterion"
+     }
+    },
+    "criterion-set-folder": {
+     "data": {
+      "id": "bdbe9130-2b68-4545-b3f6-584894bc9795",
+      "type": "assignments/criterion-set-folder"
+     }
+    },
+    "allocation": {
+     "data": {
+      "id": "c5b735de-7494-4347-8b16-4c68d4c30c7c",
+      "type": "assignments/allocation"
+     }
+    },
+    "option": {
+     "data": {
+      "id": "a8e3503e-5be3-4c04-9a80-149715886704",
+      "type": "assignments/criterion-option"
+     }
+    },
+    "views": {
+     "links": {
+      "related": "/v1/ratings/879b9386-2d1b-4089-87f1-6f6527660eaf/views"
+     }
+    }
+   }
+  }
+ ]
+}

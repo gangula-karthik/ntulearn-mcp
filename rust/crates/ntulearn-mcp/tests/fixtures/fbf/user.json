@@ -1,0 +1,23 @@
+{
+ "data": {
+  "id": "112f2114-677c-4950-bde9-6dc8d136b5ff",
+  "type": "users",
+  "attributes": {
+   "created-at": "2026-09-24T09:47:36.268Z",
+   "name": "LKCMedicine WONG YUET LENG, CHERYL",
+   "preview": null,
+   "bot": false,
+   "turnitin-eula-accepted": null
+  },
+  "relationships": {
+   "media": {
+    "data": null
+   },
+   "emails": {
+    "links": {
+     "related": "/v1/people/112f2114-677c-4950-bde9-6dc8d136b5ff/emails"
+    }
+   }
+  }
+ }
+}
