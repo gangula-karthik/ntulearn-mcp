@@ -107,6 +107,10 @@ pub async fn dispatch_value(state: &AppState, name: &str, args: &Value) -> Resul
         "fbf_reviews" => h_fbf_reviews(state, args).await?,
         "fbf_rate" => h_fbf_rate(state, args).await?,
         "fbf_comment" => h_fbf_comment(state, args).await?,
+        "pcv_status" => h_pcv_status(state, args).await?,
+        "pcv_evals" => h_pcv_evals(state, args).await?,
+        "pcv_rate" => h_pcv_rate(state, args).await?,
+        "pcv_comment" => h_pcv_comment(state, args).await?,
         other => {
             return Err(format!("unknown tool: ntulearn_{other}"));
         }
@@ -4303,6 +4307,629 @@ async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> 
     }))
 }
 
+
+// ---------------------------------------------------------------------------
+// Peerceptiv (PCV) peer evaluation (PCV_SPEC.md §4)
+// ---------------------------------------------------------------------------
+
+/// LTI *placement* content type — Peerceptiv activities surface as
+/// `resource/x-bb-bltiplacement-*` in the content tree (FeedbackFruits uses
+/// `resource/x-bb-blti-link`, so the two filters never collide).
+const PCV_PLACEMENT_PREFIX: &str = "resource/x-bb-bltiplacement";
+
+/// Display label for a Peerceptiv user: `lastName` is the real name,
+/// `firstName` the school prefix ("CCDS", "EEE", ...).
+fn pcv_display_name(first: &str, last: &str) -> String {
+    let last = last.trim();
+    if last.is_empty() {
+        first.trim().to_string()
+    } else {
+        last.to_string()
+    }
+}
+
+/// Group members as (userId, firstName, lastName) tuples.
+fn pcv_group_members(group: &Value) -> Vec<(String, String, String)> {
+    group
+        .get("groupMembers")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|m| {
+                    let u = m.get("user")?;
+                    Some((
+                        gs(u, "userId").unwrap_or("").to_string(),
+                        gs(u, "firstName").unwrap_or("").to_string(),
+                        gs(u, "lastName").unwrap_or("").to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolve a teammate by case-insensitive substring against the group
+/// members' display names. Both name forms are matched (real name in
+/// lastName, "school realname" combined), so "Isabelle" and "MAE" both
+/// work; exactly one hit wins.
+fn pcv_resolve_teammate(
+    members: &[(String, String, String)],
+    my_uid: &str,
+    needle: &str,
+) -> Result<(String, String), String> {
+    let n = needle.to_lowercase();
+    let teammates: Vec<&(String, String, String)> =
+        members.iter().filter(|(uid, _, _)| uid != my_uid).collect();
+    let hits: Vec<&(String, String, String)> = teammates
+        .iter()
+        .copied()
+        .filter(|(_, first, last)| {
+            let last_l = last.to_lowercase();
+            let full_l = format!("{} {}", first, last).to_lowercase();
+            last_l.contains(&n) || full_l.contains(&n)
+        })
+        .collect();
+    let names = |rows: &[&(String, String, String)]| -> Vec<String> {
+        rows.iter()
+            .map(|(_, f, l)| pcv_display_name(f, l))
+            .collect()
+    };
+    match hits.len() {
+        0 => Err(format!(
+            "no teammate matches {:?}. Your group: {}",
+            needle,
+            names(&teammates).join("; ")
+        )),
+        1 => Ok((hits[0].0.clone(), pcv_display_name(&hits[0].1, &hits[0].2))),
+        _ => Err(format!(
+            "teammate {:?} is ambiguous — matches: {}. Use a longer substring.",
+            needle,
+            names(&hits).join("; ")
+        )),
+    }
+}
+
+/// `ntulearn_pcv_status` — Peerceptiv peer-evaluation status: assignment
+/// name, deadlines, evaluation progress, group name and per-teammate
+/// done/not-done. With content_id omitted, every LTI placement in the
+/// course content tree is probed; non-Peerceptiv tools are skipped, not
+/// errors.
+async fn h_pcv_status(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").map(|s| s.to_string());
+    if let Some(cid) = &content_id {
+        validate_bb_id(cid, "content_id")?;
+    }
+    let _fmt = response_format(args)?;
+
+    let candidates: Vec<(String, String)> = match &content_id {
+        Some(cid) => vec![(cid.clone(), String::new())],
+        None => {
+            // Discovery: the full content walk (same primitive as
+            // get_content_tree) filtered to LTI placements — the only items
+            // a Peerceptiv launch could succeed on.
+            let nodes = walk_content(&state.client, &course_id, MAX_DEPTH).await;
+            nodes
+                .iter()
+                .filter(|n| handler_id(&n.item).starts_with(PCV_PLACEMENT_PREFIX))
+                .filter_map(|n| {
+                    n.item
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| (id.to_string(), item_title(&n.item)))
+                })
+                .collect()
+        }
+    };
+
+    let mut activities: Vec<Value> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    for (cid, title) in &candidates {
+        // Launches run sequentially on purpose: each writes the shared
+        // pcv.json session cache and the LTI chain rides the same NTULearn
+        // cookie — concurrent chains would race on both.
+        match crate::pcv::PcvSession::launch(state, &course_id, cid).await {
+            Ok(session) => match pcv_activity_report(&session, cid).await {
+                Ok(report) => activities.push(report),
+                Err(e) => {
+                    if content_id.is_some() {
+                        // An explicit content_id the caller asked for must
+                        // fail loudly rather than vanish into "skipped".
+                        return Err(format!(
+                            "content_id {cid} opened as Peerceptiv but its assignment could not be read: {e}"
+                        ));
+                    }
+                    skipped.push(json!({"contentId": cid, "title": title, "reason": e}));
+                }
+            },
+            Err(e) => {
+                if content_id.is_some() {
+                    return Err(format!(
+                        "content_id {cid} is not a Peerceptiv activity (launch failed): {e}"
+                    ));
+                }
+                skipped.push(json!({"contentId": cid, "title": title, "reason": e}));
+            }
+        }
+    }
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    if let Some(cid) = &content_id {
+        payload.insert("contentId".to_string(), Value::String(cid.clone()));
+    }
+    if candidates.is_empty() {
+        // A course with no LTI placements is a valid (boring) answer.
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "no LTI placements (resource/x-bb-bltiplacement) found in this course's content tree — there is no Peerceptiv activity to report"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("activities".to_string(), Value::Array(activities));
+    payload.insert("skippedLinks".to_string(), Value::Array(skipped));
+    Ok(Value::Object(payload))
+}
+
+/// One activity rendered for pcv_status: assignment name, deadlines, my
+/// evaluation progress, group name and teammates with done/not-done.
+async fn pcv_activity_report(
+    session: &crate::pcv::PcvSession,
+    content_id: &str,
+) -> Result<Value, String> {
+    let aid = session.assignment_id().to_string();
+    let uid = session.user_id().to_string();
+    let assignment = session.assignment(&aid).await?;
+    let progress = session.progress(&aid, &uid).await?;
+
+    // Group members minus self = evaluation targets. The progress object's
+    // own group is authoritative; fall back to the groups listing when it
+    // carries no members.
+    let progress_group = progress.get("group").cloned().unwrap_or(Value::Null);
+    let group = if pcv_group_members(&progress_group).len() > 1 {
+        progress_group
+    } else {
+        session.my_group(&aid, &uid).await.unwrap_or(progress_group)
+    };
+    let members = pcv_group_members(&group);
+
+    // Per-teammate done state. progress.completedEvaluations carries full
+    // eval records when any exist; otherwise fall back to my given evals
+    // (rated on every rubric item == done).
+    let mut done_uids: HashSet<String> = progress
+        .get("completedEvaluations")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|e| {
+                    e.get("peer")
+                        .and_then(|p| gs(p, "userId"))
+                        .map(String::from)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let given = session.evals_given(&aid, &uid).await?;
+    let rubric = session.rubric(&aid, "MEMBER").await.ok();
+    let n_rating_items = rubric.as_ref().map(|r| r.rating_items.len()).unwrap_or(0);
+    if done_uids.is_empty() && !given.is_empty() {
+        for e in &given {
+            let complete = n_rating_items == 0 || e.review_ratings.len() >= n_rating_items;
+            if complete {
+                done_uids.insert(e.peer.user_id.clone());
+            }
+        }
+    }
+
+    let teammates: Vec<Value> = members
+        .iter()
+        .filter(|(muid, _, _)| muid != &uid)
+        .map(|(muid, first, last)| {
+            json!({
+                "userId": muid,
+                "name": pcv_display_name(first, last),
+                "done": done_uids.contains(muid),
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "contentId": content_id,
+        "assignmentId": aid,
+        "pcvCourseId": session.pcv_course_id(),
+        "title": gs(&assignment, "assignmentName").unwrap_or("untitled"),
+        "deadlines": {
+            "peerEvaluationDeadline": assignment.get("peerEvaluationDeadline").cloned().unwrap_or(Value::Null),
+            "effectivePeerEvaluationDeadline": assignment.get("effectivePeerEvaluationDeadline").cloned().unwrap_or(Value::Null),
+            "submissionDeadline": assignment.get("submissionDeadline").cloned().unwrap_or(Value::Null),
+            "reviewDeadline": assignment.get("reviewDeadline").cloned().unwrap_or(Value::Null),
+        },
+        "progress": crate::pcv::progress_summary(&progress),
+        "group": gs(&group, "groupName").unwrap_or(""),
+        "teammates": teammates,
+    }))
+}
+
+/// `ntulearn_pcv_evals` — ratings + comments for one Peerceptiv activity.
+/// direction='given': what I gave each teammate, one row per criterion
+/// (unrated criteria show a null score). direction='received': what
+/// teammates gave me — empty until results are released, which is reported
+/// explicitly, never as an error.
+async fn h_pcv_evals(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let direction = str_arg(args, "direction").unwrap_or("given").to_lowercase();
+    if direction != "given" && direction != "received" {
+        return Err("direction must be 'given' or 'received'".to_string());
+    }
+    let _fmt = response_format(args)?;
+
+    let session = crate::pcv::PcvSession::launch(state, &course_id, &content_id).await?;
+    let aid = session.assignment_id().to_string();
+    let uid = session.user_id().to_string();
+    let assignment = session.assignment(&aid).await?;
+    let rubric = session.rubric(&aid, "MEMBER").await?;
+
+    let evals = if direction == "given" {
+        session.evals_given(&aid, &uid).await?
+    } else {
+        // Pre-release, Peerceptiv gates the received endpoint itself (403
+        // while hideRatingResults & co. are true) — a normal state that is
+        // reported, never an error. A 403 with the flags off is a real
+        // session problem and surfaces normally.
+        let hidden = ["hideRatingResults", "hideCommentResults", "hideGradeResults"]
+            .iter()
+            .any(|k| assignment.get(k).and_then(|v| v.as_bool()) == Some(true));
+        match session.evals_received(&aid, &uid).await {
+            Ok(v) => v,
+            Err(e) if hidden => Vec::new(),
+            Err(e) => return Err(e),
+        }
+    };
+
+    let include_unrated = direction == "given";
+    let mut reviews: Vec<Value> = Vec::new();
+    let mut unrated = 0usize;
+    for e in &evals {
+        let mate = pcv_display_name(&e.peer.first_name, &e.peer.last_name);
+        for item in &rubric.rating_items {
+            let existing = e
+                .review_ratings
+                .iter()
+                .find(|r| r.rating_id == item.rating_id);
+            match existing {
+                Some(r) => {
+                    let level = item
+                        .rating_levels
+                        .iter()
+                        .find(|l| l.score == r.score)
+                        .map(|l| l.level_description.clone())
+                        .unwrap_or_default();
+                    reviews.push(json!({
+                        "teammate": mate,
+                        "criterion": item.name,
+                        "score": r.score,
+                        "level": level,
+                    }));
+                }
+                None => {
+                    if include_unrated {
+                        unrated += 1;
+                        reviews.push(json!({
+                            "teammate": mate,
+                            "criterion": item.name,
+                            "score": Value::Null,
+                            "level": Value::Null,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut comments: Vec<Value> = Vec::new();
+    for e in &evals {
+        let mate = pcv_display_name(&e.peer.first_name, &e.peer.last_name);
+        for c in &e.review_comments {
+            if c.comment.trim().is_empty() {
+                continue;
+            }
+            let prompt = rubric
+                .comment_items
+                .iter()
+                .find(|ci| ci.comment_id == c.comment_id)
+                .map(|ci| ci.comment_name.clone())
+                .unwrap_or_default();
+            comments.push(json!({
+                "teammate": mate,
+                "prompt": prompt,
+                "comment": c.comment,
+            }));
+        }
+    }
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    payload.insert("contentId".to_string(), Value::String(content_id));
+    payload.insert("assignmentId".to_string(), Value::String(aid));
+    payload.insert(
+        "assignmentTitle".to_string(),
+        Value::String(gs(&assignment, "assignmentName").unwrap_or("untitled").to_string()),
+    );
+    payload.insert("direction".to_string(), Value::String(direction.clone()));
+    payload.insert("teammates".to_string(), Value::from(evals.len() as u64));
+    payload.insert("unrated".to_string(), Value::from(unrated as u64));
+    if direction == "received" && reviews.is_empty() && comments.is_empty() {
+        payload.insert("released".to_string(), Value::Bool(false));
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "reviews from teammates are not yet released — Peerceptiv returns no data until results are published"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("reviews".to_string(), Value::Array(reviews));
+    payload.insert("comments".to_string(), Value::Array(comments));
+    Ok(Value::Object(payload))
+}
+
+/// `ntulearn_pcv_rate` — upsert ONE rubric rating for ONE teammate.
+/// teammate/criterion resolve case-insensitively by substring; level is a
+/// level-description substring ("Always") or a plain score 1-10. The peer
+/// evaluation is found-or-created (the create shows in dry-run too).
+/// dry_run=true (default) resolves everything and shows the request
+/// without sending it.
+async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let teammate = str_arg(args, "teammate").unwrap_or("").trim().to_string();
+    let criterion = str_arg(args, "criterion").unwrap_or("").trim().to_string();
+    // The schema declares a string, but an agent may send the score as a
+    // JSON number; accept both (same convention as parse_page_range).
+    let level = match args.get("level") {
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+    .trim()
+    .to_string();
+    if teammate.is_empty() {
+        return Err("teammate must be a non-empty substring of a teammate name".to_string());
+    }
+    if criterion.is_empty() {
+        return Err("criterion must be a non-empty substring of a criterion name".to_string());
+    }
+    if level.is_empty() {
+        return Err(
+            "level must be a level description substring (e.g. 'Always') or a score 1-10"
+                .to_string(),
+        );
+    }
+    let dry_run = bool_arg(args, "dry_run", true);
+    let _fmt = response_format(args)?;
+
+    let session = crate::pcv::PcvSession::launch(state, &course_id, &content_id).await?;
+    let aid = session.assignment_id().to_string();
+    let uid = session.user_id().to_string();
+    let assignment = session.assignment(&aid).await?;
+    let rubric = session.rubric(&aid, "MEMBER").await?;
+
+    // Teammate: my group members minus self.
+    let group = session.my_group(&aid, &uid).await?;
+    let members = pcv_group_members(&group);
+    let (peer_uid, peer_name) = pcv_resolve_teammate(&members, &uid, &teammate)?;
+
+    // Criterion: substring against rubric rating names.
+    let crit_labels: Vec<String> = rubric.rating_items.iter().map(|r| r.name.clone()).collect();
+    let item = &rubric.rating_items[fbf_resolve_unique("criterion", &criterion, &crit_labels)?];
+
+    // Level: a plain 1-10 score or a level-description substring, resolved
+    // against this criterion's own levels.
+    let score = item.resolve_level(&level)?;
+    let level_desc = item
+        .rating_levels
+        .iter()
+        .find(|l| l.score == score)
+        .map(|l| l.level_description.clone())
+        .unwrap_or_default();
+
+    // Find-or-create my eval for this teammate. A dry-run create mints no
+    // real peerEvalId, so the rating itself is previewed rather than
+    // upserted in that case.
+    let given = session.evals_given(&aid, &uid).await?;
+    let existing = given.iter().find(|e| e.peer.user_id == peer_uid);
+    let (eval_id, created, create_result) = match existing {
+        Some(e) => (Some(e.peer_eval_id.clone()), false, Value::Null),
+        None => {
+            let res = session.create_eval(&aid, &peer_uid, dry_run).await?;
+            let id = if dry_run {
+                None
+            } else {
+                res.get("response")
+                    .and_then(|r| r.get("peerEvalId"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            };
+            (id, true, res)
+        }
+    };
+
+    // before → after: the existing score for this (teammate, criterion)
+    // pair, so the agent sees what it is about to change.
+    let before = existing
+        .and_then(|e| {
+            e.review_ratings
+                .iter()
+                .find(|r| r.rating_id == item.rating_id)
+        })
+        .map(|r| {
+            json!({
+                "score": r.score,
+                "level": item
+                    .rating_levels
+                    .iter()
+                    .find(|l| l.score == r.score)
+                    .map(|l| l.level_description.clone())
+                    .unwrap_or_default(),
+            })
+        });
+
+    let upsert = match &eval_id {
+        Some(id) => Some(session.upsert_rating(id, &item.rating_id, score, dry_run).await?),
+        None => None,
+    };
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    payload.insert("contentId".to_string(), Value::String(content_id));
+    payload.insert("assignmentId".to_string(), Value::String(aid));
+    payload.insert(
+        "assignmentTitle".to_string(),
+        Value::String(gs(&assignment, "assignmentName").unwrap_or("untitled").to_string()),
+    );
+    payload.insert("teammate".to_string(), Value::String(peer_name));
+    payload.insert("criterion".to_string(), Value::String(item.name.clone()));
+    payload.insert("before".to_string(), before.unwrap_or(Value::Null));
+    payload.insert(
+        "after".to_string(),
+        json!({"score": score, "level": level_desc}),
+    );
+    payload.insert("createdEval".to_string(), Value::Bool(created));
+    if created && dry_run {
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "no peer evaluation exists for this teammate yet — dry run shows the eval that would be created plus this rating"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("dryRun".to_string(), Value::Bool(dry_run));
+    payload.insert("result".to_string(), upsert.unwrap_or(create_result));
+    Ok(Value::Object(payload))
+}
+
+/// `ntulearn_pcv_comment` — upsert the written comment(s) for ONE teammate.
+/// Writes the first comment prompt, or every prompt when the rubric has
+/// several (mirroring fbf_comment's multi-criterion behavior). Find-or-
+/// create eval, before/after shown. dry_run=true (default) resolves the
+/// teammate and shows the text without sending it.
+async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let teammate = str_arg(args, "teammate").unwrap_or("").trim().to_string();
+    let text = str_arg(args, "text").unwrap_or("").trim().to_string();
+    if teammate.is_empty() {
+        return Err("teammate must be a non-empty substring of a teammate name".to_string());
+    }
+    if text.is_empty() {
+        return Err("text must be a non-empty comment".to_string());
+    }
+    let dry_run = bool_arg(args, "dry_run", true);
+    let _fmt = response_format(args)?;
+
+    let session = crate::pcv::PcvSession::launch(state, &course_id, &content_id).await?;
+    let aid = session.assignment_id().to_string();
+    let uid = session.user_id().to_string();
+    let assignment = session.assignment(&aid).await?;
+    let rubric = session.rubric(&aid, "MEMBER").await?;
+
+    let group = session.my_group(&aid, &uid).await?;
+    let members = pcv_group_members(&group);
+    let (peer_uid, peer_name) = pcv_resolve_teammate(&members, &uid, &teammate)?;
+
+    // Find-or-create my eval for this teammate (same contract as rate).
+    let given = session.evals_given(&aid, &uid).await?;
+    let existing = given.iter().find(|e| e.peer.user_id == peer_uid);
+    let (eval_id, created, create_result) = match existing {
+        Some(e) => (Some(e.peer_eval_id.clone()), false, Value::Null),
+        None => {
+            let res = session.create_eval(&aid, &peer_uid, dry_run).await?;
+            let id = if dry_run {
+                None
+            } else {
+                res.get("response")
+                    .and_then(|r| r.get("peerEvalId"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            };
+            (id, true, res)
+        }
+    };
+
+    let mut comment_rows: Vec<Value> = Vec::new();
+    match &eval_id {
+        Some(id) => {
+            for ci in &rubric.comment_items {
+                let before = existing
+                    .and_then(|e| {
+                        e.review_comments
+                            .iter()
+                            .find(|c| c.comment_id == ci.comment_id)
+                    })
+                    .map(|c| c.comment.clone())
+                    .unwrap_or_default();
+                let result = session
+                    .upsert_comment(id, &ci.comment_id, &text, dry_run)
+                    .await?;
+                comment_rows.push(json!({
+                    "commentId": ci.comment_id,
+                    "prompt": ci.comment_name,
+                    "before": if before.is_empty() { Value::Null } else { Value::String(before) },
+                    "result": result,
+                }));
+            }
+        }
+        None => {
+            // Dry-run create: show what each prompt would receive.
+            for ci in &rubric.comment_items {
+                comment_rows.push(json!({
+                    "commentId": ci.comment_id,
+                    "prompt": ci.comment_name,
+                    "before": Value::Null,
+                }));
+            }
+        }
+    }
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    payload.insert("contentId".to_string(), Value::String(content_id));
+    payload.insert("assignmentId".to_string(), Value::String(aid));
+    payload.insert(
+        "assignmentTitle".to_string(),
+        Value::String(gs(&assignment, "assignmentName").unwrap_or("untitled").to_string()),
+    );
+    payload.insert("teammate".to_string(), Value::String(peer_name));
+    payload.insert("comments".to_string(), Value::Array(comment_rows));
+    payload.insert("after".to_string(), Value::String(text));
+    payload.insert("createdEval".to_string(), Value::Bool(created));
+    if created && dry_run {
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "no peer evaluation exists for this teammate yet — dry run shows the eval that would be created plus this comment"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("dryRun".to_string(), Value::Bool(dry_run));
+    if eval_id.is_none() {
+        payload.insert("result".to_string(), create_result);
+    }
+    Ok(Value::Object(payload))
+}
+
 // ---------------------------------------------------------------------------
 // render_for_tool — mirror of Python common.emit: markdown text (when
 // requested) followed by the pretty-JSON payload, or just the payload.
@@ -4395,6 +5022,10 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
             "fbf_reviews" => render::md_fbf_reviews(payload),
             "fbf_rate" => render::md_fbf_rate(payload),
             "fbf_comment" => render::md_fbf_comment(payload),
+            "pcv_status" => render::md_pcv_status(payload),
+            "pcv_evals" => render::md_pcv_evals(payload),
+            "pcv_rate" => render::md_pcv_rate(payload),
+            "pcv_comment" => render::md_pcv_comment(payload),
             _ => String::new(),
         }
     } else {

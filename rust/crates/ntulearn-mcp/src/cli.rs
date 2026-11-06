@@ -371,6 +371,58 @@ pub const COMMANDS: &[CmdSpec] = &[
         list_key: "",
         cols: &[],
     },
+    CmdSpec {
+        short: "pcv_status",
+        alias: "pcv",
+        summary: "Peerceptiv peer-evaluation status (deadlines, progress, teammates)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", false, "pcv content item id (omit = auto-discover)"),
+        ],
+        list_key: "activities",
+        cols: &["contentId", "title", "group"],
+    },
+    CmdSpec {
+        short: "pcv_evals",
+        alias: "pcv-evals",
+        summary: "Peerceptiv peer-evaluation reviews given/received",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "pcv content item id"),
+            e("direction", &["given", "received"], "given = you rated teammates; received = ratings for you"),
+        ],
+        list_key: "reviews",
+        cols: &["teammate", "criterion", "score", "level"],
+    },
+    CmdSpec {
+        short: "pcv_rate",
+        alias: "pcv-rate",
+        summary: "set one rubric rating for a teammate (dry-run by default)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "pcv content item id"),
+            s("teammate", true, "substring of teammate name"),
+            s("criterion", true, "substring of criterion name"),
+            s("level", true, "level description substring or score 1-10"),
+            b("dry_run", "resolve + show only (default true)"),
+        ],
+        list_key: "",
+        cols: &[],
+    },
+    CmdSpec {
+        short: "pcv_comment",
+        alias: "pcv-comment",
+        summary: "write the comment prompt(s) for a teammate",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "pcv content item id"),
+            s("teammate", true, "substring of teammate name"),
+            s("text", true, "comment text"),
+            b("dry_run", "resolve + show only (default true)"),
+        ],
+        list_key: "",
+        cols: &[],
+    },
 ];
 
 pub fn find_cmd(name: &str) -> Option<&'static CmdSpec> {
