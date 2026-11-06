@@ -365,6 +365,7 @@ pub const COMMANDS: &[CmdSpec] = &[
             s("content_id", true, "fbf content item id"),
             s("teammate", true, "substring of teammate name"),
             s("text", true, "review text"),
+            s("improve_text", false, "text for 'improve' criteria (default: text)"),
             b("dry_run", "resolve + show only (default true)"),
         ],
         list_key: "",
