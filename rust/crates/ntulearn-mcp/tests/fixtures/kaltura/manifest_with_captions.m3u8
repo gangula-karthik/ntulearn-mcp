@@ -1,0 +1,4 @@
+#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Edited",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,LANGUAGE="en",URI="https://vodcdn.sg.kaltura.com/api_v3/index.php/service/caption_captionasset/action/serveWebVTT/captionAssetId/0_o5nopm5y/segmentDuration/300/ks/OTI3ZThiNzgyODE3MTVjMTllOTBiZjlmZmY1ODRlOGQ5ZmE3NDZhNXwxMTc7MTE3OzE3OTQ1NTY4MTc7MDsxNzk0NDcwNDE3LjAxMjk7O2NhcHRpb246MF84OGx6dHQ1YSxkaXNhYmxlZW50aXRsZW1lbnRmb3JlbnRyeTowXzg4bHp0dDVhLHVyaXJlc3RyaWN0Oi9hcGlfdjMvaW5kZXgucGhwL3NlcnZpY2UvY2FwdGlvbl9jYXB0aW9uYXNzZXQvYWN0aW9uL3NlcnZlV2ViVlRUKjs7/version/12/a.m3u8"
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=508450,RESOLUTION=960x540,FRAME-RATE=25.000,SUBTITLES="subs"
+https://cfvod.sgp2.ovp.kaltura.com/hls/p/117/sp/11700/serveFlavor/entryId/0_88lztt5a/v/12/ev/5/flavorId/0_z24etxpq/name/a.mp4/index.m3u8

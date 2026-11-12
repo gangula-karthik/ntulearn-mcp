@@ -17,7 +17,11 @@ serde_json.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
-reqwest.workspace = true
+# "stream" (additive over the workspace's json/rustls-tls/gzip): the Kaltura
+# video download streams multi-hundred-MB MP4s to disk instead of slurping
+# them (Response::bytes_stream). No new crates — futures-util is already a
+# direct dependency.
+reqwest = { workspace = true, features = ["stream"] }
 chrono.workspace = true
 base64.workspace = true
 scraper.workspace = true

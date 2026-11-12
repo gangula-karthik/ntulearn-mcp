@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html class="hosted" xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+    <link rel="search" type="application/opensearchdescription+xml" href="/osd">
+
+    
+            <script  nonce="7251700517553894553">
+                window.kalturaGlobalConfig ||= {};
+                window.kalturaGlobalConfig.stylesNonce = "8858458489255602395";
+            </script>
+        
+<meta http-equiv='X-UA-Compatible' content='requiresActiveX=true, IE=Edge' /><!-- viewhook start modulesHeader -->
+
+
+<!-- viewhook end modulesHeader --><!-- viewhook start playerEssentials -->
+
+<!-- viewhook end playerEssentials -->
+    <script  nonce="7251700517553894553">
+        // set webpack public path url to be able to load new react
+        window.resourceBasePath = "https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/react-new/"
+    </script>
+
+
+<meta name="xsrf-ajax-nonce" content="eyJpdiI6IjNpcDRtclRjTE1RcDRvNmlzWHRRblE9PSIsInZhbHVlIjoiKzdJZFlOZyt2WDVQclpmNmpJVkI4M1l0Y01EOEpEY1M5NnlSbVhXZmdrXC9xcnZlUHdDdVNHYU8rck0zV0dsS3Nydit2eDJqN1wvMkpsNmVJbWhySDl6cVlJbGt2VGpKXC9yY3VTVjFzM05NVmpnb2VYcHBXc2dpdWFKSDRueVBpOTAiLCJtYWMiOiI0MjU5ODUxNjFiNjFhZmI0NTFkMmY4ZjM4ZTJiMThkMzg2NDEwYmU5OTlmNThmNjkyYjFhZDcxNTMzNDJlNjc1In0=" />
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Nanyang Technological University, Singapore [PROD]</title>
+
+
+
+<script type="text/javascript"  nonce="7251700517553894553">
+    document.addEventListener("kmsButtonClickAnalytics", function (e) {
+        // name is mandatory
+        if (e.detail.name) {
+            // use GET params because POST has issues with CORS
+            var urlbase = 'https://analytics.sgp2.ovp.kaltura.com/api_v3/index.php?service=analytics&action=trackEvent&eventType=10002&partnerId=117&ks=djJ8MTE3fHiymAfWm5N_aaaQL97MtBBPhbWDTBcy2VihtarvdzvOWcESx98qaO18cKAILhcLYYpLrAtTpuJXnxBbevF_WBwFfwhEehA5SouN14FtVDnYSUTtUwjAxAnuDYwRZ7OOyiJDs21OpeHmnJ5iTMKJwIE%3D&kalturaApplication=2&kalturaApplicationVer=5.189.16&application=BlackboardUltra&applicationVer=5.189.16&sessionId=7d2513b92ff27a7e8c86944b68203499&virtualEventId=&referrer=https%3A%2F%2Fntulearnv1.ntu.edu.sg%2Fbrowseandembed%2Findex%2Fmedia-redirect%2Fentryid%2F0_88lztt5a%2FshowDescription%2Ffalse%2FshowTitle%2Ffalse%2FshowTags%2Ffalse%2FshowDuration%2Ffalse%2FshowOwner%2Ffalse%2FshowUploadDate%2Ffalse%2FplayerSize%2F608x402%2FplayerSkin%2F23448392%2FthumbEmbed%2F0%2FautoPlay%2F0%2FstartTime%2F0%2FendTime%2F0';
+            var urldata = '&buttonName='+e.detail.name+'&buttonValue='+e.detail.value+'&buttonType='+e.detail.type;
+            if (e.detail.ks) {
+                                urlbase = 'https://analytics.sgp2.ovp.kaltura.com/api_v3/index.php?service=analytics&action=trackEvent&eventType=10002&partnerId=117&kalturaApplication=2&kalturaApplicationVer=5.189.16&application=BlackboardUltra&applicationVer=5.189.16&sessionId=7d2513b92ff27a7e8c86944b68203499&virtualEventId=&referrer=https%3A%2F%2Fntulearnv1.ntu.edu.sg%2Fbrowseandembed%2Findex%2Fmedia-redirect%2Fentryid%2F0_88lztt5a%2FshowDescription%2Ffalse%2FshowTitle%2Ffalse%2FshowTags%2Ffalse%2FshowDuration%2Ffalse%2FshowOwner%2Ffalse%2FshowUploadDate%2Ffalse%2FplayerSize%2F608x402%2FplayerSkin%2F23448392%2FthumbEmbed%2F0%2FautoPlay%2F0%2FstartTime%2F0%2FendTime%2F0';
+                urldata += '&ks='+e.detail.ks;
+            }
+
+            if (e.detail.location) {
+                urldata += '&buttonInfo='+e.detail.location;
+            }
+            else if (e.detail.moduleName) { // keep for backward compatibility
+                urldata += '&buttonInfo='+e.detail.moduleName;
+            }
+
+            if (e.detail.entryId) {
+                urldata += '&entryId='+e.detail.entryId;
+            }
+
+            if (e.detail.applicationFeature) {
+                urldata += '&feature='+e.detail.applicationFeature;
+            }
+            navigator.sendBeacon(urlbase + urldata);
+        }
+    });
+</script>
+
+<link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/v2ui/asset/font/lato.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/bootstrap/css/bootstrap.min.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/bootstrap/css/bootstrap-responsive.min.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react/vendor.min.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react/kmsComponents.min.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css/font/kmsglobalfont.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css/kms.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css/kms.base.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/touch-icon-iphone.png" rel="icon" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/touch-icon-iphone.png" rel="apple-touch-icon" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/favicon.ico" rel="icon" type="png" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/browseandembed/asset/browseandembed.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css/bootstrap-datepicker.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css/font/eventplatform-icons/style.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css-toggle-switch/toggle-switch.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/fontAwesome/font-awesome.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/BootstrapFormHelpers/css/bootstrap-formhelpers.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/select2/select2.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/sidr/kms.sidr.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/shrink/dist/styles/jquery.shrink.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/ddMenu/css/kmsdrilldown.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/css/jquery.checkValidity.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/typeahead.js/typeahead.js-bootstrap.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/timepicker/jquery.timepicker.min.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/bootstrap-wysihtml5/wysiwyg-color.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/bootstrap-colorpicker-2/css/bootstrap-colorpicker.min.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/classroomcapture/asset/classroomcapture.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/captions/asset/captions.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/importchannel/asset/importchannel.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/quiz/asset/quiz.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/hosted/asset/hosted.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/kalturacapture/asset/pcstyle.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/kalturacapture/asset/style.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/powtoon/asset/powtoon/asset/powtoon.css?ver=594663875f34563eccad2ac626416af8" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/accessibility/asset/accessibility.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/embedplaylist/asset/embedplaylist.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/embed/asset/module_embed.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/scheduling/asset/scheduling.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/scheduling/asset/font.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/v2uicons/asset/icons/style.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/v2ui/asset/css/v2ui.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/v2ui/asset/css/v2uimodules.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/v2ui/asset/icons/style.css" media="screen" rel="stylesheet" type="text/css" /><link href="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react-new/vendor.css" media="screen" rel="stylesheet" type="text/css" /><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    
+            window.KApps ||= {};
+            window.KApps.bse ||= {};
+            window.KApps.bse.adjustLmsIframeHeight = false;
+            //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    
+                window.KApps.bse.baseWidth = 608;
+                window.KApps.bse.baseHeight = 402;
+                //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Back":"Back","Cancel":"Cancel","Close":"Close","Close youtube entry edit form":"Close youtube entry edit form","Creating preview":"Creating preview","Enter URL or ID":"Enter URL or ID","Failed to load video data":"Failed to load video data","Failed to update information":"Failed to update information","Import from YouTube":"Import from YouTube","Importing of the youtube entry failed":"Importing of the youtube entry failed","No description available":"No description available","Only public videos are supported":"Only public videos are supported","Preview":"Preview","Save & Close":"Save & Close","URL is not valid":"URL is not valid","YouTube Video":"YouTube Video","YouTube Video %1":"YouTube Video %1","Your information has been successfully updated.":"Your information has been successfully updated.","e.g. https:\/\/www.youtube.com\/watch?v=CNRavTdSN5E":"e.g. https:\/\/www.youtube.com\/watch?v=CNRavTdSN5E"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Add item":"Add item","Chip input":"Chip input","Processing":"Processing","Remove item: %1":"Remove item: %1","Show more":"Show more"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Close engagement panel":"Close engagement panel","Collapse menu":"Collapse menu","Expand menu":"Expand menu","Open engagement panel":"Open engagement panel"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 hour":"%1 hour","%1 hours":"%1 hours","%1 minute":"%1 minute","%1 minutes":"%1 minutes","%1 second":"%1 second","%1 seconds":"%1 seconds","Co-Editor":"Co-Editor","Co-Publisher":"Co-Publisher","Co-Viewer":"Co-Viewer","Collaborator":"Collaborator","Group Co-Editor":"Group Co-Editor","Group Co-Publisher":"Group Co-Publisher","Group Co-Viewer":"Group Co-Viewer","Group Owner":"Group Owner","Owner":"Owner","This field is required":"This field is required"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 is a required field":"%1 is a required field","Cancel":"Cancel","Changes aren't saved. Are you sure you want to leave without saving them?":"Changes aren't saved. Are you sure you want to leave without saving them?","Leave":"Leave","Required for publish":"Required for publish","Save":"Save","Save Changes":"Save Changes","Unsaved Changes":"Unsaved Changes"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 date":"%1 date","%1 for %2 playlist":"%1 for %2 playlist","%1 is required":"%1 is required","%1 of %2":"%1 of %2","%1 time":"%1 time","A-Z":"A-Z","Add":"Add","All characters are allowed":"All characters are allowed","Bold":"Bold","Can't contain first name or last name":"Can't contain first name or last name","Cancel":"Cancel","Clear Search":"Clear Search","Copy":"Copy","Creation Date":"Creation Date","Delete":"Delete","End time":"End time","End time must be later than start time":"End time must be later than start time","File":"File","Filters":"Filters","Group":"Group","Insert Image":"Insert Image","Insert Link":"Insert Link","Italic":"Italic","LIVE":"LIVE","Live":"Live","Media Count":"Media Count","Members Count":"Members Count","Minutes":"Minutes","Name":"Name","Name cannot exceed 255 characters":"Name cannot exceed 255 characters","No Matching results found":"No Matching results found","OK":"OK","Off":"Off","On":"On","Ordered List":"Ordered List","Password strength: ":"Password strength: ","Please enter a valid number":"Please enter a valid number","Please enter a valid password":"Please enter a valid password","Please upload a file":"Please upload a file","Privacy":"Privacy","Remove file":"Remove file","Scan this QR code with your authentication app. You can download an authentication app for both platforms:":"Scan this QR code with your authentication app. You can download an authentication app for both platforms:","Scheduled":"Scheduled","Searching...":"Searching...","Show Less":"Show Less","Show More":"Show More","Sort By":"Sort By","Start time":"Start time","This field is required":"This field is required","This site is protected by reCAPTCHA and the Google %1 Privacy Policy %2 and %3 Terms of Service %4 apply":"This site is protected by reCAPTCHA and the Google %1 Privacy Policy %2 and %3 Terms of Service %4 apply","Time gap between start and end time cannot be larger than 24 hours":"Time gap between start and end time cannot be larger than 24 hours","Time must be set":"Time must be set","Time zone":"Time zone","Top %1":"Top %1","Type something":"Type something","Underline":"Underline","Unordered List":"Unordered List","Update Date":"Update Date","Upload":"Upload","Upload File":"Upload File","Upload failed, please try again.":"Upload failed, please try again.","Z-A":"Z-A","close":"close","condition met":"condition met","condition not met":"condition not met","current progress: %1%":"current progress: %1%","link to app store":"link to app store","link to google play":"link to google play","medium":"medium","more":"more","next slide arrow":"next slide arrow","previous slide arrow":"previous slide arrow","remove":"remove","show actions":"show actions","strong":"strong","thumbnail for %1":"thumbnail for %1","view %1":"view %1","view %1, duration: %2":"view %1, duration: %2","weak":"weak"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 seconds":"%1 seconds","Log out now":"Log out now","Stay logged in":"Stay logged in","You've been idle":"You've been idle","Your session will expire in %1 due to inactivity.":"Your session will expire in %1 due to inactivity."};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"All Media":"All Media","All common video, audio and image formats in all resolutions are accepted.":"All common video, audio and image formats in all resolutions are accepted.","An unexpected error occurred while trying to cancel uploads":"An unexpected error occurred while trying to cancel uploads","Are you sure you want to cancel %1 uploads?<br\/>This action cannot be undone.":"Are you sure you want to cancel %1 uploads?<br\/>This action cannot be undone.","Are you sure you want to cancel this upload?<br\/>This action cannot be undone.":"Are you sure you want to cancel this upload?<br\/>This action cannot be undone.","Back":"Back","Cancel":"Cancel","Cancel All":"Cancel All","Cancel All Uploads":"Cancel All Uploads","Cancel Upload":"Cancel Upload","Cancel upload for entry %1":"Cancel upload for entry %1","Canceled":"Canceled","Drag and drop a file to upload":"Drag and drop a file to upload","Drag and drop files to upload":"Drag and drop files to upload","Edit":"Edit","Edit All":"Edit All","Edit details for entry %1":"Edit details for entry %1","Error processing media: %1":"Error processing media: %1","Failed to update information":"Failed to update information","In Queue":"In Queue","Media Page":"Media Page","My Media":"My Media","Open Media page for entry %1":"Open Media page for entry %1","Processing":"Processing","Processing Failed":"Processing Failed","Ready":"Ready","Remove":"Remove","Remove entry %1 upload":"Remove entry %1 upload","Select a file":"Select a file","Select files":"Select files","Set Privacy To All":"Set Privacy To All","Unsupported file type: %1":"Unsupported file type: %1","Update All":"Update All","Upload Failed":"Upload Failed","Upload Media":"Upload Media","Upload failed for: %1":"Upload failed for: %1","Uploading %1 %":"Uploading %1 %","You're still uploading! Are you sure you want to leave this page?":"You're still uploading! Are you sure you want to leave this page?","Your information has been successfully updated.":"Your information has been successfully updated.","in queue":"in queue","ready":"ready","untitled":"untitled"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"# of clicks":"# of clicks","%1 (Channel ID: %2)":"%1 (Channel ID: %2)","%1 (Course ID: %2, Category ID: %3)":"%1 (Course ID: %2, Category ID: %3)","%1 (Course ID: %2, Category ID: N\/A)":"%1 (Course ID: %2, Category ID: N\/A)","%1 (Gallery ID: %2)":"%1 (Gallery ID: %2)","%1 - Publish options for entry %2":"%1 - Publish options for entry %2","%1 link":"%1 link","%1 links":"%1 links","%1 tooltip":"%1 tooltip","Actions":"Actions","Add":"Add","Add Collaboration":"Add Collaboration","Add collaborators":"Add collaborators","Add to watch list":"Add to watch list","Add users by email, assign roles, and control their access for the session.":"Add users by email, assign roles, and control their access for the session.","Add\/Remove collaborators":"Add\/Remove collaborators","Allow anyone with this link to access the media without signing in.":"Allow anyone with this link to access the media without signing in.","Allow link-based access without sign-in. Up to 3 guest links available.":"Allow link-based access without sign-in. Up to 3 guest links available.","An error occurred while detaching the recording":"An error occurred while detaching the recording","Anyone with entitlements to the gallery\/channel can view":"Anyone with entitlements to the gallery\/channel can view","Anyone with entitlements to the gallery\/channel can view.":"Anyone with entitlements to the gallery\/channel can view.","Anyone with the link can view":"Anyone with the link can view","Are you sure you want to delete this link?":"Are you sure you want to delete this link?","Are you sure you want to detach the recording from live session?":"Are you sure you want to detach the recording from live session?","Are you sure you want to set %1 media items as private? They will no longer be available for users in search results or with a link.":"Are you sure you want to set %1 media items as private? They will no longer be available for users in search results or with a link.","Are you sure you want to set %1 media items as unlisted? They will be available to any user with a link.":"Are you sure you want to set %1 media items as unlisted? They will be available to any user with a link.","Are you sure you want to set this media as private? It will be removed from all published locations in this application.":"Are you sure you want to set this media as private? It will be removed from all published locations in this application.","Are you sure you want to set this media as private? It will no longer be available for users in search results or with a link.":"Are you sure you want to set this media as private? It will no longer be available for users in search results or with a link.","Are you sure you want to set this media as unlisted? It will be available to any user with a link.":"Are you sure you want to set this media as unlisted? It will be available to any user with a link.","Are you sure you want to set this media as unlisted? It will be removed from all published locations in this application, but will be available for any users with a link to the media.":"Are you sure you want to set this media as unlisted? It will be removed from all published locations in this application, but will be available for any users with a link to the media.","By changing ownership, you will no longer be able to perform any actions on the media or be able to see it in your My Media, unless you are a collaborator on the entry.":"By changing ownership, you will no longer be able to perform any actions on the media or be able to see it in your My Media, unless you are a collaborator on the entry.","Cancel":"Cancel","Cancel RSVP":"Cancel RSVP","Cannot invite new users from this email domain":"Cannot invite new users from this email domain","Category ID: %1":"Category ID: %1","Change publish locations":"Change publish locations","Channels":"Media Galleries","Clone room in progress":"Clone room in progress","Clone room is ready":"Clone room is ready","Clone session in progress":"Clone session in progress","Clone session is ready":"Clone session is ready","Close":"Close","Could not publish the following media:":"Could not publish the following media:","Could not update the following media:":"Could not update the following media:","Create":"Create","Create new link":"Create new link","Day\/s":"Day\/s","Delete":"Delete","Detach":"Detach","Detach recording":"Detach recording","Duration":"Duration","Editor":"Editor","Email was sent to %1 with instructions":"Email was sent to %1 with instructions","Enable guest access":"Enable guest access","Enter text to search channels":"Enter text to search channels","Enter text to search galleries":"Enter text to search galleries","Error sending calendar email":"Error sending calendar email","Error updating media":"Error updating media","Error while deleting link":"Error while deleting link","Error while saving data":"Error while saving data","Exceptions":"Exceptions","Expiration date":"Expiration date","External":"External","Failed detaching recording":"Failed detaching recording","Failed to clone the room":"Failed to clone the room","Failed to clone the session":"Failed to clone the session","Failed to delete the media":"Failed to delete the media","Failed to generate invite link":"Failed to generate invite link","Failed to load privacy status for the media":"Failed to load privacy status for the media","Failed to update information":"Failed to update information","Failed to update watch list.":"Failed to update watch list.","Field %1 is required":"Field %1 is required","Galleries":"Galleries","Generate invite link":"Generate invite link","Go to the new room":"Go to the new room","Go to the new session":"Go to the new session","Google calendar":"Google calendar","Invite Users":"Invite Users","Invite users":"Invite users","Limit how many times this link can be accessed.":"Limit how many times this link can be accessed.","Link Name":"Link Name","Link copied to clipboard.":"Link copied to clipboard.","Link name":"Link name","Link to media page":"Link to media page","Make myself a collaborator":"Make myself a collaborator","Manage guest access":"Manage guest access","Media is pending\/rejected in %1 channels.":"Media is pending\/rejected in %1 channels.","Media is pending\/rejected in %1 galleries.":"Media is pending\/rejected in %1 galleries.","Media is published to a private location":"Media is published to a private location","Media successfully updated":"Media successfully updated","Moderated - Content will only be available after moderator approval.":"Moderated - Content will only be available after moderator approval.","No channels found":"No channels found","No galleries found":"No galleries found","No links added":"No links added","Only I can view":"Only I can view","Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).":"Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).","Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).<br\/>In case guests are allowed to the site, they can also view content.":"Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).<br\/>In case guests are allowed to the site, they can also view content.","Outlook calendar":"Outlook calendar","Ownership successfully transferred":"Ownership successfully transferred","Pending in":"Pending in","Please use a valid email address":"Please use a valid email address","Private":"Private","Private - Only channel members can view and contribute content.":"Private - Only channel members can view and contribute content.","Private - Only gallery members can view and contribute content.":"Private - Only gallery members can view and contribute content.","Public, Open - Anyone can view content (including guests). All logged in users can contribute content (contribution is not allowed for viewer-role users).":"Public, Open - Anyone can view content (including guests). All logged in users can contribute content (contribution is not allowed for viewer-role users).","Public, Restricted - Anyone can view content (including guests). Only channel members can contribute according to their publishing entitlements.":"Public, Restricted - Anyone can view content (including guests). Only channel members can contribute according to their publishing entitlements.","Publish":"Publish","Publish in %1 location":"Publish in %1 location","Publish in %1 locations":"Publish in %1 locations","Publish options for entry %1":"Publish options for entry %1","Published":"Published","Published in %1:":"Published in %1:","Publisher":"Publisher","Publishing locations":"Publishing locations","RSVP":"RSVP","RSVP accepted":"RSVP accepted","Recording detached successfully":"Recording detached successfully","Rejected in":"Rejected in","Remove Collaboration":"Remove Collaboration","Remove collaborators":"Remove collaborators","Remove from watch list":"Remove from watch list","Resend iCal Invitation":"Resend iCal Invitation","Restricted - All logged-in users can view content, only channel members can contribute.":"Restricted - All logged-in users can view content, only channel members can contribute.","Restricted - All logged-in users can view content, only gallery members can contribute.<br\/>In case guests are allowed to the site, they can also view content.":"Restricted - All logged-in users can view content, only gallery members can contribute.<br\/>In case guests are allowed to the site, they can also view content.","Revoke user's permission to view, publish, and\/or edit the media.":"Revoke user's permission to view, publish, and\/or edit the media.","Room was successfully cloned.":"Room was successfully cloned.","Room was successfully cloned. You can continue editing the new room\u2019s metadata or navigate to the new room.":"Room was successfully cloned. You can continue editing the new room\u2019s metadata or navigate to the new room.","Save":"Save","Save changes":"Save changes","Search channels":"Search media galleries","Search collaborators":"Search collaborators","Search collaborators to add":"Search collaborators to add","Search collaborators to remove":"Search collaborators to remove","Search for a user":"Search for a user","Search for a user to set as owner":"Search for a user to set as owner","Search galleries":"Search galleries","See list":"See list","Select users who will have permission to view, publish, and\/or edit the media.":"Select users who will have permission to view, publish, and\/or edit the media.","Send by email":"Send by email","Send link via Email":"Send link via Email","Session was successfully cloned.":"Session was successfully cloned.","Session was successfully cloned. You can continue editing the new session\u2019s metadata or navigate to the new session.":"Session was successfully cloned. You can continue editing the new session\u2019s metadata or navigate to the new session.","Set media as private":"Set media as private","Set media as unlisted":"Set media as unlisted","Shared Repository - Only members can view and contribute content. Content can be published to other locations based on entitlements.":"Shared Repository - Only members can view and contribute content. Content can be published to other locations based on entitlements.","Show less":"Show less","Something went wrong. We could not update your response.":"Something went wrong. We could not update your response.","Sorry you can't make it! We've noted your cancellation.":"Sorry you can't make it! We've noted your cancellation.","The live session page will move back to lobby state, and the recording will be available for users as a video media.":"The live session page will move back to lobby state, and the recording will be available for users as a video media.","This action will unpublish the media from all applications. Are you sure you want to continue?":"This action will unpublish the media from all applications. Are you sure you want to continue?","To enter the media page, the users will need to enter their email address as a form of authentication.":"To enter the media page, the users will need to enter their email address as a form of authentication.","Transfer ownership":"Transfer ownership","Unlimited":"Unlimited","Unlisted":"Unlisted","Unpublish":"Unpublish","Unpublish %1":"Unpublish %1","Unpublish from all applications":"Unpublish from all applications","Unpublish now":"Unpublish now","Update":"Update","User %1 created successfully":"User %1 created successfully","Viewer":"Viewer","We are in the process of copying all your room assets. This may take some time. You can edit the new room\u2019s metadata in the meantime.":"We are in the process of copying all your room assets. This may take some time. You can edit the new room\u2019s metadata in the meantime.","We are in the process of copying all your session assets. This may take some time. You can edit the new session\u2019s metadata in the meantime.":"We are in the process of copying all your session assets. This may take some time. You can edit the new session\u2019s metadata in the meantime.","Yes, Delete":"Yes, Delete","You can unpublish from all applications.":"You can unpublish from all applications.","You're in! '%1' has been added to your schedule":"You're in! '%1' has been added to your schedule","Your information has been successfully updated.":"Your information has been successfully updated.","channels i manage":"channels i manage","copy link %1 to clipboard":"copy link %1 to clipboard","delete link %1":"delete link %1","link copied to clipboard":"link copied to clipboard","more channels":"more channels","open %1":"open %1","unlimited":"unlimited"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 playlist found":"%1 playlist found","%1 playlists found":"%1 playlists found","%1, %2 of %3":"%1, %2 of %3","Add":"Add","Cancel":"Cancel","Create":"Create","Create new playlist":"Create new playlist","Create playlist title":"Create playlist title","Error adding media to playlist":"Error adding media to playlist","No playlists found":"No playlists found","Playlists":"Playlists","Search playlist":"Search playlist"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Live":"Live","See profile page":"See profile page"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = [];
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 comment":"%1 comment","%1 comments":"%1 comments","Add comment at %1":"Add comment at %1"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+        var localeCode = "en";
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Service requests":"Service Requests","Existing Requests":"Existing Requests","Order":"Order","Order Captions & Enrichment Services":"Order Captions & Enrichment Services","No requests were found":"No requests were found","Your request has been received. Your video will automatically be updated upon completion.":"Your request has been received. Your video will automatically be updated upon completion.","Service was already requested for this video":"Service was already requested for this video","Oops.. it seems you are not allowed to do that":"Oops.. it seems you are not allowed to do that","The request cannot be fulfilled. Your account credit is depleted. Please contact your administrator":"The request cannot be fulfilled. Your account credit is depleted. Please contact your administrator","Are you sure you want to cancel this request?":"Are you sure you want to cancel this request?","The request is already in progress, therefore cannot be canceled.":"The request is already in progress, therefore cannot be canceled.","No":"No","Yes":"Yes","Cancel Request":"Cancel Request","The captions file should be in %1, SRT type and with an accuracy rate of 99% or higher":"The captions file should be in %1, SRT type and with an accuracy rate of 99% or higher","The captions file uploaded successfully.":"The captions file uploaded successfully.","A captions file is required to perform translation. Please upload a captions file.":"A captions file is required to perform translation. Please upload a captions file.","Choose Captions File:":"Choose Captions File:","Upload Captions File":"Upload Captions File","Select a file":"Select a file","Browse":"Browse","Label":"Label","Live captioning order minimum time before the event starts is %1 minutes. Please make sure to order captions within this timeframe.":"Live captioning order minimum time before the event starts is %1 minutes. Please make sure to order captions within this timeframe.","Are you sure you want to cancel this request? You will still be charged. The refund period has expired":"Are you sure you want to cancel this request? You will still be charged. The refund period has expired","Service was already done for this video. Are you sure you want to resubmit?":"Service was already done for this video. Are you sure you want to resubmit?","One or more of these services was already done for this video, are you sure you want to resubmit?":"One or more of these services was already done for this video, are you sure you want to resubmit?","Resubmit":"Resubmit","Resubmit request":"Resubmit request","Request Date":"Request Date","Service":"Service","Language":"Language","Status":"Status","Abort Task":"Abort Task","Edit Caption":"Edit Caption","Request can not be ordered, there is no credit for ordering. Please contact your administrator":"Request can not be ordered, there is no credit for ordering. Please contact your administrator","%1 items, legend %2 color. Press Enter to see the summary":"%1 items, legend %2 color. Press Enter to see the summary","Summary for %1 requests: %2":"Summary for %1 requests: %2","No data available":"No data available","Unit:":"Unit:","Apply to content published by the following role:":"Apply to content published by the following role:","Add Speaker Identification":"Add Speaker Identification","Instructions & Notes:":"Instructions & Notes:","Submit":"Submit","Service:":"Service:","Source Media Language:":"Source Media Language:","Feature:":"Feature:","Target Translation Language:":"Target Translation Language:","Turnaround Time:":"Turnaround Time:","The selected Turn Around Time can be fulfilled only for media that is up to 15 minutes duration.":"The selected Turn Around Time can be fulfilled only for media that is up to 15 minutes duration.","Choose txt file*":"Choose txt file*","Upload txt":"Upload txt","No files were found":"No files were found","File Name":"File Name","Title":"Title","Uploaded At":"Uploaded At","At the beginning of the event":"At the beginning of the event","15 minutes before the event starts":"15 minutes before the event starts","30 minutes before the event starts":"30 minutes before the event starts","60 minutes before the event starts":"60 minutes before the event starts","At the end of the event":"At the end of the event","15 minutes after the event ends":"15 minutes after the event ends","30 minutes after the event ends":"30 minutes after the event ends","60 minutes after the event ends":"60 minutes after the event ends","Live Captions Start Time:":"Live Captions Start Time:","Live Captions End Time:":"Live Captions End Time:","We recommend to extend the live captions scheduling to avoid disconnections before the event ends":"We recommend to extend the live captions scheduling to avoid disconnections before the event ends","To order live captions, you must first schedule a webcast":"To order live captions, you must first schedule a webcast","Task ID:":"Task ID:","Requester:":"Requester:","Fidelity:":"Fidelity:","Received date:":"Received Date:","Due-date:":"Due-date:","View Ordering Rules":"View Ordering Rules","Create Rule":"Create Rule","Service will be ordered for each media published to this channel in the future.":"Service will be ordered for each media published to this channel in the future.","Create Rule for Ordering":"Create Rule for Ordering","No rules were found":"No rules were found","Your order has been received. Order requests will be generated and automatically approved for each video published to this channel in the future.":"Your order has been received. Order requests will be generated and automatically approved for each video published to this channel in the future.","Are you sure you want to cancel this rule?<br\/>Order requests will not be generated automatically for videos published to this channel in the future.":"Are you sure you want to cancel this rule?<br\/>Order requests will not be generated automatically for videos published to this channel in the future.","A similar rule already exists for this profile.":"A similar rule already exists for this profile.","Services ordering rules for channels":"Services ordering rules for channels","Remaining Credit":"Remaining Credit","Used Credit":"Used Credit","Credit Overages":"Credit Overages","current credit status":"Current Credit Status","Credit expiration date":"Credit Expiration Date","Media ID:":"Media ID:","Duration:":"Duration:","Service Type:":"Service Type:","Source Language:":"Source Language:","Target Language:":"Target Language:","Completed Date:":"Completed Date:","Speaker ID:":"Speaker ID:","aborted":"Aborted","error":"Error","pending":"Pending","pendingModeration":"Pending Approval","pendingEntryReady":"Draft","processing":"Processing","ready":"Completed","rejected":"Rejected","scheduled":"Scheduled","human":"Professional","machine":"Machine","manager":"Manager","moderator (and higher)":"Moderator (and higher)","contributor (and higher)":"Contributor (and higher)","member (and higher)":"Member (and higher)","anyone":"Anyone","captions":"Captions","translation":"Translation","audioDescription":"Audio Description","audio description":"Audio Description","alignment":"Alignment","chaptering":"Chaptering","dubbing":"Dubbing","liveCaption":"Live Captions","live captions":"Live Captions","live translation":"Live Translation","liveTranslation":"Live Translation","ocr":"OCR","videoAnalysis":"OCR","extendedAudioDescription":"Extended Audio Description","extended audio description":"Extended Audio Description","clips":"Clips","quiz":"Quiz","summary":"Summary","sign language":"Sign Language","signLanguage":"Sign Language","ar":"Arabic","cmn":"Mandarin Chinese","de":"German","en":"English","enGb":"English (British)","enUs":"English (American)","enAsl":"English (ASL)","enBsl":"English (BSL)","es":"Spanish","fr":"French","el":"Greek","he":"Hebrew","hi":"Hindi","hu":"Hungarian","it":"Italian","ja":"Japanese","ko":"Korean","nl":"Dutch","pt":"Portuguese","pl":"Polish","ru":"Russian","ro":"Romanian","tr":"Turkish","yue":"Cantonese","zh":"Chinese","th":"Thai","sv":"Swedish","da":"Danish","no":"Norwegian","fi":"Finnish","is":"Icelandic","in":"Indonesian","ptBR":"Portuguese (Brazil)","esXL":"Spanish (Latin America)","ga":"Irish","cy":"Welsh","ur":"Urdu","ta":"Tamil","ml":"Malayalam","zu":"Zulu","vi":"Vietnamese","uk":"Ukrainian","frCa":"French (Canada)","zhTw":"Taiwanese Mandarin","ca":"Catalan","af":"Afrikaans","bg":"Bulgarian","et":"Estonian","lv":"Latvian","lt":"Lithuanian","sk":"Slovak","ba":"Bashkir","eu":"Basque","be":"Belarusian","hr":"Croatian","eo":"Esperanto","fa":"Farsi","gl":"Galician","ia":"Interlingua","ms":"Malay","mr":"Marathi","mn":"Mongolian","sl":"Slovenian","te":"Telugu","ug":"Uighur","enAu":"English (Australian)","az":"Azerbaijani","bn":"Bengali","my":"Burmese","bs":"Bosnian","ka":"Georgian","gu":"Gujarati","jv":"Javanese","kn":"Kannada","kk":"Kazakh","km":"Khmer","lo":"Lao","mk":"Macedonian","ne":"Nepali","faIr":"Persian (Iran)","pa":"Punjabi","sr":"Serbian","si":"Sinhala","skSk":"Slovakian","su":"Sudanese","sw":"Swahili","tl":"Tagalog (Filipino)","uz":"Uzbek","xh":"Xhosa","zhCn":"Simplified Chinese","zhHk":"Traditional Chinese","cs":"Czech","autoDetect":"Auto-Detect","bestEffort":"Best Effort","fortyEightHours":"48 hours","immediate":"Immediate","sixHours":"6 hours","thirtyMinutes":"30 minutes","threeHours":"3 hours","twentyFourHours":"24 hours","twoHours":"2 hours","eightHours":"8 hours","twelveHours":"12 hours","tenDays":"10 days","fourDays":"4 days","fiveDays":"5 days","oneBusinessDay":"1 Business Day","twoBusinessDays":"2 Business Days","threeBusinessDays":"3 Business Days","fourBusinessDays":"4 Business Days","fiveBusinessDays":"5 Business Days","sixBusinessDays":"6 Business Days","sevenBusinessDays":"7 Business Days","Service Requests":"Service Requests","Unit":"Unit","View Channel Rules":"View Channel Rules","Number of Requests":"Number of Requests","Show Details":"Show Details","Hide Details":"Hide Details","Are you sure you want to reject the selected request(s)?":"Are you sure you want to reject the selected request(s)?","Are you sure you want to approve the selected request(s)?":"Are you sure you want to approve the selected request(s)?","Approve Requests":"Approve Requests","Approve":"Approve","Reject":"Reject","Email CSV":"Email CSV","Your requests cannot be approved since your account lacks credit for ordering. Please re-select requests to approve.":"Your requests cannot be approved since your account lacks credit for ordering. Please re-select requests to approve.","Last 30 Days":"Last 30 Days","Last 90 Days":"Last 90 Days","Last Year":"Last Year","Reject Requests":"Reject Requests","From":"From","To":"To","Start Time:":"Start Time:","End Time:":"End Time:","Media Name":"Media Name","TAT":"TAT","Feature":"Feature","Cost":"Cost","%1 row":"%1 row","Expand":"Expand","dashboard requests":"dashboard requests","not sortable":"not sortable","sortable":"sortable","Filter request by days, currently selected":"Filter request by days, currently selected","after pressing enter or space, press tab to access filters":"after pressing enter, press tab to access filters","sorted in ascending order":"sorted in ascending order","sorted in descending order":"sorted in descending order","Service was already requested for some of the selected media":"Service was already requested for some of the selected media","Some requests cannot be fulfilled. Your account credit is depleted. Please contact your administrator":"Some requests cannot be fulfilled. Your account credit is depleted. Please contact your administrator","Order Captions & Enrichment Services - %1 Selected Media":"Order Captions & Enrichment Services - %1 Selected Media","Completed":"Completed","Pending, Processing & Draft":"Pending, Processing & Draft","Processing":"Processing","Rejected":"Rejected","Other":"Other","blue":"blue","grey":"grey","yellow":"yellow","red":"red","dark grey":"dark grey","Filter request by days, currently selected %1":"Filter request by days, currently selected %1","To expand details, press Enter":"To expand details, press Enter","To collapse details, press Enter":"To collapse details, press Enter"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Watch Later":"Watch Later","Add to %1":"Add to %1","Remove from %1":"Remove from %1","Undo Remove from %1":"Undo Remove from %1","Undo":"Undo","was removed from %1":"was removed from %1","No media in your %1":"No media in your %1","Browse the site to find media and add it to your %1":"Browse the site to find media and add it to your %1","Add to watch list":"Add to watch list","Remove from watch list":"Remove from watch list","Failed to update watch list.":"Failed to update watch list."};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Well done!":"Well done!","Your score is on its way to the gradebook":"Your score is on its way to the gradebook","please wait for a confirmation":"please wait for a confirmation","Score could not be sent to gradebook":"Score could not be sent to gradebook","Your score is now documented in the gradebook":"Your score is now documented in the gradebook","Don\u2019t worry, your score is safe with us. Please contact your faculty member for help.":"Don\u2019t worry, your score is safe with us. Please contact your faculty member for help."};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 has submenu. Press Down Arrow to open":"%1 has submenu. Press Down Arrow to open","Additional items":"Additional items","Back to %1":"Back to %1","Close menu":"Close menu","Close side bar":"Close side bar","Collapse engagement panel":"Collapse engagement panel","Connect with us on LinkedIn":"Connect with us on LinkedIn","Create":"Create","Expand engagement panel":"Expand engagement panel","Follow us on Facebook":"Follow us on Facebook","Follow us on Instagram":"Follow us on Instagram","Follow us on Slack":"Follow us on Slack","Follow us on X":"Follow us on X","Follow us on line":"Follow us on line","Follow us on tiktok":"Follow us on tiktok","High Contrast Switch is %1":"High Contrast Switch is %1","Login to create new media":"Login to create new media","Off":"Off","On":"On","Open side bar":"Open side bar","Open sub menu %1":"Open sub menu %1","Search":"Search","Search all media":"Search all media","Search for site content":"Search for site content","Select Language":"Select Language","Show More":"Show More","Skip to main content":"Skip to main content","Subscribe to our YouTube Channel":"Subscribe to our YouTube Channel","The bulk operation for %1 %2 has been completed":"The bulk operation for %1 %2 has been completed","Watch us on Twitch":"Watch us on Twitch","user menu":"user menu"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 menuitem %2 %3":"%1 menuitem %2 %3"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"%1 earned badges":"%1 earned badges","Badges I can earn":"Badges I can earn","Badges you can earn":"Badges you can earn","Close":"Close","Get this badge":"Get this badge","How to earn this badge?":"How to earn this badge?","View more badges":"View more badges","badges":"badges","next slide arrow":"next slide arrow","previous slide arrow":"previous slide arrow"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Top":"Top","Back":"Back","* Required To Publish":"* Required To Publish","Press CTRL-C to copy":"Press CTRL-C to copy","Load More":"Load More","new tag":"new tag","Sorry, this action requires Adobe Flash.":"Sorry, this action requires Adobe Flash.","One result is available, press enter to select it.":"One result is available, press enter to select it.","%1 results are available, use up and down arrow keys to navigate.":"%1 results are available, use up and down arrow keys to navigate.","Loading failed":"Loading failed","Please enter %1 or more %2":"Please enter %1 or more %2","Tags, Editing text - Please enter %1 or more %2":"Tags, Editing text - Please enter %1 or more %2","Please delete %1 %2":"Please delete %1 %2","You can only select %1 %2":"You can only select %1 %2","Loading more results\u2026":"Loading more results\u2026","100%":"100%","Loading":"Loading","Close":"Close","No matching results found":"No matching results found","Please try using other search terms":"Please try using other search terms","%1 item(s) found":"%1 item(s) found","Remove tag %1":"Remove tag %1","thumbnail for channel %0":"thumbnail for channel %0","%0 Galleries found":"%0 Galleries found","%0 Channels found":"%0 Channels found","%0 Gallery found":"%0 Gallery found","%0 Channel found":"%0 Channel found","Found %0 result":"Found %0 result","Found %0 results":"Found %0 results","Go to Channel Results":"Go to Channel Results","Go to Gallery Results":"Go to Gallery Results","No more galleries found.":"No more galleries found.","No Galleries found":"No Galleries found","Slide":"Slide","%1 Slide":"%1 Slide","%1 Slides":"%1 Slides","Tags":"Tags","%1 Tag":"%1 Tag","%1 Tags":"%1 Tags","%1 Item":"%1 Item","%1 Items":"%1 Items","Caption":"Caption","%1 Caption":"%1 Caption","%1 Captions":"%1 Captions","OCR":"OCR","%1 OCR":"%1 OCR","Chapter":"Chapter","%1 Chapters":"%1 Chapters","%1 Chapter":"%1 Chapter","Quiz":"Quiz","%1 Quiz":"%1 Quiz","Details":"Details","%1 Details":"%1 Details","Poll":"Poll","%1 Polls":"%1 Polls","%1 Poll":"%1 Poll","Metadata":"Metadata","%1 Comment":"%1 Comment","Comment":"Comment","%1 Comments":"%1 Comments","selected":"selected","Appears In":"Appears In","Channel %1 link":"Channel %1 link","Created by":"Created by","Search for more from %1":"Search for more from %1","Show All":"Show All","Show Less":"Show Less","Show More":"Show More","More info":"More info","Less info":"Less info","Go to %1 at %2":"Go to %1 at %2","A:":"A:","Q:":"Q:","Rejected By Admin":"Rejected By Admin","Keyword found in:":"Keyword found in:","Something went wrong":"Something went wrong","Today":"Today","Browse Filters":"Browse Filters","Filters":"Filters","%1 of %2":"%1 of %2","Tab to access filters":"Tab to access filters","Filters removed":"Filters removed","%1 removed":"%1 removed","Clear All":"Clear All","N\/A":"N\/A","More":"More","Browse Filters - left":"Browse Filters - left","Browse Filters - right":"Browse Filters - right","press enter or space to collapse filters box":"press enter or space to collapse filters box","%1 second":"%1 second","%1 seconds":"%1 seconds","%1 minute":"%1 minute","%1 minutes":"%1 minutes","%1 hour":"%1 hour","%1 hours":"%1 hours","a few seconds ago":"A few seconds ago","%1 seconds ago":"%1 Seconds ago","%1 minutes ago":"%1 Minutes ago","a minute ago":"A minute ago","%1 hours ago":"%1 Hours ago","an hour ago":"An hour ago","%1 days ago":"%1 Days ago","a day ago":"A day ago","%1 months ago":"%1 Months ago","a month ago":"A month ago","%1 years ago":"%1 Years ago","a year ago":"A year ago","Search":"Search","Published":"Published","Private":"Private","thumbnail for entry ID":"thumbnail for entry ID","click to navigate to entry":"click to navigate to entry","Loading info...":"Loading info...","related entry ID":"related entry ID","click to see thumbnail":"click to see thumbnail","The bulk operation for %1 %2 has been completed":"The bulk operation for %1 %2 has been completed","No more media found.":"No more media found.","You are about to delete the group %1.":"You are about to delete the group %1.","Users in this group will be removed from the group. This action is permanent.":"Users in this group will be removed from the group. This action is permanent.","You are about to delete %1 groups.":"You are about to delete %1 groups.","Users in these groups will be removed from the groups. This action is permanent.":"Users in these groups will be removed from the groups. This action is permanent.","%1 users":"%1 users","Add Users":"Add Users","Delete Group":"Delete Group","%1 Users":"%1 Users","%1 Selected":"%1 Selected","Create Your First Group":"Create Your First Group","No Groups":"No Groups","When you create groups, they will appear in here":"When you create groups, they will appear in here","Your search did not match any group.":"Your search did not match any group.","Make sure you spelled the word correctly":"Make sure you spelled the word correctly","Try a different search term or filters":"Try a different search term or filters","You are about to remove the user %1 from the group.":"You are about to remove the user %1 from the group.","You are about to remove a user that was automatically synced to this group. Depending on the application's Group-sync Module, the user might automatically be added again.":"You are about to remove a user that was automatically synced to this group. Depending on the application's Group-sync Module, the user might automatically be added again.","No Users":"No Users","Your users list is empty":"Your users list is empty","Add Yours First Users":"Add Yours First Users","You are about to remove %1 users from the group.":"You are about to remove %1 users from the group.","Please note - users that were automatically synced to this group may automatically be added again, depending on the application's Group-sync Module.":"Please note - users that were automatically synced to this group may automatically be added again, depending on the application's Group-sync Module.","Remove Users":"Remove Users","Remove User":"Remove User","Remove":"Remove","Start typing to search for a user to add.":"Start typing to search for a user to add.","Number of Users":"Number of Users","Group ID":"Group ID","Copy link to share":"Copy link to share","The group's information is being updated. Once update is completed, you will be able to continue editing the group.":"The group's information is being updated. Once update is completed, you will be able to continue editing the group.","No more groups found.":"No more groups found.","No more users found.":"No more users found.","%1 Existing & %2 Unrecognized Users":"%1 Existing & %2 Unrecognized Users","Create user if ID not found":"Create user if ID not found","Please enter a sender name. For default sender name, use {from_name}":"Please enter a sender name. For default sender name, use {from_name}","Please enter a sender email. For default sender email, use {from_email}":"Please enter a sender email. For default sender email, use {from_email}","Please input a valid email address or {from_email} for the default address":"Please input a valid email address or {from_email} for the default address","Please enter a message subject":"Please enter a message subject","Please enter a message body":"Please enter a message body","Notification:":"Notification:","Sender Name:":"Sender Name:","Sender Email:":"Sender Email:","Subject:":"Subject:","Body:":"Body:","Edit Notification":"Edit Notification","Cancel":"Cancel","Update":"Update","Notifications":"Notifications","Selected":"Selected","Bulk Action":"Bulk Action","Disable":"Disable","Enable":"Enable","Edit Sender Info":"Edit Sender Info","Recipient":"Recipient","Type":"Type","Subject & Body":"Subject & Body","Sender Info":"Sender Info","Edit":"Edit","Upcoming Webcasts":"Upcoming Webcasts","Recorded Webcasts":"Recorded Webcasts","Broadcast will start soon":"Broadcast will start soon","To join, click the link below":"To join, click the link below","No media items found":"No media items found","Recorded":"Recorded","Live Now":"Live Now","Join Now":"Join Now","%1 to %2":"%1 to %2","No Webcasts Yet":"No Webcasts Yet","When you create webcast events, they will appear here":"When you create webcast events, they will appear here","When webcast events will be created, they will appear here":"When webcast events will be created, they will appear here","Add Webcast Event":"Add Webcast Event","Don't Show On Player":"Don't Show On Player","Show On Player":"Show On Player","Please note, the embed player is the default playback player. To use a different player, please contact your admin.":"Please note, the embed player is the default playback player. To use a different player, please contact your admin.","Are you sure you want to remove this media?":"Are you sure you want to remove this media?","character":"character","characters":"characters","Webcast event was updated successfully":"Webcast event was updated successfully","Webcast event was successfully removed from this meeting.":"Webcast event was successfully removed from this meeting.","Press the Enter key to add the email":"Press the Enter key to add the email","Show bio":"Show bio","Hide bio":"Hide bio","Clear All Filters":"Clear All Filters","Search...":"Search...","Column headers with buttons are sortable.":"Column headers with buttons are sortable.","Enter text to search for media":"Enter text to search for media","Search all media":"Search all media","Yes":"Yes","No":"No","Open channel %1":"Open channel %1","Open gallery %1":"Open gallery %1","Skip to main content":"Skip to main content","Open side bar":"Open side bar","Close side bar":"Close side bar","Additional items":"Additional items","Select language: %1":"Select language: %1","user menu":"user menu","badges":"badges","Copy":"Copy","Unlimited":"Unlimited","current credit status":"current credit status","Credit expiration date":"Credit expiration date","Embed Settings:":"Embed Settings:","Choose Player":"Choose Player","Max Embed Size":"Max Embed Size","Thumbnail Embed":"Thumbnail Embed","Auto Play":"Auto Play","Set as my default settings for media type: ":"Set as my default settings for media type: ","Embed Submission":"Embed Submission","Submit as Assignment":"Submit as Assignment","Copy Embed":"Copy Embed","Start & End Time":"Start & End Time","Start at":"Start at","Set start point based on player time":"Set start point based on player time","End at":"End at","Set end point based on player time":"Set end point based on player time","Select a start and \/ or end time for this embed. Note: users will still be able to play the entire media.":"Select a start and \/ or end time for this embed. Note: users will still be able to play the entire media.","press space or enter to edit":"press space or enter to edit","Approve":"Approve","Go to Media":"Go to Media","No Access":"No Access","Image Not Available":"Image Not Available","No results found":"No results found","Tags: click any tag to view media on the same topic":"Tags: click any tag to view media on the same topic","No media results were found. Try to adjust your search terms.":"No media results were found. Try to adjust your search terms.","A: ":"A: ","Q: ":"Q: ","%1 Question":"%1 Question","%1 Questions":"%1 Questions","Question":"Question","name":"name","text":"text","Unlisted":"Unlisted","Loading ...":"Loading ...","No Results":"No Results","Converting":"Converting","No Rules Found":"No Rules Found","Save Search":"Save Search","Clear Search":"Clear Search","Close search in video box":"Close search in video box","Open search in video box":"Open search in video box","This search was removed":"This search was removed","Search suggestions for %1":"Search suggestions for %1","Service type:":"Service type:","Status:":"Status:","Received date:":"Received date:","Collage Picture":"Collage Picture","Collage image of playlist %1":"Collage image of playlist %1","more":"more","Select File":"Select File","Upload Complete!":"Upload Complete!","Cannot connect to Kaltura Client":"Cannot connect to Kaltura Client","Failed to upload file: ":"Failed to upload file: ","Failed to create upload token":"Failed to create upload token","Searching...":"Searching...","Start typing to search for a user or a group":"Start typing to search for a user or a group","Remove option":"Remove option","No matches found":"No matches found","Type user or group name":"Type user or group name","Start typing characters, auto-complete will be presented for users and groups. For exact name search, use the quotation marks (e.g. 'John').":"Start typing characters, auto-complete will be presented for users and groups. For exact name search, use the quotation marks (e.g. 'John').","Select permissions:":"Select permissions:","at least one option required":"at least one option required","Upload Attachment":"Upload Attachment","Title:":"Title:","Provide end-users with a more descriptive title for this file (optional)":"Provide end-users with a more descriptive title for this file (optional)","Description:":"Description:","Provide end-users with a brief description of this files content (optional)":"Provide end-users with a brief description of this files content (optional)","Save & Preview":"Save & Preview","Checkbox for %1 Checked":"Checkbox for %1 Checked","Checkbox for %1 Unchecked":"Checkbox for %1 Unchecked","Update Sender Info":"Update Sender Info","Add":"Add","Import List of Users":"Import List of Users","Paste a list of user IDs in the form of open text.":"Paste a list of user IDs in the form of open text.","The user IDs may be separated by ',' or ';' or a line break. Spaces are not allowed.":"The user IDs may be separated by ',' or ';' or a line break. Spaces are not allowed.","Verify User IDs":"Verify User IDs","Creation Date":"Creation Date","Email":"Email","None":"None","Search for Users":"Search for Users","Back to Groups":"Back to Groups","Groups":"Groups","Manual":"Manual","Automatic":"Automatic","User Name":"User Name","User ID":"User ID","Email Address":"Email Address","App Role":"App Role","Creation Mode":"Creation Mode","Copy Group":"Copy Group","Ok":"Ok","Delete":"Delete","Add New Group":"Add New Group","Add Users:":"Add Users:","Bulk Actions":"Bulk Actions","Group Name":"Group Name","Updated Date":"Updated Date","# of Users":"# of Users","Processing...":"Processing...","Search for Groups":"Search for Groups","Group Name:*":"Group Name:*","Group ID:*":"Group ID:*","Group ID supports Alphanumeric characters and: ,!#$%&'*+?^_`{|}~.@-":"Group ID supports Alphanumeric characters and: ,!#$%&'*+?^_`{|}~.@-","Choose Group Name":"Choose Group Name","Toggle Sidebar":"Toggle Sidebar","Add To Playlist":"Add To Playlist","Search for Playlist":"Search for Playlist","New Playlist Title":"New Playlist Title","Create":"Create","Create New Playlist":"Create New Playlist","Cannot create playlist! Please try again later..":"Cannot create playlist! Please try again later..","Description":"Description","Create Playlist":"Create Playlist","Edit Playlist":"Edit Playlist","Playlist Details":"Playlist Details","Updated ":"Updated ","Playlist Tags":"Playlist Tags","Watch Now":"Watch Now","%1 with %2 media":"%1 with %2 media","Change Thumbnail":"Change Thumbnail","Upload":"Upload","More Button":"More Button","Move to Bottom":"Move to Bottom","Add description":"Add description","Add tags":"Add tags","Channel":"Media Gallery","All Shared Content":"All Shared Content","Playlist":"Playlist","My Playlist":"My Playlist","My Playlist %1":"My Playlist %1","Items":"Items","Add to Playlist":"Add to Playlist","Done":"Done","Search for Media":"Search for Media","Delete Playlist":"Delete Playlist","There are no playlists to show":"There are no playlists to show","Create a playlist, or change the search parameters":"Create a playlist, or change the search parameters","Edit %1":"Edit %1","Delete %1":"Delete %1","Collapsed View":"Collapsed View","Detailed View":"Detailed View","View Type":"View Type","Upload Complete":"Upload Complete"," File size is too big. Maximum size of %1 is allowed.":" File size is too big. Maximum size of %1 is allowed.","Your search did not match any user.":"Your search did not match any user.","Created by ":"Created by ","Collapsed view":"Collapsed view","Detailed view":"Detailed view","Table view":"Table view","on ":"on ","No Entries Found":"No Entries Found","See where the media is published":"See where the media is published","My Media":"My Media","Group Owner":"Group Owner","Co-Editor":"Co-Editor","Group Co-Editor":"Group Co-Editor","Co-Publisher":"Co-Publisher","Group Co-Publisher":"Group Co-Publisher","Co-Viewer":"Co-Viewer","Group Co-Viewer":"Group Co-Viewer","Owner":"Owner","Collaborator":"Collaborator","To make sure your pass is extra secure, please follow these guidelines:":"To make sure your pass is extra secure, please follow these guidelines:","Does not contain your name":"Does not contain your name","Password":"Password","Repeat Password":"Repeat Password","Passwords do not match":"Passwords do not match","Kaltura Mediasace":"Kaltura Mediasace","Lets Set Your Password":"Lets Set Your Password","You\u2019re almost there!":"You\u2019re almost there!","Oops!":"Oops!","We just sent you an email with the activation link. Please check your inbox, follow the link, and set your password to get started!":"We just sent you an email with the activation link. Please check your inbox, follow the link, and set your password to get started!","This link is invalid or has expired. Please enter your email address to receive a new link.":"This link is invalid or has expired. Please enter your email address to receive a new link.","Login":"Login","Go to Site":"Go to Site","Enter Email":"Enter Email","Invalid Email Address":"Invalid Email Address","Send":"Send","You are all set!":"You are all set!","Login to Site in":"Login to Site in","Must contain at least one lower case letter (a-z)":"Must contain at least one lower case letter (a-z)","Must contain at least one numerical digit (0-9)":"Must contain at least one numerical digit (0-9)","Must contain at least one of the following symbols: %~!@#$^*=+?[]{}":"Must contain at least one of the following symbols: %~!@#$^*=+?[]{}","Must be between 8 and 14 characters in length":"Must be between 8 and 14 characters in length","Must not contain the following characters: <>;":"Must not contain the following characters: <>;","The bulk operation for %1 '%2' has completed":"The bulk operation for %1 '%2' has completed","Type user name":"Type user name","Start typing to search for a user":"Start typing to search for a user","Phone":"Phone","Site":"Site","Add User":"Add User","Read More":"Read More","Read Less":"Read Less","Type something":"Type something","Click to remove %1":"Click to remove %1","go to playlist %1":"go to playlist %1","create":"create","Login to create new media":"Login to create new media","thumbnail for %1":"thumbnail for %1","thumbnail for playlist":"thumbnail for playlist","watch %1":"watch %1","watch %1, duration: %2":"watch %1, duration: %2","condition met":"condition met","condition not met":"condition not met","go to %1":"go to %1","Show Less Info for %1":"Show Less Info for %1","Show More Info for %1":"Show More Info for %1","Start Time":"Start Time","Select a start time for this embed. Note: users will still be able to play the entire media.":"Select a start time for this embed. Note: users will still be able to play the entire media.","Explore":"Explore","Explore %1":"Explore %1","%1 Detail":"%1 Detail","Set Privacy To All":"Set Privacy To All","All Media":"All Media","In Queue":"In Queue","Uploading %1 %":"Uploading %1 %","Processing":"Processing","Ready":"Ready","Processing Failed":"Processing Failed","Canceled":"Canceled","Media Page":"Media Page","in queue":"in queue","ready":"ready","%1 In Queue":"%1 In Queue","%1 Uploading":"%1 Uploading","%1 Processing":"%1 Processing","%1 Ready":"%1 Ready","%1 Canceled":"%1 Canceled","%1 Failed":"%1 Failed","Coming Soon":"Coming Soon","Upload failed for: %1":"Upload failed for: %1","Save Changes":"Save Changes","Unsaved Changes":"Unsaved Changes","Changes aren't saved. Are you sure you want to leave without saving them?":"Changes aren't saved. Are you sure you want to leave without saving them?","Leave":"Leave","Enter Entry Name":"Enter Entry Name","Cancel All Changes":"Cancel All Changes","Are you sure you want to cancel edit changes?<br\/>This action cannot be undone.":"Are you sure you want to cancel edit changes?<br\/>This action cannot be undone.","Pending":"Pending","Actions Button":"Actions Button","Playlist's name":"Playlist's name","Playlist's description":"Playlist's description","Title":"Title","Playlist's tags":"Playlist's tags","%1 menuitem %2 %3":"%1 menuitem %2 %3","Select Language":"Select Language","%1 additional items added.":"%1 additional items added.","Insert Link":"Insert Link","Insert Image":"Insert Image","Bold":"Bold","Italic":"Italic","Underline":"Underline","Unordered List":"Unordered List","Ordered List":"Ordered List","%1 session image":"%1 session image","Row position %1":"Row position %1","Change position for playlist %1. Press Enter to select the row.":"Change position for playlist %1. Press Enter to select the row.","after pressing enter or space, press tab to access filters":"after pressing enter or space, press tab to access filters","not sortable":"not sortable","sortable":"sortable","descending":"descending","ascending":"ascending","current progress: %1%":"current progress: %1%","Select...":"Select...","select":"select","%1 for %2 playlist":"%1 for %2 playlist","Open info box for %1, %2":"Open info box for %1, %2","Scheduled sessions":"Scheduled sessions","Previous sessions":"Previous sessions","See all sessions":"See all sessions","close":"close","Live":"Live","See profile page":"See profile page","Read more":"Read more","Duration custom slider, %1 value %2 sec":"Duration custom slider, %1 value %2 sec","untitled":"untitled","Cancel upload for entry %1":"Cancel upload for entry %1","Open Media page for entry %1":"Open Media page for entry %1","Edit details for entry %1":"Edit details for entry %1","Remove entry %1 upload":"Remove entry %1 upload","This site is protected by reCAPTCHA and the Google %1 Privacy Policy %2 and %3 Terms of Service %4 apply":"This site is protected by reCAPTCHA and the Google %1 Privacy Policy %2 and %3 Terms of Service %4 apply","Go to %1":"Go to %1","Go to %1 with duration: %2":"Go to %1 with duration: %2","%1 item pending approval.":"%1 item pending approval.","%1 items pending approval.":"%1 items pending approval.","View list":"View list","Publish":"Publish","Change publish locations":"Change publish locations","Only I can view":"Only I can view","Anyone with the link can view":"Anyone with the link can view","Anyone with entitlements to the gallery\/channel can view":"Anyone with entitlements to the gallery\/channel can view","Show less":"Show less","Published in %1:":"Published in %1:","Pending in:":"Pending in:","Rejected in:":"Rejected in:","Set media as private":"Set media as private","Are you sure you want to set this media as private? It will no longer be available for users in search results or with a link.":"Are you sure you want to set this media as private? It will no longer be available for users in search results or with a link.","Are you sure you want to set this media as private? It will be removed from all published locations in this application.":"Are you sure you want to set this media as private? It will be removed from all published locations in this application.","Set media as unlisted":"Set media as unlisted","Are you sure you want to set this media as unlisted? It will be available to any user with a link.":"Are you sure you want to set this media as unlisted? It will be available to any user with a link.","Are you sure you want to set this media as unlisted? It will be removed from all published locations in this application, but will be available for any users with a link to the media.":"Are you sure you want to set this media as unlisted? It will be removed from all published locations in this application, but will be available for any users with a link to the media.","Anyone with entitlements to the gallery\/channel can view.":"Anyone with entitlements to the gallery\/channel can view.","Save changes":"Save changes","Save":"Save","%1 (Channel ID: %2)":"%1 (Channel ID: %2)","%1 (Gallery ID: %2)":"%1 (Gallery ID: %2)","Category ID: %1":"Category ID: %1","Media is published to a private location":"Media is published to a private location","Publish in %1 location":"Publish in %1 location","Publish in %1 locations":"Publish in %1 locations","Channels":"Media Galleries","Galleries":"Galleries","Publishing locations":"Publishing locations","Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).":"Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).","Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).<br\/>In case guests are allowed to the site, they can also view content.":"Open - All logged-in users can view and contribute content (contribution is not allowed for viewer-role users).<br\/>In case guests are allowed to the site, they can also view content.","Restricted - All logged-in users can view content, only channel members can contribute.":"Restricted - All logged-in users can view content, only channel members can contribute.","Restricted - All logged-in users can view content, only gallery members can contribute.<br\/>In case guests are allowed to the site, they can also view content.":"Restricted - All logged-in users can view content, only gallery members can contribute.<br\/>In case guests are allowed to the site, they can also view content.","Restricted - All logged-in users can view content, only gallery members can contribute.":"Restricted - All logged-in users can view content, only gallery members can contribute.","Private - Only channel members can view and contribute content.":"Private - Only channel members can view and contribute content.","Private - Only gallery members can view and contribute content.":"Private - Only gallery members can view and contribute content.","Shared Repository - Only members can view and contribute content. Content can be published to other locations based on entitlements.":"Shared Repository - Only members can view and contribute content. Content can be published to other locations based on entitlements.","Public, Restricted - Anyone can view content (including guests). Only channel members can contribute according to their publishing entitlements.":"Public, Restricted - Anyone can view content (including guests). Only channel members can contribute according to their publishing entitlements.","Public, Open - Anyone can view content (including guests). All logged in users can contribute content (contribution is not allowed for viewer-role users).":"Public, Open - Anyone can view content (including guests). All logged in users can contribute content (contribution is not allowed for viewer-role users).","Moderated - Content will only be available after moderator approval.":"Moderated - Content will only be available after moderator approval.","Media is pending\/rejected in %1 channels.":"Media is pending\/rejected in %1 channels.","Media is pending\/rejected in %1 galleries.":"Media is pending\/rejected in %1 galleries.","See list":"See list","channels i manage":"channels i manage","more channels":"more channels","Search channels":"Search media galleries","Search galleries":"Search galleries","Enter text to search channels":"Enter text to search channels","Enter text to search galleries":"Enter text to search galleries","No channels found":"No channels found","No galleries found":"No galleries found","Exceptions":"Exceptions","External":"External","Unpublish from all applications":"Unpublish from all applications","You can unpublish from all applications.":"You can unpublish from all applications.","Unpublish now":"Unpublish now","This action will unpublish the media from all applications. Are you sure you want to continue?":"This action will unpublish the media from all applications. Are you sure you want to continue?","Unpublish":"Unpublish","Error updating media":"Error updating media","Are you sure you want to set %1 media items as unlisted? They will be available to any user with a link.":"Are you sure you want to set %1 media items as unlisted? They will be available to any user with a link.","Are you sure you want to set %1 media items as private? They will no longer be available for users in search results or with a link.":"Are you sure you want to set %1 media items as private? They will no longer be available for users in search results or with a link.","Off":"Off","On":"On","High Contrast is %1":"High Contrast is %1","%1 Result found":"%1 Result found","%1 Results found":"%1 Results found","next slide arrow":"next slide arrow","previous slide arrow":"previous slide arrow","See All":"See All","Watch":"Watch","You have subscribed to the channel.":"You have subscribed to the channel.","Error subscribing to the channel.":"Error subscribing to the channel.","You have been unsubscribed from channel.":"You have been unsubscribed from channel.","Error unsubscribing from channel.":"Error unsubscribing from channel.","Unsubscribe":"Unsubscribe","Subscribe":"Subscribe","Click to unsubscribe":"Click to unsubscribe","Click to subscribe":"Click to subscribe","Add a date for %1 input, the format is %2":"Add a date for %1 input, the format is %2","Session Image":"Session Image","You have selected %1 groups to delete.":"You have selected %1 groups to delete.","You can only delete up to 20 groups at a time. Only first 20 groups will be deleted.":"You can only delete up to 20 groups at a time. Only first 20 groups will be deleted."};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script>
+<script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    (() => {
+    const localeData = {"Processing":"Processing","Close engagement panel":"Close engagement panel","Open engagement panel":"Open engagement panel","Back":"Back","Send Message":"Send Message","Select Button":"Select Button"};
+    if (typeof LOCALE === 'object') {
+        for (var key in localeData) {
+            LOCALE[key] = localeData[key];
+        }
+    }
+    else {
+        LOCALE = localeData;
+    }
+})();
+    //]]>
+</script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+    var baseUrl = "";
+    var KMS_GLOBAL = KMS_GLOBAL || {};
+    KMS_GLOBAL.kmsVersion = "5.189.16";
+    KMS_GLOBAL.serverUrl = "https:\/\/ntulearnv1.ntu.edu.sg";
+    KMS_GLOBAL.moduleAssetUrlTemplate = "https:\/\/cfvod.sgp2.ovp.kaltura.com\/5.189.16.1352\/public\/build0\/{MODULE}\/asset\/{FILE_NAME}";
+    KMS_GLOBAL.coreAssetUrlTemplate  = "https:\/\/cfvod.sgp2.ovp.kaltura.com\/5.189.16.1352\/public\/build0\/{FILE_NAME}";
+    var cdnUrl = "https:\/\/cfvod.sgp2.ovp.kaltura.com\/5.189.16.1352\/public\/";
+    // kdp ready callbacks
+    var KmsJsCallbackReady = {};
+    // kms analytics flag
+            var Kms_Analytics_Active = false;
+    
+    // kms "instant-search" - determines whether search requires you to press enter to search.
+            var kmsInstantSearch = true;
+    
+    
+
+    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery-kms.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/modernizr.custom.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/kms5main.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/datetime.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/global.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/bootstrap/js/bootstrap.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/bootbox.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/spin.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://api.sg.kaltura.com/p/117/embedPlaykitJs/uiconf_id/23451080/versions/playkit-slate={latest}" nonce="7251700517553894553"></script><script type="text/javascript" src="https://api.sgp2.ovp.kaltura.com/content/static/player-scripts/thumbnail-embed.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://api.sg.kaltura.com/p/117/sp/11700/embedIframeJs/uiconf_id/23448392/partner_id/117" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/utils.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+window.kms_kWidgetJsLoader_baseurl = "https:\/\/api.sg.kaltura.com\/p\/((PARTNER_ID))\/sp\/((PARTNER_ID))00\/embedIframeJs\/uiconf_id\/((PLAYER_ID))\/partner_id\/((PARTNER_ID))";window.kms_kWidgetJsLoader_partnerId = 117;if (typeof(kms_kWidgetJsLoader) == "undefined") {kms_kWidgetJsLoader_loadedElsewherePlayerId = "23448392";} else {kms_kWidgetJsLoader.loadedElsewhere("23448392");};    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/dayjs/dayjs.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/dayjs/plugin/utc.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/dayjs/plugin/timezone.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/dayjs/plugin/advancedFormat.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/dayjs.phpFormat.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/isotope/jquery.isotope.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/isotope/jquery.waitforimages.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery.checkValidity.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/BootstrapFormHelpers/js/bootstrap-formhelpers-languages.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/BootstrapFormHelpers/js/bootstrap-formhelpers-languages.codes.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/BootstrapFormHelpers/js/bootstrap-formhelpers-countries.en_US.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/select2/select2.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/bootstrap-datepicker.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/ddMenu/js/jquery.kmsdrilldown.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/sidr/jquery.sidr.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery.sortable.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery.actual.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/typeahead.js/typeahead.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/hogan.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/thumbRotator.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/rAF.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/shrink/dist/jquery.shrink.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/timepicker/jquery.timepicker.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/bootstrap-colorpicker-2/js/bootstrap-colorpicker.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery.serialize-object.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/kmsCookie.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/kmsCookie.jquery.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery.patch.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+dayjs.extend(window.dayjs_plugin_utc);dayjs.extend(window.dayjs_plugin_timezone);dayjs.extend(window.dayjs_plugin_advancedFormat);dayjs.extend(window.dayjs_plugin_formatPhp);    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/captions/asset/captions-thumbRotator.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/chapters/asset/timeline-search.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+if (navigator.userAgent.match(/(iPod|iPhone|iPad)/)) {endlessScrollersPrototype.setManualMode();};    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/powtoon/asset/powtoon/asset/powtoon.js?ver=594663875f34563eccad2ac626416af8" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/accessibility/asset/color.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/accessibility/asset/accessibility.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/accessibility/asset/wcag.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/accessibility/asset/lesscssutils.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/Comments/asset/module_comments.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/embed/asset/embed-timer.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/scheduling/asset/scheduling.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery-ui.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/v2ui/asset/js/v2ui.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+GLOBAL_KMS = GLOBAL_KMS || {};    //]]>
+</script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+GLOBAL_KMS.EsearchClientProps = {"clientTag":"kms_client","ks":"djJ8MTE3fGtc-Hsjw5so6qUiaCKu9j5dq15GKpRT65gLXMXZqSWk7pSi8woPlPRBxqiG8w91rz3QMOnTyi6HDoKMlYLF48fLbXwjJKUQEyzK2pNpY86PkBGi59kWnLBQRnNpVfPeAcDUxemUEiq0hoYUrrWJIzFLQhYvKhYY9W3DdR51WPuIDiLkI_FeE1HDXlFB57-EYgRctFIl_6OzHtGIw6DsWSyPLb015vaqUhE1xo3SNMETj4DxxRnBB4Z5591Sqffe6HdG0brOyh_njwl8rZCUGDcO1yZ0eH-pHa6I5QU2jKhBkdSKeBbiPXR6ylhcmVuVKBXrvN7W51nhN-Ikm7DUj6GeVsayZRfr76GzuooF7r1DTLkY2hC-2ovFKBb1wvLnRdI-D60lZk1Mr5hm-UflPURNwI_ZJi7k_wfpoGecCCQkPTetUsxcmL_l2sftGQtyB83bSxtSr3FG36M81VZ78Vg=","serviceUrl":"https:\/\/api.sg.kaltura.com"}    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/xapi/asset/xapiEventListener.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/xapi/asset/xapiV2EventListener.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/xapi/asset/xapiV7EventListener.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+(function() {
+        KApps.xapiApp.config.videoEndPercent = 100;
+        KApps.xapiApp.config.videoEndSeconds = 0;
+        KApps.xapiApp.config.beaconInterval = "quarters";
+        KApps.xapiApp.config.sessionId = null;
+    })();    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/ltigrading/asset/grading.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+$(function () {KApps.gradingApp.displayGradeSubmissionStatus = true;});    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react-new/mediaspace.runtime.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react-new/mediaspace.polyfills.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react-new/mediaspace.vendor.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react-new/mediaspace.main.js" nonce="7251700517553894553"></script><script type="text/javascript" nonce="7251700517553894553">
+    //<![CDATA[
+MEDIASPACE.DsLayout.renderLegacyUnisphereProvider({"application":{"environmentName":"nvp1","isLoggedIn":true,"userRole":"privateOnlyRole","isKAF":true,"profileName":"BlackboardUltra","enableLoadButton":true,"partnerId":117,"serviceUrl":"https:\/\/api.sg.kaltura.com","cdnUrl":"https:\/\/api.sg.kaltura.com","loadThumbnailWithKs":false,"dateType":2,"shortDateFormat":"DD\/MM\/YYYY","eSearchInfoText":"To search for an exact match, please use Quotation Marks. Example: \u201ccomputer\u201d","enableEntryTitles":false,"timeDisplay":"am-pm","currentLocaleCode":"en","weekStartDay":"1","dateFormats":{"longDate":"D MMMM, YYYY","shortDate":"D MMMM, YYYY","longDateNoYear":"D MMMM, YYYY"},"playlistThumbLink":"playlist-page","unisphereWorkspaceUrl":"https:\/\/api.sgp2.ovp.kaltura.com\/apps\/unisphere\/v1","shouldCheckAsyncJobsStatus":false,"enableUnlisted":false,"cspNonce":"7251700517553894553","stickyNavbar":false,"userDataDisplay":["name","email"],"useUserTimezone":false,"timeZone":"Asia\/Singapore"},"search":{"eSearch":{"switchSortingToRelevance":true}},"calendar":{"getAppointmentUrl":"\/default\/calendar\/get-calendar-appointment","showEmailOption":false},"eventPlatform":{"eventListItem":{"showThumbnail":true,"showPresenters":true,"showPresenterModal":false,"joinBuffer":15}},"categories":{"rootGalleryCategoryId":"2260"},"toastMessages":{"info":[],"success":[],"warning":[],"error":[]},"analytics":{"serviceUrl":"analytics.sgp2.ovp.kaltura.com","appType":2,"appName":"BlackboardUltra","pageType":"BSE view","moduleName":"browseandembed","analyticsContext":""},"inAppMessaging":{"ks":"djJ8MTE3fLJb_o9MXmSqH57qZ3MrxUyB-nAd29Tphp_PvSgZLxnvG1ZckC233ycGdDRJxfuuiU-_na5LB94vUeNGqU_Blpvr20MKQ45Nlq7jWaUClYHlhzpg8pcJNV3GtqlT8kBobEx3kw9rnFJcSKfKKm5v57BGv1YhO5cQUvAkl1xCHkeNZeUl9p8fvcQjSz7HTtXI5U-2ZNYnPRwHFIb-3AH8T-d_1qcmh0SqCSHAwWirm6DpdnrMHmvJ7fM44msGHCjqyoWZFixD7mo154IdwVl1OZaVkkHc_56EO0QSxcQ_MGi_be75N2usY-bv3Rbauv__oQaBrcYlqjfxP7gJ0ZzqV2Gb5SMD_CA2PUTj6hxc0weBiaxKHFB_Bt5s8CD9-ljCt7Pwnilfa1jdbk-2-ui7EOKxPzLTcQTiKoOa3cS_k_hEAQcu5Sq2v-sFJoaOkvhoo8Nvbhqt-7596PI7WO8ji4ilWEDhPQBNZR6NifzJbBRhHz2CHpf0lm-UBRmfxspF8a63OyQEUujTWvNwXMlp2DP0Iy0f2zFggfiVKkVS5ooYTxfqiATpfXEH-_RKB1itDg=="},"channelPlaylists":{"playlistDisplay":"player"},"watchlist":{"localStorageExpiry":5},"theming":[]})    //]]>
+</script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/js/jquery.history.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react/vendor.min.js" nonce="7251700517553894553"></script><script type="text/javascript" src="https://cfvod.sgp2.ovp.kaltura.com/5.189.16.1352/public/build0/react/kmsComponents.min.js" nonce="7251700517553894553"></script>
+<script  nonce="7251700517553894553">
+    (function() {
+    	if (!window.GLOBAL_KMS) {
+            GLOBAL_KMS = {}
+        }
+        GLOBAL_KMS = GLOBAL_KMS || {};
+        GLOBAL_KMS.helpers = GLOBAL_KMS.helpers || {};
+        GLOBAL_KMS.helpers.weekStartDay = "1";
+        GLOBAL_KMS.helpers.shortDateFormat = "dd\/mm\/yyyy";
+        GLOBAL_KMS.helpers.isCookiesSameSiteNoneSupported = true;
+        GLOBAL_KMS.helpers.usePartitionedCookies = false;
+                try {
+            //check if error recording is on
+            var sessionData = localStorage.getItem("kmsSessionData");
+            if (sessionData !== null) {
+                sessionData += "6af56d37a8993;30918e8755c4;L2Jyb3dzZWFuZGVtYmVkL2luZGV4L21lZGlhLXJlZGlyZWN0L2VudHJ5aWQvMF84OGx6dHQ1YS9zaG93RGVzY3JpcHRpb24vZmFsc2Uvc2hvd1RpdGxlL2ZhbHNlL3Nob3dUYWdzL2ZhbHNlL3Nob3dEdXJhdGlvbi9mYWxzZS9zaG93T3duZXIvZmFsc2Uvc2hvd1VwbG9hZERhdGUvZmFsc2UvcGxheWVyU2l6ZS82MDh4NDAyL3BsYXllclNraW4vMjM0NDgzOTIvdGh1bWJFbWJlZC8wL2F1dG9QbGF5LzAvc3RhcnRUaW1lLzAvZW5kVGltZS8w,";
+                localStorage.setItem("kmsSessionData", sessionData);
+            }
+        } catch (e) {
+            //safety to make sure recording code won't affect user experience.
+        }
+    })();
+</script>
+
+    <!--FRONTCACHE-PLACHOLDER-->
+</head>
+
+    <body class="module-browseandembed controller-index action-media-redirect  menu-horizontal player-v2 v2ui shrink--enabled">
+                <div id="pageTop"></div>
+        <div id="loaderWrap" aria-live="assertive" role="alert" aria-label="Action in progress"></div>
+        <div id="contentWrap">
+            <div id="wrap" class="container-fluid" >
+                <div id='overlay'>
+                    <div id="ajaxStatusWrap">
+                        <div id="ajaxStatusMain"></div>
+                    </div>
+                </div>
+                <div id="alerts" ></div>
+                <div id="content" class='row-fluid' >
+                    
+    <style  nonce="8858458489255602395">
+        .module-browseandembed.controller-index.action-media-redirect.player-v7 #mediaContainer #wrapper.video {
+          position: static;
+        }
+    </style>
+<div class="row-fluid" id="entryMedia">
+    <div id="mediaContainer">
+        <style  nonce="8858458489255602395">
+    html.hosted #wrap#wrap {
+        padding: 0;
+        max-width: unset;
+    }
+</style>
+
+
+<div id="wrapper" class="video">
+    <!--[if !IE]> -->
+    <style  nonce="8858458489255602395">
+        #wrapper.video {
+            padding-top: 35px !important;
+            padding-bottom: 56.25% !important;
+        }
+    </style>
+    <!-- <![endif]-->
+
+	<div id="player">
+            		<script  nonce="7251700517553894553">
+/* script for KDP callbacks */
+var autoLoadEntry = true;
+var playerLoaded = false;
+
+jsCallbackReady = function(playerId) {
+    kdp = document.getElementById(playerId);
+    window.kdpStatusCallback = function kdpStatusCallback(status) {
+        try {
+            if (status) {
+                playerReady(playerId);
+            }
+            else {
+                kdp.addJsListener("kdpEmpty", "playerReady");
+                kdp.addJsListener("kdpReady", "playerReady");
+                kdp.addJsListener("entryFailed", "jsCallbackFailed");
+            }
+
+            $.each(KmsJsCallbackReady, function (key, value) {
+                window[value](playerId);
+            });
+
+        } catch (e) {
+            jsLog(e);
+        }
+    };
+    if (kdp) {
+        kdpEvaluateWrapper("{playerStatusProxy.kdpStatus}", kdpStatusCallback);
+    }
+    else {
+        kdpStatusCallback(false);
+    }
+};
+
+
+jsCallbackFailed = function(e) {
+    jsLog('Entry Failed callback from KDP: ' + e);
+};
+
+kmh = {};
+kmh.expandShrinkPlayer = function(entryId) {
+    /* enlarge or shrink the player */
+    $("#mediaContainer").toggleClass('span9').toggleClass('span12');
+    $('#player').height('100%');
+
+    $.event.trigger('kmsExpandShrinkPlayer', 'expandShrinkPlayer');
+};
+kmsExpandShrinkPlayer = function(){
+    kmh.expandShrinkPlayer();
+};
+
+function playerReady(playerId) {
+    if (playerLoaded == false) {
+        jsLog('KDP player Ready');
+        if (typeof debug != 'undefined' && debug) {
+            var end = new Date().getTime();
+            var time = end - start;
+            jsLog('KDP load time: ' + time + 'ms');
+        }
+        playerLoaded = true;
+    }
+}
+</script>
+
+
+    <!-- kdp embed -->
+        <div id='kplayer'></div>
+    <script  nonce="7251700517553894553">
+        /* flashvars allows you to set runtime uiVar configuration overrides.*/
+        var flashvars = {"ks":"djJ8MTE3fLgDpTvf3TK5-dyjXsPHmSJ779r5U3HmED5xG5QsnkWHqKMhMJwi2H-TcrjVLUMcO25WeOcxDX7R7Z4RCxYuLUQsm1z75EFlOQT1HQ6wwCltkGh2KSGwrsiEltMqBmiz2gRsiFbntrB_wqDMc2vV22bjjqbBtvZxhjCM07hTeuP4jaNpRJbnq-9NXcpw13SP9NwsBSqcLWGHHnPM9XxcHlmFkweeDGEz-vXLoIcDtgZtu1KLJFjAFKSwVmGHGO18ITqlDKcW9FjfRNTusWsTGcJps704T1Nn5p9k0GTX-LbsZszxgfQzIZ2oqOfhNf28y17w8SMTGKIA0JRhsrQb7H8Otgrr2rrVL98k0aiiWroJ1BlMxQHavJ1Y8hL6a2I3sjade95STDjfffO3fIbuiW2wIuGfb2ZrbdwqcSM6qhzAUw1odyxBKzLugEYofDeLrwmxhL4Xf5xBeN-DYONNJJifn3sztKkH02LpUra2GFSx0mpVT2Nsg2UdzVGNjpEo_g==","applicationName":"BlackboardUltra","applicationInstanceId":"117-2.kaf.kaltura.com","playbackContext":185757,"disableAlerts":"false","externalInterfaceDisabled":"false","autoPlay":"false","mediaProxy":{"mediaPlayFrom":0},"streamerType":"auto","localizationCode":"en","sideBarContainer":{"plugin":"true","position":"left","clickToClose":"true"},"chapters":{"plugin":"true","layout":"vertical","thumbnailRotator":"false"},"streamSelector":{"plugin":"true"},"EmbedPlayer":{"SpinnerTarget":"videoHolder"},"dualScreen":{"plugin":"true"},"hotspots":{"plugin":true},"EmbedPlayer.EnableIpadNativeFullscreen":true};
+        if(KMS_GLOBAL.playerKs) {
+            flashvars.ks = KMS_GLOBAL.playerKs;
+        }
+        if(KMS_GLOBAL.eventUserId) {
+            flashvars.userId = KMS_GLOBAL.eventUserId;
+        }
+        var kMainPlayerEmbedObject = {
+            'targetId': 'kplayer',
+            'wid': '_117',
+            'uiconf_id' : '23448392',
+            'entry_id' : '0_88lztt5a',
+            'flashvars': flashvars,
+            'params': {
+                'wmode': 'transparent'
+                }
+        };
+        kms_kWidgetJsLoader.embed('23448392', kMainPlayerEmbedObject);
+    </script>
+
+
+
+        	</div>
+</div>
+<div id="transcript-player-plugin" ></div>
+                                                    </div>
+</div>
+
+                </div>
+            </div>
+        </div>
+        <!-- viewhook start siteFooter -->
+<script  nonce="7251700517553894553">
+
+KApps.Accessibility.init();
+</script>
+
+<!-- viewhook end siteFooter -->            </body>
+</html>

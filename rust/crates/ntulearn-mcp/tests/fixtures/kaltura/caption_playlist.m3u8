@@ -1,0 +1,14 @@
+#EXTM3U
+#EXT-X-TARGETDURATION:300
+#EXT-X-VERSION:3
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:300.0,
+segmentIndex/1.vtt
+#EXTINF:300.0,
+segmentIndex/2.vtt
+#EXTINF:300.0,
+segmentIndex/3.vtt
+#EXTINF:273.0,
+segmentIndex/4.vtt
+#EXT-X-ENDLIST
