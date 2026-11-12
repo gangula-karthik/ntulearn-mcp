@@ -163,9 +163,10 @@ What changed (in order of impact):
 1. **Cross-run session cache** (`kaltura.json`, next to the cookie file —
    the pcv.json pattern): the player KS lives for hours and is
    course-wide, but every CLI invocation used to re-run the ~7-hop LTI
-   chain. Now the second run skips it. TTL 8 h (the KS is opaque; KAF player sessions are typically
-   minted for many hours); the first rejection drops the entry and
-   relaunches, so an over-long TTL costs ~0.6 s once, not correctness.
+   chain. Now the second run skips it. TTL 4 h (the KS is opaque; measured live, the player KS dies
+   between 4 and 5 hours after minting); the first rejection drops
+   the entry and relaunches, so an over-long TTL costs ~0.6 s once,
+   not correctness.
 2. **Bounded entry concurrency (32)**: videos were walked one at a time
    with a fixed 300 ms pause each; the bound replaces the pause as the
    politeness policy.
@@ -187,7 +188,7 @@ Why a cold run cannot go under ~2.5 s: the LTI 1.3 chain is six
 sequential, data-dependent server round-trips (placement → oidc-init →
 gateway → auth page → form POST → media page) whose server-side
 latencies sum to ~2 s, one of them behind a ~1 s TLS handshake. The
-transcript fan-out after launch is ~0.55 s. The 8 h session cache keeps
+transcript fan-out after launch is ~0.55 s. The 4 h session cache keeps
 that whole chain off the hot path. Phase timings are available with
 `NTULEARN_PERF_TRACE=1` (stderr): discovery, each launch hop, transcripts.
 
