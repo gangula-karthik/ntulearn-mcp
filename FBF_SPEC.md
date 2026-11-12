@@ -1,4 +1,4 @@
-# FeedbackFruits (FBF) integration spec — ntulearn-mcp v0.7.6
+# FeedbackFruits (FBF) integration spec — ntulearn-mcp v0.8.0
 
 Reverse-engineered 6 Nov 2026, live-verified end-to-end against the CC0007
 "Week 13 Final Peer Evaluation" (NTULearn course `_2706844_1`, content `_6208502_1`).
