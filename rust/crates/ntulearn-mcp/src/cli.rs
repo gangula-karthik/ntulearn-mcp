@@ -59,19 +59,44 @@ pub struct CmdSpec {
 }
 
 const fn s(flag: &'static str, required: bool, hint: &'static str) -> ArgSpec {
-    ArgSpec { flag, kind: ArgKind::Str, required, hint }
+    ArgSpec {
+        flag,
+        kind: ArgKind::Str,
+        required,
+        hint,
+    }
 }
 const fn i(flag: &'static str, hint: &'static str) -> ArgSpec {
-    ArgSpec { flag, kind: ArgKind::Int, required: false, hint }
+    ArgSpec {
+        flag,
+        kind: ArgKind::Int,
+        required: false,
+        hint,
+    }
 }
 const fn b(flag: &'static str, hint: &'static str) -> ArgSpec {
-    ArgSpec { flag, kind: ArgKind::Bool, required: false, hint }
+    ArgSpec {
+        flag,
+        kind: ArgKind::Bool,
+        required: false,
+        hint,
+    }
 }
 const fn a(flag: &'static str, hint: &'static str) -> ArgSpec {
-    ArgSpec { flag, kind: ArgKind::Arr, required: false, hint }
+    ArgSpec {
+        flag,
+        kind: ArgKind::Arr,
+        required: false,
+        hint,
+    }
 }
 const fn e(flag: &'static str, vals: &'static [&'static str], hint: &'static str) -> ArgSpec {
-    ArgSpec { flag, kind: ArgKind::Enum(vals), required: false, hint }
+    ArgSpec {
+        flag,
+        kind: ArgKind::Enum(vals),
+        required: false,
+        hint,
+    }
 }
 
 pub const COMMANDS: &[CmdSpec] = &[
@@ -89,7 +114,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         summary: "one level of a course's content tree",
         args: &[
             s("course_id", true, "course id, e.g. _2706844_1"),
-            s("parent_id", false, "folder id to drill into (omit = top level)"),
+            s(
+                "parent_id",
+                false,
+                "folder id to drill into (omit = top level)",
+            ),
             i("limit", "max rows (default 50)"),
             i("offset", "pagination offset"),
         ],
@@ -100,7 +129,10 @@ pub const COMMANDS: &[CmdSpec] = &[
         short: "get_content_tree",
         alias: "tree",
         summary: "entire content tree of a course in one call",
-        args: &[s("course_id", true, "course id"), i("max_depth", "recursion depth (default 5)")],
+        args: &[
+            s("course_id", true, "course id"),
+            i("max_depth", "recursion depth (default 5)"),
+        ],
         list_key: "matches",
         cols: &["path", "title", "type", "id"],
     },
@@ -137,7 +169,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         args: &[
             s("course_id", true, "course id"),
             s("content_id", true, "content item id"),
-            s("destination_dir", false, "target dir (default NTULEARN_DOWNLOAD_DIR or ./downloads)"),
+            s(
+                "destination_dir",
+                false,
+                "target dir (default NTULEARN_DOWNLOAD_DIR or ./downloads)",
+            ),
         ],
         list_key: "files",
         cols: &["path", "bytes"],
@@ -149,7 +185,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         args: &[
             s("course_id", true, "course id"),
             s("content_id", true, "content item id"),
-            e("mode", &["text", "vision", "auto"], "pdf mode: text (cheap) or vision (diagrams)"),
+            e(
+                "mode",
+                &["text", "vision", "auto"],
+                "pdf mode: text (cheap) or vision (diagrams)",
+            ),
             s("pages", false, "pdf page range, e.g. 1-10"),
         ],
         list_key: "files",
@@ -163,7 +203,17 @@ pub const COMMANDS: &[CmdSpec] = &[
             a("course_ids", "scope to course ids"),
             s("since", false, "ISO-8601 start (default now)"),
             s("until", false, "ISO-8601 end (default +2w)"),
-            e("type", &["Course", "GradebookColumn", "Institution", "OfficeHours", "Personal"], "item type; GradebookColumn = due dates"),
+            e(
+                "type",
+                &[
+                    "Course",
+                    "GradebookColumn",
+                    "Institution",
+                    "OfficeHours",
+                    "Personal",
+                ],
+                "item type; GradebookColumn = due dates",
+            ),
             i("limit", "max rows (default 50)"),
             i("offset", "pagination offset"),
         ],
@@ -214,7 +264,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         alias: "messages",
         summary: "course messages (inbox/sent)",
         args: &[
-            e("folder", &["inbox", "sent"], "mailbox folder (default inbox)"),
+            e(
+                "folder",
+                &["inbox", "sent"],
+                "mailbox folder (default inbox)",
+            ),
             b("unread_only", "only unread"),
             s("since", false, "ISO-8601 cutoff"),
             i("limit", "max rows (default 50)"),
@@ -259,7 +313,10 @@ pub const COMMANDS: &[CmdSpec] = &[
         short: "get_group_members",
         alias: "members",
         summary: "members of one group",
-        args: &[s("course_id", true, "course id"), s("group_id", true, "group id")],
+        args: &[
+            s("course_id", true, "course id"),
+            s("group_id", true, "group id"),
+        ],
         list_key: "members",
         cols: &["name", "userId"],
     },
@@ -267,7 +324,10 @@ pub const COMMANDS: &[CmdSpec] = &[
         short: "summarize_course",
         alias: "summary",
         summary: "one-shot course digest (staff, contents, dates)",
-        args: &[s("course_id", true, "course id"), b("include_contents", "include content tree (default true)")],
+        args: &[
+            s("course_id", true, "course id"),
+            b("include_contents", "include content tree (default true)"),
+        ],
         list_key: "",
         cols: &[],
     },
@@ -324,7 +384,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         summary: "FeedbackFruits peer-evaluation status (tasks, deadlines, progress)",
         args: &[
             s("course_id", true, "course id"),
-            s("content_id", false, "fbf content item id (omit = auto-discover)"),
+            s(
+                "content_id",
+                false,
+                "fbf content item id (omit = auto-discover)",
+            ),
         ],
         list_key: "activities",
         cols: &["contentId", "title", "completion", "gradesPublishedAt"],
@@ -336,7 +400,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         args: &[
             s("course_id", true, "course id"),
             s("content_id", true, "fbf content item id"),
-            e("direction", &["given", "received"], "given = you rated teammates; received = ratings for you"),
+            e(
+                "direction",
+                &["given", "received"],
+                "given = you rated teammates; received = ratings for you",
+            ),
         ],
         list_key: "reviews",
         cols: &["teammate", "criterion", "option", "weight"],
@@ -365,7 +433,11 @@ pub const COMMANDS: &[CmdSpec] = &[
             s("content_id", true, "fbf content item id"),
             s("teammate", true, "substring of teammate name"),
             s("text", true, "review text"),
-            s("improve_text", false, "text for 'improve' criteria (default: text)"),
+            s(
+                "improve_text",
+                false,
+                "text for 'improve' criteria (default: text)",
+            ),
             b("dry_run", "resolve + show only (default true)"),
         ],
         list_key: "",
@@ -377,7 +449,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         summary: "Peerceptiv peer-evaluation status (deadlines, progress, teammates)",
         args: &[
             s("course_id", true, "course id"),
-            s("content_id", false, "pcv content item id (omit = auto-discover)"),
+            s(
+                "content_id",
+                false,
+                "pcv content item id (omit = auto-discover)",
+            ),
         ],
         list_key: "activities",
         cols: &["contentId", "title", "group"],
@@ -389,7 +465,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         args: &[
             s("course_id", true, "course id"),
             s("content_id", true, "pcv content item id"),
-            e("direction", &["given", "received"], "given = you rated teammates; received = ratings for you"),
+            e(
+                "direction",
+                &["given", "received"],
+                "given = you rated teammates; received = ratings for you",
+            ),
         ],
         list_key: "reviews",
         cols: &["teammate", "criterion", "score", "level"],
@@ -429,7 +509,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         summary: "Kaltura-embedded videos in a course (entry ids for transcripts/downloads)",
         args: &[
             s("course_id", true, "course id"),
-            s("content_id", false, "one content item only (omit = walk whole course)"),
+            s(
+                "content_id",
+                false,
+                "one content item only (omit = walk whole course)",
+            ),
         ],
         list_key: "videos",
         cols: &["contentId", "title", "entryId", "placementId"],
@@ -440,9 +524,21 @@ pub const COMMANDS: &[CmdSpec] = &[
         summary: "download caption tracks as .vtt/.txt (whole course or one video)",
         args: &[
             s("course_id", true, "course id"),
-            s("content_id", false, "kaltura content item id (omit = every video)"),
-            s("save_dir", false, "output dir (default NTULEARN_DOWNLOAD_DIR)"),
-            e("format", &["vtt", "txt", "both"], "files to write (default both)"),
+            s(
+                "content_id",
+                false,
+                "kaltura content item id (omit = every video)",
+            ),
+            s(
+                "save_dir",
+                false,
+                "output dir (default NTULEARN_DOWNLOAD_DIR)",
+            ),
+            e(
+                "format",
+                &["vtt", "txt", "both"],
+                "files to write (default both)",
+            ),
         ],
         list_key: "videos",
         cols: &["title", "entryId", "words", "segments"],
@@ -454,7 +550,11 @@ pub const COMMANDS: &[CmdSpec] = &[
         args: &[
             s("course_id", true, "course id"),
             s("content_id", true, "kaltura content item id"),
-            e("quality", &["smallest", "best", "original"], "flavor to pick (default smallest)"),
+            e(
+                "quality",
+                &["smallest", "best", "original"],
+                "flavor to pick (default smallest)",
+            ),
         ],
         list_key: "",
         cols: &[],
@@ -463,7 +563,9 @@ pub const COMMANDS: &[CmdSpec] = &[
 
 pub fn find_cmd(name: &str) -> Option<&'static CmdSpec> {
     let stripped = name.strip_prefix("ntulearn_").unwrap_or(name);
-    COMMANDS.iter().find(|c| c.alias == name || c.short == stripped)
+    COMMANDS
+        .iter()
+        .find(|c| c.alias == name || c.short == stripped)
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +611,10 @@ fn snake_to_kebab(f: &str) -> String {
 }
 
 fn split_list(v: &str) -> Vec<String> {
-    v.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()
+    v.split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// Parse `argv` (after the command token) into a JSON args object.
@@ -521,7 +626,15 @@ pub fn parse_invocation(cmd_token: &str, rest: &[String]) -> Result<Invocation, 
     let spec = find_cmd(cmd_token)
         .ok_or_else(|| format!("unknown command: {cmd_token} (run `ntulearn-mcp help`)"))?;
 
-    let mut out = OutputFlags { raw: false, md: false, toon: false, fields: None, max_chars: 200, full: false, chars_set: false };
+    let mut out = OutputFlags {
+        raw: false,
+        md: false,
+        toon: false,
+        fields: None,
+        max_chars: 200,
+        full: false,
+        chars_set: false,
+    };
     let mut map: Map<String, Value> = Map::new();
     let mut positional: Vec<String> = Vec::new();
     let mut i = 0usize;
@@ -620,7 +733,11 @@ pub fn parse_invocation(cmd_token: &str, rest: &[String]) -> Result<Invocation, 
         if let ArgKind::Enum(vals) = kind {
             if let Some(sv) = parsed.as_str() {
                 if !vals.contains(&sv) {
-                    return Err(format!("--{} must be one of: {}", snake_to_kebab(&flag), vals.join("|")));
+                    return Err(format!(
+                        "--{} must be one of: {}",
+                        snake_to_kebab(&flag),
+                        vals.join("|")
+                    ));
                 }
             }
         }
@@ -726,7 +843,10 @@ pub fn render_compact(inv: &Invocation, payload: &Value) -> String {
     if let Some((arr, key)) = items {
         let rows = arr.as_array().cloned().unwrap_or_default();
         let total = payload.get("total").and_then(|v| v.as_u64());
-        let has_more = payload.get("hasMore").and_then(|v| v.as_bool()).unwrap_or(false);
+        let has_more = payload
+            .get("hasMore")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let next = payload.get("nextOffset").and_then(|v| v.as_u64());
         let mut head = format!("# {} - {} row(s)", key, rows.len());
         if let Some(t) = total {
@@ -738,6 +858,9 @@ pub fn render_compact(inv: &Invocation, payload: &Value) -> String {
             head.push_str(&format!(" (more: --offset {})", next.unwrap_or(0)));
         }
         lines.push(head);
+        // Per-item notes (failures, no-captions) must never be invisible: a
+        // run whose every video failed still has to say why.
+        push_notes(payload, max, &mut lines);
         if rows.is_empty() {
             return lines.join("\n");
         }
@@ -779,6 +902,7 @@ pub fn render_compact(inv: &Invocation, payload: &Value) -> String {
                 .collect();
             lines.push(cells.join("\t"));
         }
+        push_notes(payload, max, &mut lines);
     } else {
         // Object payload: flat key = value lines (nested -> compact JSON).
         lines.push(format!("# {}", spec.alias));
@@ -787,10 +911,38 @@ pub fn render_compact(inv: &Invocation, payload: &Value) -> String {
     lines.join("\n")
 }
 
+/// A top-level non-empty `notes` array (per-item failure/no-captions rows)
+/// rendered as `!`-prefixed lines under the table. Only
+/// kaltura_transcripts emits this shape today; any tool that adopts the
+/// same convention gets the same visibility.
+fn push_notes(payload: &Value, max: usize, lines: &mut Vec<String>) {
+    let Some(notes) = payload.get("notes").and_then(|v| v.as_array()) else {
+        return;
+    };
+    if notes.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push(format!("! {} note(s)", notes.len()));
+    for n in notes {
+        let title = n
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("untitled")
+            .trim();
+        let title = if title.is_empty() { "untitled" } else { title };
+        let note = n.get("note").and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(format!("! {title}: {}", truncate(note, max)));
+    }
+}
+
 /// Fields that carry long-form content: capped at `text_chars` (2000 by
 /// default) instead of the generic 200-char cell cap.
 fn is_text_key(k: &str) -> bool {
-    matches!(k, "text" | "content" | "body" | "markdown" | "rawText" | "snippet" | "description")
+    matches!(
+        k,
+        "text" | "content" | "body" | "markdown" | "rawText" | "snippet" | "description"
+    )
 }
 
 fn emit_kv(v: &Value, max: usize, tmax: usize, lines: &mut Vec<String>) {
@@ -816,10 +968,9 @@ fn cell(key: &str, v: Option<&Value>, max: usize, tmax: usize) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(sv)) => truncate(sv, cap),
-        Some(Value::Object(_)) | Some(Value::Array(_)) => truncate(
-            &serde_json::to_string(v.unwrap()).unwrap_or_default(),
-            cap,
-        ),
+        Some(Value::Object(_)) | Some(Value::Array(_)) => {
+            truncate(&serde_json::to_string(v.unwrap()).unwrap_or_default(), cap)
+        }
         Some(other) => scalar(other),
     }
 }
@@ -854,7 +1005,9 @@ pub fn help_text() -> String {
     out.push_str("  multi \"cmd ...\" ...     run several commands CONCURRENTLY in one process\n");
     out.push_str("  selfbench               built-in token + latency benchmark\n");
     out.push_str("  setup | check | refresh cookie lifecycle\n");
-    out.push_str("  update                  check for / install a newer release (--check, --yes,\n");
+    out.push_str(
+        "  update                  check for / install a newer release (--check, --yes,\n",
+    );
     out.push_str("                          --auto on|off|ask, --status)\n");
     out.push_str("  version                 print this binary's version\n");
     out.push_str("  (no args)               run as an MCP server over stdio\n\n");
@@ -866,11 +1019,20 @@ pub fn help_text() -> String {
             .filter(|a| a.required)
             .map(|a| snake_to_kebab(a.flag))
             .collect();
-        out.push_str(&format!("  {:<12} {:<26} {}\n", c.alias, req.join(" "), c.summary));
+        out.push_str(&format!(
+            "  {:<12} {:<26} {}\n",
+            c.alias,
+            req.join(" "),
+            c.summary
+        ));
     }
     out.push_str("\noutput: compact TSV by default; --json = raw payload; --md = markdown\n");
-    out.push_str("trim:   --fields a,b | --max-chars N (default 200; --full disables) | --limit N\n");
-    out.push_str("        text-bearing fields (text/body/...) default to a 2000-char cap instead\n");
+    out.push_str(
+        "trim:   --fields a,b | --max-chars N (default 200; --full disables) | --limit N\n",
+    );
+    out.push_str(
+        "        text-bearing fields (text/body/...) default to a 2000-char cap instead\n",
+    );
     out
 }
 
@@ -890,7 +1052,11 @@ pub fn help_command(cmd_token: &str) -> String {
         .map(|a| snake_to_kebab(a.flag))
         .collect();
     if !req.is_empty() {
-        out.push_str(&format!("\n  usage: ntulearn-mcp {} {}\n", spec.alias, req.join(" ")));
+        out.push_str(&format!(
+            "\n  usage: ntulearn-mcp {} {}\n",
+            spec.alias,
+            req.join(" ")
+        ));
     }
     out.push_str("\nflags:\n");
     for a in spec.args.iter() {
@@ -932,7 +1098,10 @@ pub async fn run_one(state: &Arc<AppState>, inv: &Invocation) -> Result<String, 
         // Reuse the MCP markdown renderer via the full dispatch path.
         let args = {
             let mut m = inv.args.as_object().cloned().unwrap_or_default();
-            m.insert("response_format".to_string(), Value::String("markdown".to_string()));
+            m.insert(
+                "response_format".to_string(),
+                Value::String("markdown".to_string()),
+            );
             Value::Object(m)
         };
         let rendered =
@@ -1051,7 +1220,10 @@ async fn run_multi(parts: &[String]) -> i32 {
                 continue;
             }
             "version" | "--version" | "-V" => {
-                direct.push((part.clone(), format!("ntulearn-mcp {}", env!("CARGO_PKG_VERSION"))));
+                direct.push((
+                    part.clone(),
+                    format!("ntulearn-mcp {}", env!("CARGO_PKG_VERSION")),
+                ));
                 continue;
             }
             _ => {}
@@ -1110,12 +1282,12 @@ async fn run_multi(parts: &[String]) -> i32 {
         println!();
     }
     let ok = direct.len() + invs.len() - fails;
-    println!("# {ok}/{} ok in {:.1?}", direct.len() + invs.len(), t0.elapsed());
-    if fails > 0 {
-        1
-    } else {
-        0
-    }
+    println!(
+        "# {ok}/{} ok in {:.1?}",
+        direct.len() + invs.len(),
+        t0.elapsed()
+    );
+    if fails > 0 { 1 } else { 0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,8 +1304,11 @@ mod tests {
 
     #[test]
     fn parses_positional_required_args() {
-        let inv =
-            parse_invocation("contents", &toks(&["_2706844_1", "_123_1", "--limit", "10"])).unwrap();
+        let inv = parse_invocation(
+            "contents",
+            &toks(&["_2706844_1", "_123_1", "--limit", "10"]),
+        )
+        .unwrap();
         assert_eq!(inv.spec.short, "get_course_contents");
         assert_eq!(inv.args["course_id"], "_2706844_1");
         assert_eq!(inv.args["parent_id"], "_123_1");
@@ -1144,7 +1319,11 @@ mod tests {
     fn parses_kebab_flags_and_eq_values() {
         let inv = parse_invocation(
             "announcements",
-            &toks(&["--course-ids=_1_1,_2_2", "--since=2026-09-01T00:00:00Z", "--limit=5"]),
+            &toks(&[
+                "--course-ids=_1_1,_2_2",
+                "--since=2026-09-01T00:00:00Z",
+                "--limit=5",
+            ]),
         )
         .unwrap();
         assert_eq!(inv.args["course_ids"][0], "_1_1");
@@ -1160,7 +1339,8 @@ mod tests {
 
     #[test]
     fn bare_bool_flag_followed_by_another_flag() {
-        let inv = parse_invocation("messages", &toks(&["--unread-only", "--folder", "sent"])).unwrap();
+        let inv =
+            parse_invocation("messages", &toks(&["--unread-only", "--folder", "sent"])).unwrap();
         assert_eq!(inv.args["unread_only"], true);
         assert_eq!(inv.args["folder"], "sent");
     }
@@ -1219,7 +1399,13 @@ mod tests {
             }]
         });
         let out = render_compact(&inv, &payload);
-        let text_cell = out.lines().next_back().unwrap().split('\t').next_back().unwrap();
+        let text_cell = out
+            .lines()
+            .next_back()
+            .unwrap()
+            .split('\t')
+            .next_back()
+            .unwrap();
         // capped at 2000 chars + ellipsis marker
         assert_eq!(text_cell.chars().count(), 2000);
         // explicit --max-chars applies to text too
@@ -1261,15 +1447,15 @@ mod tests {
         );
     }
 
-#[test]
-fn toon_flag_parsing_and_exclusivity() {
-    let inv = parse_invocation("courses", &toks(&["--toon"])).unwrap();
-    assert!(inv.toon && !inv.raw && !inv.md);
-    // Mutually exclusive with --json and --md.
-    assert!(parse_invocation("courses", &toks(&["--toon", "--json"])).is_err());
-    assert!(parse_invocation("courses", &toks(&["--toon", "--md"])).is_err());
-    // Default off.
-    let inv = parse_invocation("courses", &toks(&[])).unwrap();
-    assert!(!inv.toon);
-}
+    #[test]
+    fn toon_flag_parsing_and_exclusivity() {
+        let inv = parse_invocation("courses", &toks(&["--toon"])).unwrap();
+        assert!(inv.toon && !inv.raw && !inv.md);
+        // Mutually exclusive with --json and --md.
+        assert!(parse_invocation("courses", &toks(&["--toon", "--json"])).is_err());
+        assert!(parse_invocation("courses", &toks(&["--toon", "--md"])).is_err());
+        // Default off.
+        let inv = parse_invocation("courses", &toks(&[])).unwrap();
+        assert!(!inv.toon);
+    }
 }

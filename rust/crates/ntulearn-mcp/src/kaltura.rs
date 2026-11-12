@@ -48,7 +48,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::AppState;
@@ -1084,9 +1084,164 @@ struct CachedKaltura {
     cookies: HashMap<String, String>,
 }
 
+/// Concurrent VTT segment fetches within one transcript (the segments are
+/// independent files on the CDN; the bound keeps one video from opening a
+/// connection per segment at once).
+const KALTURA_SEGMENT_CONCURRENCY: usize = 6;
+
 fn sessions() -> &'static Mutex<HashMap<String, CachedKaltura>> {
     static SESSIONS: OnceLock<Mutex<HashMap<String, CachedKaltura>>> = OnceLock::new();
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Serialize re-launches across concurrent transcript fetches: when the KS
+/// dies mid-run, every in-flight entry sees the failure at once — only the
+/// first caller may run the chain, the rest must reuse its result.
+fn relaunch_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+// -- cross-run session file (kaltura.json, mirroring pcv.rs / pcv.json) ----
+
+/// The KS is an opaque "v2|..." token with no readable expiry, so a
+/// conservative TTL bounds staleness; the first INVALID_KS drops the entry
+/// long before the TTL matters in practice.
+const KALTURA_SESSION_TTL_SECS: i64 = 3600;
+const KALTURA_SESSION_FILE: &str = "kaltura.json";
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CachedKalturaSessions {
+    #[serde(default)]
+    sessions: HashMap<String, CachedKalturaFileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedKalturaFileEntry {
+    ks: String,
+    partner_id: u32,
+    #[serde(default)]
+    cookies: HashMap<String, String>,
+    #[serde(default)]
+    expires_at: Option<i64>,
+}
+
+/// Same config dir as the cookie file (cookie.rs::cookie_file_path) — one
+/// place for everything this server persists about the NTULearn session.
+fn kaltura_session_file() -> std::path::PathBuf {
+    crate::cookie::cookie_file_path()
+        .parent()
+        .map(|p| p.join(KALTURA_SESSION_FILE))
+        .unwrap_or_else(|| std::path::PathBuf::from(KALTURA_SESSION_FILE))
+}
+
+/// Load the cache; a missing or corrupt file is an empty session, not an
+/// error — the launch chain will simply rewrite it.
+fn load_cached_sessions(path: &std::path::Path) -> CachedKalturaSessions {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Persist the cache (best-effort, like cookie.rs::write_cookie).
+fn save_cached_sessions(path: &std::path::Path, sessions: &CachedKalturaSessions) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(sessions) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// The unexpired file-cache entry for a course, if any. An entry whose KS
+/// is empty, whose partner is unknown, or whose TTL passed is ignored (and
+/// pruned from the file so it cannot be resurrected).
+fn cached_session_entry_in(file: &Path, course_id: &str) -> Option<CachedKalturaFileEntry> {
+    let mut sessions = load_cached_sessions(file);
+    let entry = sessions.sessions.get(course_id)?.clone();
+    let live = !entry.ks.is_empty()
+        && entry.partner_id != 0
+        && entry.expires_at.is_some_and(|exp| exp > now_secs());
+    if !live {
+        sessions.sessions.remove(course_id);
+        save_cached_sessions(file, &sessions);
+    }
+    Some(entry).filter(|_| live)
+}
+
+fn cached_session_entry(course_id: &str) -> Option<CachedKalturaFileEntry> {
+    cached_session_entry_in(&kaltura_session_file(), course_id)
+}
+
+/// Remember a freshly minted session in the file cache (best-effort).
+fn remember_session_in(
+    file: &Path,
+    course_id: &str,
+    ks: &str,
+    partner_id: u32,
+    cookies: &HashMap<String, String>,
+) {
+    let mut sessions = load_cached_sessions(file);
+    sessions.sessions.insert(
+        course_id.to_string(),
+        CachedKalturaFileEntry {
+            ks: ks.to_string(),
+            partner_id,
+            cookies: cookies.clone(),
+            expires_at: Some(now_secs() + KALTURA_SESSION_TTL_SECS),
+        },
+    );
+    save_cached_sessions(file, &sessions);
+}
+
+fn remember_session(course_id: &str, ks: &str, partner_id: u32, cookies: &HashMap<String, String>) {
+    remember_session_in(&kaltura_session_file(), course_id, ks, partner_id, cookies)
+}
+
+/// Drop the file-cache entry for a course (the KS was rejected).
+fn forget_session_in(file: &Path, course_id: &str) {
+    let mut sessions = load_cached_sessions(file);
+    if sessions.sessions.remove(course_id).is_some() {
+        save_cached_sessions(file, &sessions);
+    }
+}
+
+fn forget_session(course_id: &str) {
+    forget_session_in(&kaltura_session_file(), course_id)
+}
+
+/// Drop the cached session for a course ONLY if it is still `ks`: under
+/// concurrent transcript fetches a straggler's failure must never evict a
+/// freshly re-launched session (that would re-run the whole LTI chain).
+fn invalidate_if_ks(course_id: &str, ks: &str) {
+    if let Ok(mut guard) = sessions().lock() {
+        let still_stale = guard.get(course_id).map(|e| e.ks == ks).unwrap_or(false);
+        if still_stale {
+            guard.remove(course_id);
+        } else {
+            return;
+        }
+    }
+    // the in-memory copy was the rejected one — the file entry is stale too
+    let file = kaltura_session_file();
+    let mut sessions = load_cached_sessions(&file);
+    if sessions
+        .sessions
+        .get(course_id)
+        .map(|e| e.ks == ks)
+        .unwrap_or(false)
+    {
+        sessions.sessions.remove(course_id);
+        save_cached_sessions(&file, &sessions);
+    }
 }
 
 // ===========================================================================
@@ -1098,6 +1253,7 @@ fn sessions() -> &'static Mutex<HashMap<String, CachedKaltura>> {
 /// valid for every entry in it (live-verified). Obtain via
 /// [`KalturaSession::launch`]; the launch is cached per course_id so the
 /// second tool call in a course is zero extra chain hops.
+#[derive(Clone)]
 pub struct KalturaSession {
     course_id: String,
     ks: String,
@@ -1130,7 +1286,8 @@ impl KalturaSession {
         course_id: &str,
         content_id: &str,
     ) -> Result<Self, String> {
-        // Fast path: a live session for this course (KS valid for any entry).
+        // Fast path 1: a live session for this course in this process
+        // (KS valid for any entry).
         {
             let cache = sessions();
             let Ok(guard) = cache.lock() else {
@@ -1146,6 +1303,35 @@ impl KalturaSession {
                     );
                 }
             }
+        }
+        // Fast path 2: a remembered session from an earlier run
+        // (kaltura.json). The LTI chain is ~7 sequential round-trips and
+        // the KS lives for hours — re-running it per CLI invocation was
+        // the dominant cost of repeated transcript runs. An expired or
+        // half-written entry was already pruned by cached_session_entry.
+        if let Some(entry) = cached_session_entry(course_id) {
+            let session = Self::from_parts(
+                course_id.to_string(),
+                entry.ks.clone(),
+                entry.partner_id,
+                entry.cookies,
+            )?;
+            let (ks, partner_id, cookies) = (
+                session.ks.clone(),
+                session.partner_id,
+                session.cookies.clone(),
+            );
+            if let Ok(mut guard) = sessions().lock() {
+                guard.insert(
+                    course_id.to_string(),
+                    CachedKaltura {
+                        ks,
+                        partner_id,
+                        cookies,
+                    },
+                );
+            }
+            return Ok(session);
         }
 
         let bb_router = state.client.current_cookie_value().await;
@@ -1294,18 +1480,51 @@ impl KalturaSession {
         let cookies = jar_cookie_map(&jar, KAF_HOST);
         let session = Self::from_parts(course_id.to_string(), ks, partner_id, cookies.clone())?;
 
-        // Publish for the whole course (KS is entry-agnostic).
+        // Publish for the whole course (KS is entry-agnostic), in-memory
+        // for this process and in kaltura.json for the next run.
         if let Ok(mut guard) = sessions().lock() {
             guard.insert(
                 course_id.to_string(),
                 CachedKaltura {
                     ks: session.ks.clone(),
                     partner_id,
-                    cookies,
+                    cookies: cookies.clone(),
                 },
             );
         }
+        remember_session(course_id, &session.ks, partner_id, &cookies);
         Ok(session)
+    }
+
+    /// Recover from a KS that died mid-run, safe under concurrency: when
+    /// several in-flight entries hit INVALID_KS at once, only the first
+    /// caller re-runs the chain — the rest get whichever fresh session
+    /// won the race. `failed_ks` is the rejected KS the caller used.
+    pub async fn relaunch_if_stale(
+        state: &AppState,
+        course_id: &str,
+        failed_ks: &str,
+        any_content_id: &str,
+    ) -> Result<Self, String> {
+        let _guard = relaunch_lock().lock().await;
+        // Someone already re-launched with a different KS: reuse it.
+        if let Ok(guard) = sessions().lock() {
+            if let Some(entry) = guard.get(course_id) {
+                if !entry.ks.is_empty() && entry.ks != failed_ks {
+                    return Self::from_parts(
+                        course_id.to_string(),
+                        entry.ks.clone(),
+                        entry.partner_id,
+                        entry.cookies.clone(),
+                    );
+                }
+            }
+        }
+        // The KS is entry-agnostic, so a fresh chain through ANY content
+        // item of the course fixes every entry — `any_content_id` does not
+        // have to be the one that failed.
+        Self::invalidate(course_id);
+        Self::launch(state, course_id, any_content_id).await
     }
 
     /// Assemble from parts (launch success or cache hit).
@@ -1335,6 +1554,7 @@ impl KalturaSession {
         if let Ok(mut guard) = sessions().lock() {
             guard.remove(course_id);
         }
+        forget_session(course_id);
     }
 
     /// The player KS minted by the launch chain.
@@ -1355,7 +1575,7 @@ impl KalturaSession {
     /// The auth-rejection error: invalidates the cached session (so the
     /// next tool call re-launches) and points the caller at ntulearn_login.
     fn ks_rejected(&self, what: &str) -> String {
-        Self::invalidate(&self.course_id);
+        invalidate_if_ks(&self.course_id, &self.ks);
         format!(
             "Kaltura rejected the session KS while fetching {what}. The cached Kaltura \
              session was dropped — retry the tool call so the LTI launch runs again, \
@@ -1381,6 +1601,13 @@ impl KalturaSession {
             .await
             .map_err(|e| format!("Kaltura {what}: reading body failed: {e}"))?;
         if status == 401 || status == 403 {
+            return Err(self.ks_rejected(what));
+        }
+        // A dead KS on playManifest is reported as 404 with an EMPTY body
+        // (live-verified), not as 401/INVALID_KS — treat that shape as a
+        // rejected session so the caller relaunches instead of reporting
+        // every video of the course as broken.
+        if status == 404 && text.trim().is_empty() && url.contains("playManifest") {
             return Err(self.ks_rejected(what));
         }
         if let Some(error) = kaltura_api_error(&text) {
@@ -1455,14 +1682,23 @@ impl KalturaSession {
                 snippet(&playlist)
             )));
         }
+        // VTT segments are independent files — fetch them concurrently
+        // (bounded) and keep playlist order. A 5-segment video costs one
+        // round-trip instead of five.
+        use futures_util::StreamExt;
+        let bodies: Vec<Result<String, String>> =
+            futures_util::stream::iter(segments.iter().cloned())
+                .map(|segment| {
+                    let url = segment_url(&track.uri, &segment);
+                    let what = format!("caption segment {segment}");
+                    async move { self.fetch_text(&url, &what).await }
+                })
+                .buffered(KALTURA_SEGMENT_CONCURRENCY)
+                .collect()
+                .await;
         let mut vtt = String::from("WEBVTT\n\n");
-        for segment in &segments {
-            let url = segment_url(&track.uri, segment);
-            let what = format!("caption segment {segment}");
-            let body = self
-                .fetch_text(&url, &what)
-                .await
-                .map_err(TranscriptError::Network)?;
+        for body in bodies {
+            let body = body.map_err(TranscriptError::Network)?;
             vtt.push_str(vtt_body_after_header(&body));
         }
         let text = vtt_to_text(&vtt);
@@ -2139,6 +2375,90 @@ mod tests {
             .min_by_key(|f| f.size_bytes);
         assert_eq!(small.map(|f| f.id.as_str()), Some("0_z24etxpq"));
         assert_eq!(small.map(|f| f.size_bytes), Some(150_718_384));
+    }
+
+    #[test]
+    fn session_file_cache_roundtrip_expiry_and_forgetting() {
+        let dir = std::env::temp_dir().join(format!("kal-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("kaltura.json");
+
+        // empty / missing file -> no session
+        assert!(cached_session_entry_in(&file, "_1_1").is_none());
+
+        // remember -> hit, with the minted fields intact
+        let cookies = HashMap::from([("km_ctamuls".to_string(), "abc".to_string())]);
+        remember_session_in(&file, "_1_1", "v2|ks", 117, &cookies);
+        let hit = cached_session_entry_in(&file, "_1_1").expect("cache hit");
+        assert_eq!(hit.ks, "v2|ks");
+        assert_eq!(hit.partner_id, 117);
+        assert_eq!(
+            hit.cookies.get("km_ctamuls").map(String::as_str),
+            Some("abc")
+        );
+
+        // a second course does not disturb the first
+        remember_session_in(&file, "_2_1", "v2|ks2", 117, &HashMap::new());
+        assert!(cached_session_entry_in(&file, "_2_1").is_some());
+        assert!(cached_session_entry_in(&file, "_1_1").is_some());
+
+        // forget removes only its course
+        forget_session_in(&file, "_1_1");
+        assert!(cached_session_entry_in(&file, "_1_1").is_none());
+        assert!(cached_session_entry_in(&file, "_2_1").is_some());
+
+        // an expired entry is pruned, not returned
+        let mut sessions = load_cached_sessions(&file);
+        sessions.sessions.insert(
+            "_3_1".to_string(),
+            CachedKalturaFileEntry {
+                ks: "v2|old".to_string(),
+                partner_id: 117,
+                cookies: HashMap::new(),
+                expires_at: Some(now_secs() - 1),
+            },
+        );
+        save_cached_sessions(&file, &sessions);
+        assert!(cached_session_entry_in(&file, "_3_1").is_none());
+        assert!(load_cached_sessions(&file).sessions.get("_3_1").is_none());
+
+        // a corrupt file is an empty cache, never an error
+        std::fs::write(&file, "{not json").expect("write");
+        assert!(cached_session_entry_in(&file, "_2_1").is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_file_cache_shape_is_stable() {
+        // The on-disk keys are a persistence contract with older/newer
+        // binaries of this crate — pin them.
+        let sessions = CachedKalturaSessions {
+            sessions: HashMap::from([(
+                "_2707070_1".to_string(),
+                CachedKalturaFileEntry {
+                    ks: "v2|ks".to_string(),
+                    partner_id: 117,
+                    cookies: HashMap::from([("k".to_string(), "v".to_string())]),
+                    expires_at: Some(1893456000),
+                },
+            )]),
+        };
+        let text = serde_json::to_string_pretty(&sessions).expect("json");
+        for key in [
+            "\"sessions\"",
+            "\"_2707070_1\"",
+            "\"ks\"",
+            "\"partner_id\"",
+            "\"cookies\"",
+            "\"expires_at\"",
+        ] {
+            assert!(text.contains(key), "missing key {key} in:\n{text}");
+        }
+        // and it round-trips
+        let back: CachedKalturaSessions = serde_json::from_str(&text).expect("parse");
+        assert_eq!(back.sessions["_2707070_1"].partner_id, 117);
     }
 
     #[test]
