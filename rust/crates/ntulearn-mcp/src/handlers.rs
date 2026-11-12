@@ -3710,7 +3710,7 @@ async fn h_summarize_course(state: &AppState, args: &Value) -> Result<Value, Str
 // fbf_rate / fbf_comment. FeedbackFruits activities are LTI placements in
 // the Blackboard content tree; fbf.rs owns the launch chain (content_id ->
 // FBF access token + activity id, cached in fbf.json), these handlers own
-// argument resolution and payload assembly. API semantics: FBF_SPEC.md §2-§4.
+// argument resolution and payload assembly. API semantics: docs/FBF_SPEC.md §2-§4.
 // ---------------------------------------------------------------------------
 
 /// LTI tool placement content type — every FeedbackFruits activity (and every
@@ -4329,7 +4329,7 @@ async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> 
 }
 
 // ---------------------------------------------------------------------------
-// Peerceptiv (PCV) peer evaluation (PCV_SPEC.md §4)
+// Peerceptiv (PCV) peer evaluation (docs/PCV_SPEC.md §4)
 // ---------------------------------------------------------------------------
 
 /// LTI *placement* content type — Peerceptiv activities surface as
@@ -4971,7 +4971,7 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
 }
 
 // ---------------------------------------------------------------------------
-// Kaltura transcripts / video downloads (kaltura.rs; KALTURA_SPEC.md)
+// Kaltura transcripts / video downloads (kaltura.rs; docs/KALTURA_SPEC.md)
 // ---------------------------------------------------------------------------
 
 /// Concurrent transcript fetches across a whole course. This bound IS the

@@ -4,7 +4,7 @@
 //! `data-bbfile` LTI links to the university's KAF instance
 //! (`ntulearnv1.ntu.edu.sg`). There is no direct login: captions and flavor
 //! metadata live on Kaltura's API and are authorized by a player KS minted
-//! by the LTI 1.3 launch chain (KALTURA_SPEC.md §1–§2). This module owns
+//! by the LTI 1.3 launch chain (docs/KALTURA_SPEC.md §1–§2). This module owns
 //! that chain plus the pure parsers for every Kaltura wire format involved:
 //! the content-body embed JSON, the embed page's `flashvars`, the HLS
 //! master/sub playlists, WebVTT segments, and the XML asset lists.
@@ -22,7 +22,7 @@
 //!   cached per course_id, not per content item.
 //! * Caption download does NOT use captionAsset.serve (it 200s empty with a
 //!   player KS): the only verified route is the signed serveWebVTT HLS
-//!   sub-playlist inside the playManifest master (KALTURA_SPEC.md §2).
+//!   sub-playlist inside the playManifest master (docs/KALTURA_SPEC.md §2).
 //! * Video files come off an open CDN (`cfvod.sgp2.ovp.kaltura.com`) — no
 //!   auth at all, just the flavor id + version.
 //!
@@ -256,7 +256,7 @@ async fn get_following(
 
 /// POST the LTI auto-submit form fields to the action URL, then follow any
 /// redirects to the final 200. Origin/Referer describe the KAF origin the
-/// form posts into (KALTURA_SPEC.md §1 step 5), matching the live-verified
+/// form posts into (docs/KALTURA_SPEC.md §1 step 5), matching the live-verified
 /// request. Only the first request is the POST; later hops are GETs
 /// (browser semantics for 301/302/303 after a POST).
 async fn post_launch_form(
@@ -1263,7 +1263,7 @@ pub struct KalturaSession {
 }
 
 impl KalturaSession {
-    /// Full LTI 1.3 OIDC launch chain (KALTURA_SPEC.md §1) for one content
+    /// Full LTI 1.3 OIDC launch chain (docs/KALTURA_SPEC.md §1) for one content
     /// item, then the embed page fetch that mints the player KS:
     ///
     /// 1. `GET .../blti/launchPlacement?blti_placement_id={placement_id}
@@ -1839,7 +1839,7 @@ impl KalturaSession {
 }
 
 // ===========================================================================
-// Tests — fixture-driven, no network (see KALTURA_SPEC.md fixtures)
+// Tests — fixture-driven, no network (see docs/KALTURA_SPEC.md fixtures)
 // ===========================================================================
 
 #[cfg(test)]

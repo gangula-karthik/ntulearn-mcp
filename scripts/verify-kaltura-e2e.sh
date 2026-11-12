@@ -8,7 +8,7 @@
 # Every check prints one compact PASS/FAIL line; exits nonzero on any FAIL.
 # Ground truth for word counts: tests/fixtures/kaltura/qa/reference_transcript_counts.json
 # (live-verified 2026-11-12; `words` = vtt_to_text + split_whitespace — see
-# KALTURA_SPEC.md §3 for why the raw-VTT token count 3553 is NOT the reference).
+# docs/KALTURA_SPEC.md §3 for why the raw-VTT token count 3553 is NOT the reference).
 #
 # Env overrides: BIN=<path to ntulearn-mcp> (skips the cargo build).
 set -u
@@ -57,8 +57,8 @@ info(){ printf -- '-- %s\n' "$1"; }
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = 1 ]; then
   info "dry-run: file/fixture presence only (no network, no binary needed)"
-  [ -s "$REPO_ROOT/KALTURA_SPEC.md" ] \
-    && ok "KALTURA_SPEC.md present" || bad "KALTURA_SPEC.md present" "missing/empty at repo root"
+  [ -s "$REPO_ROOT/docs/KALTURA_SPEC.md" ] \
+    && ok "docs/KALTURA_SPEC.md present" || bad "docs/KALTURA_SPEC.md present" "missing/empty under docs/"
   for rel in "${FIXTURES[@]}"; do
     f="$REPO_ROOT/$QA_DIR/$rel"
     if [ -s "$f" ]; then ok "fixture ${rel}"; else bad "fixture ${rel}" "missing/empty: $QA_DIR/$rel"; fi
