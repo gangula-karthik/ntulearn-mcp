@@ -4980,7 +4980,7 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
 /// are in flight at once (VTT segments within one video add a further
 /// bound of 6, see kaltura.rs). A real browser player issues comparable
 /// bursts.
-const KALTURA_ENTRY_CONCURRENCY: usize = 12;
+const KALTURA_ENTRY_CONCURRENCY: usize = 32;
 
 /// `format` argument of kaltura_transcripts: which files to write per video.
 fn resolve_transcript_format(args: &Value) -> Result<String, String> {
@@ -5271,6 +5271,7 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
     let save_dir = resolve_save_dir(args, state)?;
     let _fmt = response_format(args)?;
 
+    let _t0 = std::time::Instant::now();
     let (embeds, skipped): (Vec<KalturaEmbed>, Vec<Value>) = match &content_id {
         Some(cid) => {
             let embeds = content_item_embeds(&state.client, &course_id, cid).await?;
@@ -5283,6 +5284,13 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
         }
         None => discover_kaltura_embeds(&state.client, &course_id).await,
     };
+    if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+        eprintln!(
+            "[perf] discovery: {:?} ({} embeds)",
+            _t0.elapsed(),
+            embeds.len()
+        );
+    }
 
     let out_dir = save_dir.join("kaltura").join(&course_id);
     let mut payload = Map::new();
@@ -5325,6 +5333,7 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
     // entry's task. An explicit content_id the caller named must fail
     // loudly; in whole-course mode a failed launch degrades to per-entry
     // notes (one broken placement must not hide the others).
+    let _t1 = std::time::Instant::now();
     let session: Option<KalturaSession> =
         match KalturaSession::launch(state, &course_id, &embeds[0].content_id).await {
             Ok(s) => Some(s),
@@ -5338,10 +5347,18 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
                 None
             }
         };
+    if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+        eprintln!(
+            "[perf] launch: {:?} (cached={})",
+            _t1.elapsed(),
+            session.is_some()
+        );
+    }
 
     // Fetch every entry's transcript with bounded concurrency; bounded_map
     // preserves input order, so rows and notes come out in course order.
     // Failures never short-circuit the course run.
+    let _t2 = std::time::Instant::now();
     let outcomes: Vec<Value> = bounded_map(embeds.clone(), KALTURA_ENTRY_CONCURRENCY, |embed| {
         let session = session.clone();
         let course_id = course_id.clone();
@@ -5435,6 +5452,17 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
         }
     })
     .await;
+    if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+        eprintln!(
+            "[perf] transcripts: {:?} ({} outcomes)",
+            _t2.elapsed(),
+            outcomes.len()
+        );
+        eprintln!(
+            "[perf] TOTAL after fetch: {:?} (discovery+launch+transcripts)",
+            _t0.elapsed()
+        );
+    }
     let mut videos: Vec<Value> = Vec::new();
     let mut notes: Vec<Value> = Vec::new();
     for outcome in outcomes {

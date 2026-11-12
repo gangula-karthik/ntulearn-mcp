@@ -200,13 +200,35 @@ fn chain_http_client() -> Result<reqwest::Client, String> {
 /// GET with browser-ish headers, following redirects manually and feeding
 /// every hop's Set-Cookie into the jar. The chain is short and linear; a
 /// loop beyond MAX_REDIRECTS is reported instead of spun forever.
+/// The Blackboard LTI OIDC gateway host. Its TLS handshake costs ~700ms
+/// from Singapore (it is hosted far away), and it sits mid-chain where
+/// nothing else can overlap it — so a launch pre-warms a connection while
+/// the earlier hops run, and `get_following` awaits that warm connection
+/// just before following a redirect onto this host.
+const GATEWAY_HOST: &str = "developer.blackboard.com";
+
+/// Open (and pool) one connection to `url`'s origin in the background. The
+/// response is drained so the connection returns to the pool for reuse.
+/// Failures are ignored: a failed pre-warm only costs the handshake the
+/// next request would have paid anyway.
+fn prewarm(http: reqwest::Client, url: &str) -> tokio::task::JoinHandle<()> {
+    let url = url.to_string();
+    tokio::spawn(async move {
+        if let Ok(resp) = http.get(&url).send().await {
+            let _ = resp.text().await;
+        }
+    })
+}
+
 async fn get_following(
     http: &reqwest::Client,
     jar: &mut CookieJar,
     start: reqwest::Url,
     bb_host: &str,
     bb_router: &str,
+    gateway_warm: Option<tokio::task::JoinHandle<()>>,
 ) -> Result<Page, String> {
+    let mut gateway_warm = gateway_warm;
     let mut url = start.clone();
     for _ in 0..=MAX_REDIRECTS {
         let host = url.host_str().unwrap_or_default().to_string();
@@ -221,10 +243,19 @@ async fn get_following(
         if let Some(cookies) = cookie_header(jar, &host, bb_host, bb_router) {
             req = req.header(reqwest::header::COOKIE, cookies);
         }
+        let _g0 = std::time::Instant::now();
         let resp = req
             .send()
             .await
             .map_err(|e| format!("Kaltura launch: GET {url} failed: {e}"))?;
+        if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+            eprintln!(
+                "[perf]     GET {} -> {} in {:?}",
+                url.host_str().unwrap_or("?"),
+                resp.status().as_u16(),
+                _g0.elapsed()
+            );
+        }
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
         jar.ingest(&host, &set_cookie_values(&headers));
@@ -241,6 +272,25 @@ async fn get_following(
                      against {url}: {e}"
                 )
             })?;
+            // Stepping onto the gateway host: its connection was being
+            // pre-warmed while the earlier hops ran. Waiting here overlaps
+            // the ~700ms TLS handshake with hop 0/1 instead of paying it
+            // serially. A missing/failed pre-warm just falls through.
+            let stepping_onto_gateway = url
+                .host_str()
+                .is_some_and(|h| h.eq_ignore_ascii_case(GATEWAY_HOST));
+            if stepping_onto_gateway {
+                if let Some(handle) = gateway_warm.take() {
+                    let _w = std::time::Instant::now();
+                    let _ = handle.await;
+                    if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+                        eprintln!(
+                            "[perf]     gateway prewarm awaited {:?} after redirect",
+                            _w.elapsed()
+                        );
+                    }
+                }
+            }
             continue;
         }
         let body = resp
@@ -1025,6 +1075,23 @@ pub fn manifest_url(partner_id: u32, entry_id: &str, ks: &str) -> String {
     )
 }
 
+/// The `/index/media-redirect/` variant of a KAF embed URL (live-verified):
+/// `/browseandembed/index/media/entryid/<id>/...` has a sibling
+/// `/browseandembed/index/media-redirect/entryid/<id>/...` that serves the
+/// media-redirect page (with the player flashvars) directly, skipping the
+/// KAF cookie-check interstitial and its JS hop. `None` when the URL does
+/// not carry the expected `/index/media/` segment.
+fn media_redirect_variant(embed_url: &str) -> Option<reqwest::Url> {
+    const MARKER: &str = "/index/media/";
+    let pos = embed_url.find(MARKER)?;
+    let redirect = format!(
+        "{}/index/media-redirect/{}",
+        &embed_url[..pos],
+        &embed_url[pos + MARKER.len()..]
+    );
+    reqwest::Url::parse(&redirect).ok()
+}
+
 /// The absolute URL of one caption segment inside a sub-playlist: the
 /// segment entries are relative (`segmentIndex/N.vtt`) to the playlist's
 /// own directory.
@@ -1104,10 +1171,14 @@ fn relaunch_lock() -> &'static tokio::sync::Mutex<()> {
 
 // -- cross-run session file (kaltura.json, mirroring pcv.rs / pcv.json) ----
 
-/// The KS is an opaque "v2|..." token with no readable expiry, so a
-/// conservative TTL bounds staleness; the first INVALID_KS drops the entry
-/// long before the TTL matters in practice.
-const KALTURA_SESSION_TTL_SECS: i64 = 3600;
+/// The KS is an opaque "v2|..." token with no readable expiry, so a TTL
+/// bounds staleness. KAF player sessions are typically minted for many
+/// hours (the common KAF default is 24h); an expired-but-cached KS is
+/// caught by the first playManifest call, which drops the entry and
+/// relaunches (measured: ~0.3s worse than a true cold run), so a generous
+/// TTL trades a rare small penalty for skipping the whole ~2.4s LTI
+/// chain on most runs.
+const KALTURA_SESSION_TTL_SECS: i64 = 8 * 3600;
 const KALTURA_SESSION_FILE: &str = "kaltura.json";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1350,6 +1421,16 @@ impl KalturaSession {
             .unwrap_or_default();
         let http = chain_http_client()?;
 
+        // Cold-chain pre-warms, started before the first hop so the slow
+        // handshakes overlap the early (cheap) hops:
+        // - the Blackboard OIDC gateway sits mid-chain and its TLS
+        //   handshake alone costs ~700ms from Singapore;
+        // - the Kaltura API origin serves every playManifest/playlist/
+        //   segment once the session exists, on this same client.
+        // Both are best-effort; a failed pre-warm costs nothing.
+        let gateway_warm = prewarm(http.clone(), &format!("https://{GATEWAY_HOST}/"));
+        let session_http = Self::api_http_client()?;
+        let _api_warm = prewarm(session_http.clone(), MANIFEST_BASE);
         // The embed this content item carries: placement id + embed URL.
         let item = state
             .client
@@ -1382,9 +1463,18 @@ impl KalturaSession {
         ))
         .map_err(|e| format!("Kaltura launch: invalid placement URL: {e}"))?;
         let mut jar = CookieJar::default();
-        let form_page = get_following(&http, &mut jar, placement_url, &bb_host, &bb_router)
-            .await
-            .map_err(|e| format!("{e} (content {content_id}, course {course_id})"))?;
+        let _h0 = std::time::Instant::now();
+        let form_page = get_following(
+            &http,
+            &mut jar,
+            placement_url,
+            &bb_host,
+            &bb_router,
+            Some(gateway_warm),
+        )
+        .await
+        .map_err(|e| format!("{e} (content {content_id}, course {course_id})"))?;
+        let _p = std::env::var("NTULEARN_PERF_TRACE").is_ok();
         if form_page.status != 200 {
             return Err(format!(
                 "Kaltura launch: NTULearn returned HTTP {} for the launch placement page. \
@@ -1404,8 +1494,15 @@ impl KalturaSession {
             .url
             .join(&action)
             .map_err(|e| format!("Kaltura launch: invalid form action {action:?}: {e}"))?;
+        if _p {
+            eprintln!("[perf]   hop placement+form-page: {:?}", _h0.elapsed());
+        }
+        let _h1 = std::time::Instant::now();
         let launch_page =
             post_launch_form(&http, &mut jar, action_url, &fields, &bb_host, &bb_router).await?;
+        if _p {
+            eprintln!("[perf]   hop post-launch-form: {:?}", _h1.elapsed());
+        }
         if launch_page.status != 200 {
             return Err(format!(
                 "Kaltura launch: the oauth2-launch POST returned HTTP {}. The launch \
@@ -1416,40 +1513,76 @@ impl KalturaSession {
         }
 
         // The embed page mints the player KS (any embed of the course works).
-        let embed_url = reqwest::Url::parse(&embed.embed_url).map_err(|e| {
-            format!(
-                "Kaltura launch: invalid embed URL {:?}: {e}",
-                embed.embed_url
-            )
-        })?;
-        let mut entry_page = get_following(&http, &mut jar, embed_url, &bb_host, &bb_router)
-            .await
-            .map_err(|e| format!("{e} (embed {})", embed.embed_url))?;
-        // The embed URL may serve a KAF cookie-check interstitial that
-        // JS-redirects to the media-redirect page with the flashvars. HTTP
-        // redirects are already followed; follow the JS hop too (bounded).
-        for _ in 0..3 {
-            if entry_page.status != 200 {
-                return Err(format!(
-                    "Kaltura launch: KAF returned HTTP {} for the embed page. The Kaltura \
-                     session cookies may be stale — retry the tool call so the launch runs \
-                     again.",
-                    entry_page.status
-                ));
+        // Fast path (live-verified, docs/KALTURA_SPEC.md §1): the embed URL's
+        // `/index/media/` variant `/index/media-redirect/` serves the
+        // flashvars page DIRECTLY — no KAF cookie-check interstitial, no JS
+        // hop. That skips two sequential round-trips (~700ms). If the
+        // redirect variant does not cooperate (KAF upgrade, different URL
+        // shape), fall back to the original interstitial + JS walk.
+        let media_redirect_page = match media_redirect_variant(&embed.embed_url) {
+            Some(url) => {
+                match get_following(&http, &mut jar, url, &bb_host, &bb_router, None).await {
+                    Ok(page) if page.status == 200 && parse_flashvars(&page.body).is_some() => {
+                        if _p {
+                            eprintln!("[perf]   media-redirect fast path hit");
+                        }
+                        Some(page)
+                    }
+                    _ => None,
+                }
             }
-            if parse_flashvars(&entry_page.body).is_some() {
-                break;
+            None => None,
+        };
+        let mut entry_page = match media_redirect_page {
+            Some(page) => page,
+            None => {
+                let embed_url = reqwest::Url::parse(&embed.embed_url).map_err(|e| {
+                    format!(
+                        "Kaltura launch: invalid embed URL {:?}: {e}",
+                        embed.embed_url
+                    )
+                })?;
+                let _h2 = std::time::Instant::now();
+                let mut page =
+                    get_following(&http, &mut jar, embed_url, &bb_host, &bb_router, None)
+                        .await
+                        .map_err(|e| format!("{e} (embed {})", embed.embed_url))?;
+                if _p {
+                    eprintln!("[perf]   hop embed-page: {:?}", _h2.elapsed());
+                }
+                // The embed URL may serve a KAF cookie-check interstitial that
+                // JS-redirects to the media-redirect page with the flashvars.
+                // HTTP redirects are already followed; follow the JS hop too
+                // (bounded).
+                for _ in 0..3 {
+                    if page.status != 200 {
+                        return Err(format!(
+                            "Kaltura launch: KAF returned HTTP {} for the embed page. The Kaltura \
+                             session cookies may be stale — retry the tool call so the launch runs \
+                             again.",
+                            page.status
+                        ));
+                    }
+                    if parse_flashvars(&page.body).is_some() {
+                        break;
+                    }
+                    let Some(js_target) = js_location_href(&page.body) else {
+                        break;
+                    };
+                    let target = page.url.join(&js_target).map_err(|e| {
+                        format!("Kaltura launch: invalid JS redirect target {js_target:?}: {e}")
+                    })?;
+                    let _h3 = std::time::Instant::now();
+                    page = get_following(&http, &mut jar, target, &bb_host, &bb_router, None)
+                        .await
+                        .map_err(|e| format!("{e} (embed JS redirect)"))?;
+                    if _p {
+                        eprintln!("[perf]   hop js-redirect: {:?}", _h3.elapsed());
+                    }
+                }
+                page
             }
-            let Some(js_target) = js_location_href(&entry_page.body) else {
-                break;
-            };
-            let target = entry_page.url.join(&js_target).map_err(|e| {
-                format!("Kaltura launch: invalid JS redirect target {js_target:?}: {e}")
-            })?;
-            entry_page = get_following(&http, &mut jar, target, &bb_host, &bb_router)
-                .await
-                .map_err(|e| format!("{e} (embed JS redirect)"))?;
-        }
+        };
         let flashvars = parse_flashvars(&entry_page.body).ok_or_else(|| {
             "Kaltura launch: the KAF embed page did not contain a `var flashvars = {...}` \
              player configuration, so no player KS could be minted. Retry the tool call; \
@@ -1478,7 +1611,15 @@ impl KalturaSession {
             })?;
 
         let cookies = jar_cookie_map(&jar, KAF_HOST);
-        let session = Self::from_parts(course_id.to_string(), ks, partner_id, cookies.clone())?;
+        // with_client: reuse the client whose Kaltura API connection was
+        // pre-warmed while the chain ran.
+        let session = Self::with_client(
+            course_id.to_string(),
+            ks,
+            partner_id,
+            cookies.clone(),
+            session_http,
+        );
 
         // Publish for the whole course (KS is entry-agnostic), in-memory
         // for this process and in kaltura.json for the next run.
@@ -1528,24 +1669,46 @@ impl KalturaSession {
     }
 
     /// Assemble from parts (launch success or cache hit).
+    /// The HTTP client every Kaltura API call (playManifest, playlists,
+    /// caption segments, flavor listings) goes through. Built separately so
+    /// `launch` can pre-warm its connection pool while the LTI chain runs.
+    fn api_http_client() -> Result<reqwest::Client, String> {
+        reqwest::Client::builder()
+            .user_agent(BROWSER_UA)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Kaltura: reqwest client build failed: {e}"))
+    }
+
     fn from_parts(
         course_id: String,
         ks: String,
         partner_id: u32,
         cookies: HashMap<String, String>,
     ) -> Result<Self, String> {
-        let http = reqwest::Client::builder()
-            .user_agent(BROWSER_UA)
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| format!("Kaltura: reqwest client build failed: {e}"))?;
-        Ok(KalturaSession {
+        Ok(Self::with_client(
+            course_id,
+            ks,
+            partner_id,
+            cookies,
+            Self::api_http_client()?,
+        ))
+    }
+
+    fn with_client(
+        course_id: String,
+        ks: String,
+        partner_id: u32,
+        cookies: HashMap<String, String>,
+        http: reqwest::Client,
+    ) -> Self {
+        KalturaSession {
             course_id,
             ks,
             partner_id,
             cookies,
             http,
-        })
+        }
     }
 
     /// Drop the cached session for a course (the KS was rejected). The next
@@ -2511,6 +2674,20 @@ mod tests {
     }
 
     // -- URL builders -------------------------------------------------------------
+
+    #[test]
+    fn media_redirect_variant_shapes() {
+        // The launch fast path: /index/media/ -> /index/media-redirect/.
+        let embed = "https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_88lztt5a/showDescription/false/playerSize/608x402/";
+        let redirect = media_redirect_variant(embed).expect("media embed has a variant");
+        assert_eq!(
+            redirect.as_str(),
+            "https://ntulearnv1.ntu.edu.sg/browseandembed/index/media-redirect/entryid/0_88lztt5a/showDescription/false/playerSize/608x402/"
+        );
+        // Anything without the marker is not convertible (fast path skipped).
+        assert!(media_redirect_variant("https://example.com/other/path").is_none());
+        assert!(media_redirect_variant("not a url").is_none());
+    }
 
     #[test]
     fn manifest_url_shape() {
