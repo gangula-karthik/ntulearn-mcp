@@ -956,7 +956,19 @@ pub fn parse_flavor_assets_xml(xml: &str) -> Vec<FlavorAsset> {
                 id: xml_child_text(&item, "id")?.trim().to_string(),
                 width: xml_u32(&item, "width"),
                 height: xml_u32(&item, "height"),
-                size_bytes: xml_u64(&item, "sizeInBytes"),
+                // sizeInBytes is the modern field but is 0 for original
+                // uploads and can be stale vs the CDN (live-verified:
+                // 0_z24etxpq reports 150 MB, the CDN serves 68 MB). When
+                // it is 0/absent, fall back to the legacy <size> field,
+                // which is in KB.
+                size_bytes: {
+                    let modern = xml_u64(&item, "sizeInBytes");
+                    if modern > 0 {
+                        modern
+                    } else {
+                        xml_u64(&item, "size").saturating_mul(1024)
+                    }
+                },
                 is_original: xml_flag(&item, "isOriginal"),
                 version: xml_u32(&item, "version"),
                 file_ext: xml_child_text(&item, "fileExt")
@@ -1502,25 +1514,86 @@ impl KalturaSession {
                 flavor.id
             ));
         }
-        let mut file = tokio::fs::File::create(path)
+        // The CDN sometimes resets long-lived connections mid-body
+        // (live-verified: a 266 MB original died at 198 MB). It honors
+        // Range, so resume from the bytes already on disk instead of
+        // failing the whole download. Small retry budget, then give up
+        // with a message that says how much landed on disk.
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
             .await
             .map_err(|e| format!("Kaltura download: cannot create {}: {e}", path.display()))?;
         let mut written: u64 = 0;
+        const RESUME_ATTEMPTS: usize = 5;
+        let mut attempt = 0;
         let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                format!(
-                    "Kaltura download: stream failed after {written} bytes of {}: {e}",
-                    path.display()
-                )
-            })?;
-            file.write_all(&chunk).await.map_err(|e| {
-                format!(
-                    "Kaltura download: writing {} failed after {written} bytes: {e}",
-                    path.display()
-                )
-            })?;
-            written += chunk.len() as u64;
+        loop {
+            let mut failed: Option<String> = None;
+            loop {
+                match stream.next().await {
+                    Some(Ok(chunk)) => {
+                        file.write_all(&chunk).await.map_err(|e| {
+                            format!(
+                                "Kaltura download: writing {} failed after {written} bytes: {e}",
+                                path.display()
+                            )
+                        })?;
+                        written += chunk.len() as u64;
+                    }
+                    Some(Err(e)) => {
+                        failed = Some(e.to_string());
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            match failed {
+                None => break,
+                Some(err) => {
+                    file.flush().await.map_err(|e| {
+                        format!("Kaltura download: flushing {} failed: {e}", path.display())
+                    })?;
+                    attempt += 1;
+                    if attempt > RESUME_ATTEMPTS {
+                        return Err(format!(
+                            "Kaltura download: stream failed after {written} bytes of {} and \
+                             resuming failed {RESUME_ATTEMPTS} times: {err}",
+                            path.display()
+                        ));
+                    }
+                    let resp = self
+                        .http
+                        .get(&url)
+                        .header(reqwest::header::USER_AGENT, BROWSER_UA)
+                        .header(reqwest::header::RANGE, format!("bytes={written}-"))
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            format!(
+                                "Kaltura download: resume request failed after {written} \
+                                 bytes of {}: {e}",
+                                path.display()
+                            )
+                        })?;
+                    let status = resp.status().as_u16();
+                    // 416 = the range start is past EOF: everything is on
+                    // disk already (the cut was exactly at the end).
+                    if status == 416 {
+                        break;
+                    }
+                    if !(200..300).contains(&status) {
+                        return Err(format!(
+                            "Kaltura download: resume (Range from {written}) returned HTTP \
+                             {status} for {}: {err}",
+                            path.display()
+                        ));
+                    }
+                    stream = resp.bytes_stream();
+                }
+            }
         }
         file.flush()
             .await
@@ -2050,6 +2123,22 @@ mod tests {
         assert_eq!(three[2].size_bytes, 191_748_125);
         assert_eq!(three[2].version, 2);
         assert!(three.iter().any(|f| f.is_original));
+    }
+
+    #[test]
+    fn flavor_sizes_fall_back_to_legacy_kb_when_sizeinbytes_is_zero() {
+        // the real 0_88lztt5a list: original reports sizeInBytes=0, legacy
+        // <size> 260436 (KB) -> 260436*1024; the 540p keeps its modern
+        // sizeInBytes even though the CDN serves less (stale field).
+        let flavors = parse_flavor_assets_xml(&fixture("flavor_assets_three.xml"));
+        let orig = flavors.iter().find(|f| f.is_original).expect("original");
+        assert_eq!(orig.size_bytes, 260_436 * 1024);
+        let small = flavors
+            .iter()
+            .filter(|f| !f.is_original)
+            .min_by_key(|f| f.size_bytes);
+        assert_eq!(small.map(|f| f.id.as_str()), Some("0_z24etxpq"));
+        assert_eq!(small.map(|f| f.size_bytes), Some(150_718_384));
     }
 
     #[test]

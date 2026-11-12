@@ -23,7 +23,7 @@ CONTENT="_5976141_1"         # Topic 6 Part 1 — holds entry 0_88lztt5a
 ENTRY="0_88lztt5a"
 EXPECTED_VIDEOS=25
 FLAVOR_540P="0_z24etxpq"     # 960x540 flavor of 0_88lztt5a, 150718384 bytes
-FLAVOR_540P_BYTES=150718384
+FLAVOR_540P_BYTES=68660862   # CDN Content-Length (live-verified); XML sizeInBytes=150718384 is STALE
 OPENING="A very warm welcome to Part 2 of this lecture on energy and climate change."
 
 REF_JSON="$REPO_ROOT/rust/crates/ntulearn-mcp/tests/fixtures/kaltura/qa/reference_transcript_counts.json"
@@ -331,7 +331,7 @@ fi
 # ---------------------------------------------------------------------------
 # 4. kaltura-download — smallest flavor for Topic 6 Part 1, then delete
 # ---------------------------------------------------------------------------
-info "kaltura-download (smallest) for content $CONTENT (~150 MB stream; be patient)..."
+info "kaltura-download (smallest) for content $CONTENT (~68 MB stream; be patient)..."
 run_tool "$TMP/dl.json" "$KDL" "--$COURSE_FLAG" "$COURSE" "--$CONTENT_FLAG" "$CONTENT" "--$QUALITY_FLAG" smallest
 if [ -s "$TMP/dl.json" ]; then ok "kaltura-download runs"
 else bad "kaltura-download runs" "$(head -c 300 "$TMP/dl.err")"; fi

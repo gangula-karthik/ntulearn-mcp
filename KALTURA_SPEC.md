@@ -123,6 +123,10 @@ Metadata traps (all real):
 - The ORIGINAL flavor of `0_88lztt5a` reports `sizeInBytes=0` while its
   legacy `<size>` (KB) holds the real ~266 MB. Quality selection must not
   let a zero/nonsense `sizeInBytes` win "smallest".
+- `sizeInBytes` can also be STALE vs the CDN: flavor `0_z24etxpq` (540p)
+  reports 150,718,384 bytes, but the CDN's Content-Length is 68,660,862
+  (live-verified). Never trust it for progress/verification — use the
+  actual streamed byte count or a HEAD.
 - An `INVALID_KS` error XML has the same envelope as a list response with
   an `<error>` node instead of `<objects>` — parse to an empty vec, never
   panic (`qa/caption_assets_error.xml`).
@@ -134,11 +138,14 @@ Metadata traps (all real):
 
 `https://cfvod.sgp2.ovp.kaltura.com/p/{partner}/sp/{partner}00/serveFlavor/entryId/{entry}/v/{flavor.version}/flavorId/{flavor.id}/name/a.{file_ext}`
 
-Raw MP4; `Content-Length` matches `sizeInBytes`. Stream to disk (chunked),
-never slurp: 540p of a 20-min lecture is ~68 MB-150 MB, the 1080p original
-~266 MB-1.7 GB. Quality rules: `smallest` = fewest bytes with `height > 0`
-and a sane nonzero size; `best` = largest non-original; `original` = the
-`isOriginal` flavor.
+Raw MP4; the CDN's `Content-Length` is authoritative (see the stale
+`sizeInBytes` trap in §4). Stream to disk (chunked), never slurp: 540p of a
+20-min lecture is ~68 MB, the 1080p original ~266 MB-1.7 GB. The CDN
+sometimes RESETS long-lived connections mid-body (a 266 MB original died at
+198 MB, live-verified) — it honors Range, so resume from the bytes already
+written. Quality rules: `smallest` = fewest bytes with `height > 0` and a
+sane nonzero size (legacy `<size>` KB as fallback when `sizeInBytes` is 0);
+`best` = largest non-original; `original` = the `isOriginal` flavor.
 
 ## 6. Tool surface
 
