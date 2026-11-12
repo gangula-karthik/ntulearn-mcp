@@ -341,8 +341,8 @@ async fn post_launch_form(
 /// hand (percent-encoding of everything non-alphanumeric) so the JWT/state
 /// values need no escaping assumptions; a server decodes %XX identically.
 fn form_urlencode(fields: &[(String, String)]) -> String {
-    use percent_encoding::utf8_percent_encode;
     use percent_encoding::NON_ALPHANUMERIC;
+    use percent_encoding::utf8_percent_encode;
     fields
         .iter()
         .map(|(k, v)| {
@@ -980,8 +980,8 @@ fn kaltura_api_error(xml: &str) -> Option<String> {
 /// Percent-encode a value for a query string (everything non-alphanumeric,
 /// like pcv.rs's form encoding — servers decode %XX identically).
 fn urlencode(value: &str) -> String {
-    use percent_encoding::utf8_percent_encode;
     use percent_encoding::NON_ALPHANUMERIC;
+    use percent_encoding::utf8_percent_encode;
     utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
 }
 
@@ -1552,9 +1552,11 @@ mod tests {
             "Topic 6: Energy and Climate Change (II) Policy Instruments and Economics \
              of Climate Change Part 1"
         );
-        assert!(embed
-            .embed_url
-            .starts_with("https://ntulearnv1.ntu.edu.sg/browseandembed/"));
+        assert!(
+            embed
+                .embed_url
+                .starts_with("https://ntulearnv1.ntu.edu.sg/browseandembed/")
+        );
         assert!(embed.embed_url.contains("entryid/0_88lztt5a/"));
         // the unstamped variant returns the same embed with an empty content_id
         let unstamped = extract_embeds(&real_body_html());
@@ -1773,12 +1775,16 @@ mod tests {
             caption_track_from_manifest(&fixture("manifest_with_captions.m3u8")).expect("track");
         assert_eq!(track.label, "Edited");
         assert_eq!(track.language, "en");
-        assert!(track
-            .uri
-            .starts_with("https://vodcdn.sg.kaltura.com/api_v3/index.php/"));
-        assert!(track
-            .uri
-            .contains("service/caption_captionasset/action/serveWebVTT"));
+        assert!(
+            track
+                .uri
+                .starts_with("https://vodcdn.sg.kaltura.com/api_v3/index.php/")
+        );
+        assert!(
+            track
+                .uri
+                .contains("service/caption_captionasset/action/serveWebVTT")
+        );
         assert!(track.uri.contains("captionAssetId/0_o5nopm5y"));
     }
 
@@ -2017,10 +2023,12 @@ mod tests {
 
     #[test]
     fn parse_flavor_assets_empty_error_and_defaults() {
-        assert!(parse_flavor_assets_xml(
-            "<xml><result><objects/><totalCount>0</totalCount></result></xml>"
-        )
-        .is_empty());
+        assert!(
+            parse_flavor_assets_xml(
+                "<xml><result><objects/><totalCount>0</totalCount></result></xml>"
+            )
+            .is_empty()
+        );
         let error_xml = "<xml><error><code>INVALID_KS</code><message>x</message></error></xml>";
         assert!(parse_flavor_assets_xml(error_xml).is_empty());
         // an item with only an id: every optional field defaults
@@ -2086,8 +2094,11 @@ mod tests {
         assert!(cap.contains("ks=ks%2B%2F%3D"));
 
         let flav = flavor_assets_url("plainks", "0_td7lgutt");
-        assert!(flav
-            .contains("service=flavorAsset&action=list&filter:entryIdEqual=0_td7lgutt&ks=plainks"));
+        assert!(
+            flav.contains(
+                "service=flavorAsset&action=list&filter:entryIdEqual=0_td7lgutt&ks=plainks"
+            )
+        );
     }
 
     #[test]
@@ -2262,9 +2273,10 @@ mod tests {
             assert!(pairs.iter().any(|p| p == "SHARED=1"), "{host}: {pairs:?}");
         }
         // but never a foreign domain
-        assert!(!jar
-            .pairs_for("kaltura.com")
-            .iter()
-            .any(|p| p.contains("SHARED")));
+        assert!(
+            !jar.pairs_for("kaltura.com")
+                .iter()
+                .any(|p| p.contains("SHARED"))
+        );
     }
 }
