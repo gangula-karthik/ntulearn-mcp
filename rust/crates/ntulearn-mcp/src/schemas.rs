@@ -7,7 +7,7 @@ use crate::mcp::{Tool, ToolAnnotations};
 /// calls clone from here — no schema reconstruction or re-parsing per request.
 static TOOL_CATALOG: OnceLock<Vec<Tool>> = OnceLock::new();
 
-/// All 30 NTULearn tool definitions with their exact input schemas.
+/// All 33 NTULearn tool definitions with their exact input schemas.
 ///
 /// Built **once** and cached in a `OnceLock`, so every `tools/list` (tool
 /// discovery) is an O(1) cache hit instead of reconstructing all schemas and
@@ -438,6 +438,48 @@ fn build_tool_catalog() -> Vec<Tool> {
             idempotent_hint: Some(true),
             open_world_hint: Some(true),
         })
+
+        ,
+        Tool::new(
+            r####"ntulearn_kaltura_list"####.to_string(),
+            r####"List the Kaltura-embedded lecture videos of a course: for every video found anywhere in the content tree (folders are walked), its content_id, title, Kaltura entry_id and placement_id. Pure REST discovery — no video player or LTI launch is involved, and non-Kaltura LTI tools are skipped, not errors. Use this first to find the content_id for ntulearn_kaltura_transcripts or ntulearn_kaltura_download. Example: ntulearn_kaltura_list(course_id='_2707070_1')"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of one specific page to inspect (e.g. _67890_1). Omit to walk the entire course content tree.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"Kaltura video listing"####.to_string()),
+            read_only_hint: Some(true),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
+
+        ,
+        Tool::new(
+            r####"ntulearn_kaltura_transcripts"####.to_string(),
+            r####"Download the caption/transcript tracks of Kaltura lecture videos as .vtt and .txt files. Omit content_id to fetch captions for EVERY video in the course (one 0.3s pause between videos). Files are written to {save_dir}/kaltura/{course_id}/{video title}.vtt and .txt (save_dir defaults to the server's download dir); format='vtt' keeps timestamps, 'txt' strips them, 'both' (default) writes both. A video with no captions becomes a per-video note in the result, never a whole-call error. Find content ids with ntulearn_kaltura_list. Example: ntulearn_kaltura_transcripts(course_id='_2707070_1', content_id='_5976141_1')"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of one specific page to inspect (e.g. _67890_1). Omit to walk the entire course content tree.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"save_dir":{"type":"string","description":"Directory to write transcript files under (created if missing; accepts ~ paths). Files land in kaltura/{course_id}/ inside it. Defaults to the server's download dir (NTULEARN_DOWNLOAD_DIR).","minLength":1,"maxLength":1024},"format":{"type":"string","description":"Which files to write: 'vtt' (with timestamps), 'txt' (timestamps stripped) or 'both'.","enum":["vtt","txt","both"],"default":"both"},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"Kaltura transcripts"####.to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
+
+        ,
+        Tool::new(
+            r####"ntulearn_kaltura_download"####.to_string(),
+            r####"Download the MP4 of ONE Kaltura video via Kaltura's open CDN. quality='smallest' (default) picks the smallest flavor with a real resolution (height > 0), 'best' the largest non-original flavor, 'original' the source upload (often 1-2 GB — use only when you need full resolution). Returns the chosen flavor (id, resolution, size), bytes written and the local path. The file lands in {download dir}/kaltura/{course_id}/. Requires a specific content_id from ntulearn_kaltura_list. Example: ntulearn_kaltura_download(course_id='_2707070_1', content_id='_5976141_1', quality='smallest')"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of the Kaltura video page (e.g. _67890_1). Find it with ntulearn_kaltura_list.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"quality":{"type":"string","description":"Which flavor to download: 'smallest' (fewest bytes at a real resolution), 'best' (largest non-original) or 'original' (source upload, often 1-2 GB).","enum":["smallest","best","original"],"default":"smallest"},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id","content_id"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"Kaltura video download"####.to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(false),
+            open_world_hint: Some(true),
+        })
         ,
     ]
 }
@@ -453,7 +495,7 @@ mod discovery_quality {
     #[test]
     fn every_tool_is_intern_test_ready() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 30, "tool surface changed; update this test");
+        assert_eq!(tools.len(), 33, "tool surface changed; update this test");
         for t in &tools {
             assert!(!t.name.is_empty(), "tool name empty");
             assert!(
