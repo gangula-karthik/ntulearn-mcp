@@ -481,7 +481,21 @@ pub fn extract_embeds(body_html: &str) -> Vec<KalturaEmbed> {
 // ===========================================================================
 
 /// Extract the embed page's `var flashvars = {...};` object as JSON. The
-/// object literal is brace-scanned with string awareness and parsed by
+/// object literal /// A KAF "cookie check" interstitial: the embed URL serves a skeleton page
+/// that JavaScript-redirects (`window.location.href = "..."`) to the real
+/// `media-redirect` page carrying the player flashvars. Extract that target
+/// (same-origin absolute URL; `\/` escapes unescaped) for the HTTP-only
+/// walker to follow.
+pub fn js_location_href(page_html: &str) -> Option<String> {
+    let start = page_html.find("window.location.href")?;
+    let rest = &page_html[start..];
+    let q1 = rest.find('"')?;
+    let rest = &rest[q1 + 1..];
+    let q2 = rest.find('"')?;
+    Some(rest[..q2].replace("\\/", "/"))
+}
+
+/// `var flashvars = {...}` on a KAF media page: the JSON object is brace-scanned with string awareness and parsed by
 /// serde_json, so a page without a parseable flashvars yields None.
 /// Callers read "ks" (the player KS) and, on pages that carry it, "wid"
 /// from the value (the real NTU pages carry wid next to it instead —
@@ -1210,16 +1224,33 @@ impl KalturaSession {
                 embed.embed_url
             )
         })?;
-        let entry_page = get_following(&http, &mut jar, embed_url, &bb_host, &bb_router)
+        let mut entry_page = get_following(&http, &mut jar, embed_url, &bb_host, &bb_router)
             .await
             .map_err(|e| format!("{e} (embed {})", embed.embed_url))?;
-        if entry_page.status != 200 {
-            return Err(format!(
-                "Kaltura launch: KAF returned HTTP {} for the embed page. The Kaltura \
-                 session cookies may be stale — retry the tool call so the launch runs \
-                 again.",
-                entry_page.status
-            ));
+        // The embed URL may serve a KAF cookie-check interstitial that
+        // JS-redirects to the media-redirect page with the flashvars. HTTP
+        // redirects are already followed; follow the JS hop too (bounded).
+        for _ in 0..3 {
+            if entry_page.status != 200 {
+                return Err(format!(
+                    "Kaltura launch: KAF returned HTTP {} for the embed page. The Kaltura \
+                     session cookies may be stale — retry the tool call so the launch runs \
+                     again.",
+                    entry_page.status
+                ));
+            }
+            if parse_flashvars(&entry_page.body).is_some() {
+                break;
+            }
+            let Some(js_target) = js_location_href(&entry_page.body) else {
+                break;
+            };
+            let target = entry_page.url.join(&js_target).map_err(|e| {
+                format!("Kaltura launch: invalid JS redirect target {js_target:?}: {e}")
+            })?;
+            entry_page = get_following(&http, &mut jar, target, &bb_host, &bb_router)
+                .await
+                .map_err(|e| format!("{e} (embed JS redirect)"))?;
         }
         let flashvars = parse_flashvars(&entry_page.body).ok_or_else(|| {
             "Kaltura launch: the KAF embed page did not contain a `var flashvars = {...}` \
@@ -2019,6 +2050,23 @@ mod tests {
         assert_eq!(three[2].size_bytes, 191_748_125);
         assert_eq!(three[2].version, 2);
         assert!(three.iter().any(|f| f.is_original));
+    }
+
+    #[test]
+    fn js_location_href_from_real_cookie_check_page() {
+        let skeleton = fixture("embed_cookie_check.html");
+        let target = js_location_href(&skeleton).expect("js redirect target");
+        assert!(
+            target.starts_with(
+                "https://ntulearnv1.ntu.edu.sg/browseandembed/index/media-redirect/entryid/0_88lztt5a/"
+            ),
+            "{target}"
+        );
+        // no flashvars on the interstitial itself, and no JS hop on the real page
+        assert!(parse_flashvars(&skeleton).is_none());
+        let real = fixture("entry_page_flashvars.html");
+        assert!(js_location_href(&real).is_none());
+        assert!(js_location_href("<html>nothing</html>").is_none());
     }
 
     #[test]
