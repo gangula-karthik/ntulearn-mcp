@@ -152,30 +152,51 @@ sane nonzero size (legacy `<size>` KB as fallback when `sizeInBytes` is 0);
 Measured on CC0006 (25 videos, 99 VTT segments), same machine, warm
 discovery cache, 2026-11-12:
 
-| run | before | after |
-|---|---|---|
-| cold (full LTI chain) | 28.2 s | 4.2 s |
-| warm (kaltura.json session hit) | 28.2 s | ~1.1 s |
+| run | v0.7.6 | v0.8.0 | now |
+|---|---|---|---|
+| cold (full LTI chain, no kaltura.json) | 28.2 s | 4.2 s | **~2.9 s** |
+| warm (kaltura.json session hit) | 28.2 s | ~1.1 s | **~0.55 s** |
+| poisoned cache (dead KS cached) | 28.2 s | ~5 s | ~3.5 s |
 
 What changed (in order of impact):
 
 1. **Cross-run session cache** (`kaltura.json`, next to the cookie file —
    the pcv.json pattern): the player KS lives for hours and is
    course-wide, but every CLI invocation used to re-run the ~7-hop LTI
-   chain. Now the second run skips it. TTL 1 h (the KS is opaque); the
-   first rejection drops the entry.
-2. **Bounded entry concurrency (12)**: videos were walked one at a time
+   chain. Now the second run skips it. TTL 8 h (the KS is opaque; KAF player sessions are typically
+   minted for many hours); the first rejection drops the entry and
+   relaunches, so an over-long TTL costs ~0.6 s once, not correctness.
+2. **Bounded entry concurrency (32)**: videos were walked one at a time
    with a fixed 300 ms pause each; the bound replaces the pause as the
    politeness policy.
 3. **Parallel VTT segments (6 per video)**: the segments of one video are
    independent CDN files fetched concurrently, playlist order preserved.
+4. **media-redirect fast path** (launch): the embed URL's
+   `/index/media/` sibling `/index/media-redirect/` serves the flashvars
+   page DIRECTLY — no KAF cookie-check interstitial, no JS hop (~0.7 s
+   saved). Falls back to the interstitial + JS walk if the variant ever
+   stops cooperating.
+5. **Connection pre-warms** (launch): the Blackboard OIDC gateway
+   (`developer.blackboard.com`) sits mid-chain behind a ~1 s TLS
+   handshake (hosted far from SG); the launch opens that connection
+   while the earlier hops run and awaits it just before stepping onto
+   the host. The Kaltura API origin is pre-warmed the same way so the
+   first playManifest wave starts on live connections.
+
+Why a cold run cannot go under ~2.5 s: the LTI 1.3 chain is six
+sequential, data-dependent server round-trips (placement → oidc-init →
+gateway → auth page → form POST → media page) whose server-side
+latencies sum to ~2 s, one of them behind a ~1 s TLS handshake. The
+transcript fan-out after launch is ~0.55 s. The 8 h session cache keeps
+that whole chain off the hot path. Phase timings are available with
+`NTULEARN_PERF_TRACE=1` (stderr): discovery, each launch hop, transcripts.
 
 Failure-shape notes for the relaunch path:
 
 - A dead KS on playManifest is **HTTP 404 with an empty body** (not
   401/INVALID_KS) — fetch_text maps that shape to a rejected session so
   the run self-heals instead of reporting every video broken. Live
-  verification: a poisoned kaltura.json recovers in one relaunch (~5 s
+  verification: a poisoned kaltura.json recovers in one relaunch (~3.5 s
   for the whole course).
 - Under concurrency, eviction is conditional on the cached KS still being
   the rejected one (`invalidate_if_ks`): a straggler's failure must never
@@ -193,7 +214,7 @@ Failure-shape notes for the relaunch path:
   (`format` = `vtt|txt|both`, default both; txt = timestamps stripped).
   `save_dir` defaults to the state download dir. Per-video summary: title,
   entry, words, segments, label, file paths; "no captions" is a per-item
-  NOTE. 0.3s politeness sleep between entries.
+  NOTE. Entries are fetched with bounded concurrency (32).
 - `ntulearn_kaltura_download(course_id, content_id, quality?)` — §5, default
   `smallest`. Returns flavor chosen, bytes, path.
 
