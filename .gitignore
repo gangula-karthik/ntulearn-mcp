@@ -16,3 +16,17 @@ BbRouter
 *.swp
 .idea/
 .vscode/
+
+# Local agent-harness / research tooling state (machine-specific, never publish)
+.firecrawl/
+.hyperresearch/
+.prime/
+research/
+CLAUDE.md
+
+# Course content — NTU material, must never be committed to a public repo
+cc0006_transcripts/
+
+# Website build output (source in site/ stays visible for a future decision)
+site/node_modules/
+site/dist/
