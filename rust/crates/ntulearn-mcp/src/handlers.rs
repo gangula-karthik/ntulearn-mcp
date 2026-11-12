@@ -5035,7 +5035,7 @@ async fn content_item_embeds(
         .await
         .map_err(err_str)?;
     Ok(embeds_with_title_fallback(
-        crate::kaltura::extract_embeds(gs(&item, "body").unwrap_or("")),
+        crate::kaltura::extract_embeds_for(content_id, gs(&item, "body").unwrap_or("")),
         &item_title(&item),
     ))
 }
@@ -5070,7 +5070,7 @@ async fn discover_kaltura_embeds(
     for (content_id, title, res) in fetched {
         match res {
             Ok(item) => embeds.extend(embeds_with_title_fallback(
-                crate::kaltura::extract_embeds(gs(&item, "body").unwrap_or("")),
+                crate::kaltura::extract_embeds_for(&content_id, gs(&item, "body").unwrap_or("")),
                 &title,
             )),
             Err(e) => skipped.push(json!({
