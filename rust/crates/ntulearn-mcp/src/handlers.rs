@@ -19,12 +19,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 use crate::mcp::ToolContent;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::client::{ClientError, NTULearnClient};
 use crate::fbf::{FbfCriterion, FbfOption, FbfRating, FbfReview, FbfSession, FbfTask};
 use crate::kaltura::{FlavorAsset, KalturaEmbed, KalturaSession, TranscriptError};
-use crate::{parsers, render, AppState};
+use crate::{AppState, parsers, render};
 
 // ---------------------------------------------------------------------------
 // Constants (mirror handlers.py / server.py / common.py)
@@ -354,7 +354,7 @@ fn parse_page_range(spec: Option<&Value>) -> Result<Option<HashSet<u32>>, String
         other => {
             return Err(format!(
                 "pages must be a string like '1,3-5', got {other:?}"
-            ))
+            ));
         }
     };
     let text = text.trim();
@@ -1465,11 +1465,7 @@ fn parse_extensions(raw: Option<&Value>) -> Option<HashSet<String>> {
             set.insert(p);
         }
     }
-    if set.is_empty() {
-        None
-    } else {
-        Some(set)
-    }
+    if set.is_empty() { None } else { Some(set) }
 }
 
 async fn download_worker(
@@ -1848,10 +1844,11 @@ fn build_ics(items: &[Value], _scope: &str) -> String {
                     item.get("id").and_then(|v| v.as_str()).unwrap_or("x"),
                 )
             });
-        let title = ics_escape(Some(&json!(item
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Untitled event"))));
+        let title = ics_escape(Some(&json!(
+            item.get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled event")
+        )));
         let desc = ics_escape(item.get("description"));
         let location = ics_escape(item.get("location"));
         let start = ics_dt(item.get("start"));
@@ -3793,7 +3790,10 @@ async fn fbf_given_with_names(
     let allocations = session.allocations_given(&task.id).await?;
     let mut out = Vec::with_capacity(allocations.len());
     for (alloc_id, ratee) in allocations {
-        let name = session.user_name(&ratee).await.unwrap_or_else(|_| ratee.clone());
+        let name = session
+            .user_name(&ratee)
+            .await
+            .unwrap_or_else(|_| ratee.clone());
         out.push((alloc_id, ratee, name));
     }
     Ok(out)
@@ -3814,8 +3814,10 @@ async fn fbf_rating_rows(
     if allocations.is_empty() {
         return Ok((Vec::new(), 0));
     }
-    let fetched: Vec<(String, Vec<FbfCriterion>, Vec<FbfRating>)> =
-        bounded_map(allocations, fanout_limit(), |(alloc_id, user_id)| async move {
+    let fetched: Vec<(String, Vec<FbfCriterion>, Vec<FbfRating>)> = bounded_map(
+        allocations,
+        fanout_limit(),
+        |(alloc_id, user_id)| async move {
             let name = session
                 .user_name(&user_id)
                 .await
@@ -3823,10 +3825,11 @@ async fn fbf_rating_rows(
             let criteria = session.criteria(&alloc_id).await?;
             let ratings = session.ratings(&alloc_id).await?;
             Ok::<_, String>((name, criteria, ratings))
-        })
-        .await
-        .into_iter()
-        .collect::<Result<_, String>>()?;
+        },
+    )
+    .await
+    .into_iter()
+    .collect::<Result<_, String>>()?;
 
     // Distinct option ids across every criteria set plus every rated option,
     // each fetched exactly once.
@@ -3845,15 +3848,14 @@ async fn fbf_rating_rows(
             }
         }
     }
-    let options: HashMap<String, FbfOption> = bounded_map(option_ids, fanout_limit(), |oid| {
-        async move {
+    let options: HashMap<String, FbfOption> =
+        bounded_map(option_ids, fanout_limit(), |oid| async move {
             let o = session.option(&oid).await?;
             Ok::<_, String>((oid, o))
-        }
-    })
-    .await
-    .into_iter()
-    .collect::<Result<HashMap<_, _>, String>>()?;
+        })
+        .await
+        .into_iter()
+        .collect::<Result<HashMap<_, _>, String>>()?;
 
     let mut rows: Vec<Value> = Vec::new();
     let mut unrated = 0usize;
@@ -3889,23 +3891,29 @@ async fn fbf_rating_rows(
 
 /// Written reviews received on the "Overall comments" task (empty until the
 /// teacher publishes, same as received ratings).
-async fn fbf_received_comments(session: &FbfSession, task: Option<&FbfTask>) -> Result<Vec<Value>, String> {
+async fn fbf_received_comments(
+    session: &FbfSession,
+    task: Option<&FbfTask>,
+) -> Result<Vec<Value>, String> {
     let Some(task) = task else {
         return Ok(Vec::new());
     };
     let allocations = session.allocations_received(&task.id).await?;
-    let fetched: Vec<(String, Vec<FbfReview>)> =
-        bounded_map(allocations, fanout_limit(), |(alloc_id, giver)| async move {
+    let fetched: Vec<(String, Vec<FbfReview>)> = bounded_map(
+        allocations,
+        fanout_limit(),
+        |(alloc_id, giver)| async move {
             let name = session
                 .user_name(&giver)
                 .await
                 .unwrap_or_else(|_| giver.clone());
             let reviews = session.reviews(&alloc_id).await?;
             Ok::<_, String>((name, reviews))
-        })
-        .await
-        .into_iter()
-        .collect::<Result<_, String>>()?;
+        },
+    )
+    .await
+    .into_iter()
+    .collect::<Result<_, String>>()?;
     let mut rows: Vec<Value> = Vec::new();
     for (name, reviews) in fetched {
         for rev in reviews {
@@ -4013,20 +4021,18 @@ async fn fbf_activity_report(session: &FbfSession, content_id: &str) -> Result<V
 
     // Task progress lookups run together; a task without a progress
     // relationship (e.g. instructions) reports null, not a fabricated 0.
-    let task_rows = bounded_map(tasks, fanout_limit(), |t| {
-        async move {
-            let progress = match &t.progress_id {
-                Some(pid) => session.progress(pid).await.ok(),
-                None => None,
-            };
-            json!({
-                "title": t.title.clone().unwrap_or_else(|| t.kind.clone()),
-                "type": t.kind,
-                "deadline": t.deadline,
-                "progress": progress,
-                "done": progress.map(|p| p >= 100),
-            })
-        }
+    let task_rows = bounded_map(tasks, fanout_limit(), |t| async move {
+        let progress = match &t.progress_id {
+            Some(pid) => session.progress(pid).await.ok(),
+            None => None,
+        };
+        json!({
+            "title": t.title.clone().unwrap_or_else(|| t.kind.clone()),
+            "type": t.kind,
+            "deadline": t.deadline,
+            "progress": progress,
+            "done": progress.map(|p| p >= 100),
+        })
     })
     .await;
 
@@ -4036,7 +4042,10 @@ async fn fbf_activity_report(session: &FbfSession, content_id: &str) -> Result<V
     };
     // grades-published-at stays null until the teacher releases results; a
     // failed release-state read must not sink the whole report.
-    let release = session.release_state(&activity_id).await.unwrap_or_else(|_| json!({}));
+    let release = session
+        .release_state(&activity_id)
+        .await
+        .unwrap_or_else(|_| json!({}));
 
     Ok(json!({
         "contentId": content_id,
@@ -4091,22 +4100,24 @@ async fn h_fbf_reviews(state: &AppState, args: &Value) -> Result<Value, String> 
     // stay null until the teacher releases; until then FBF returns no data
     // and the honest report is "not yet released", not an error.
     let release = session.release_state(&activity_id).await?;
-    let any_published = ["ratingsPublishedAt", "reviewsPublishedAt", "gradesPublishedAt"]
-        .iter()
-        .any(|k| release.get(k).is_some_and(|v| !v.is_null()));
+    let any_published = [
+        "ratingsPublishedAt",
+        "reviewsPublishedAt",
+        "gradesPublishedAt",
+    ]
+    .iter()
+    .any(|k| release.get(k).is_some_and(|v| !v.is_null()));
     let received_allocations = session.allocations_received(&ratings_task.id).await?;
     let (rows, _) = fbf_rating_rows(&session, received_allocations, false).await?;
 
     // Written reviews received live on the "Overall comments" task's own
     // allocations; its absence just means this activity collects none.
-    let comments_task = tasks
-        .iter()
-        .find(|t| {
-            t.title
-                .as_deref()
-                .map(|s| s.to_lowercase().contains("overall comment"))
-                .unwrap_or(false)
-        });
+    let comments_task = tasks.iter().find(|t| {
+        t.title
+            .as_deref()
+            .map(|s| s.to_lowercase().contains("overall comment"))
+            .unwrap_or(false)
+    });
     let comments = fbf_received_comments(&session, comments_task).await?;
 
     let released = any_published || !rows.is_empty() || !comments.is_empty();
@@ -4153,7 +4164,10 @@ async fn h_fbf_rate(state: &AppState, args: &Value) -> Result<Value, String> {
         return Err("criterion must be a non-empty substring of a criterion title".to_string());
     }
     if option_arg.is_empty() {
-        return Err("option must be a non-empty option title substring or the exact weight number".to_string());
+        return Err(
+            "option must be a non-empty option title substring or the exact weight number"
+                .to_string(),
+        );
     }
     let dry_run = bool_arg(args, "dry_run", true);
     let _fmt = response_format(args)?;
@@ -4262,7 +4276,10 @@ async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> 
     let text = str_arg(args, "text").unwrap_or("").trim().to_string();
     // Optional override for "areas to improve" style criteria, so the same
     // praise is not pasted into an improvement box.
-    let improve_text = str_arg(args, "improve_text").unwrap_or("").trim().to_string();
+    let improve_text = str_arg(args, "improve_text")
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if teammate.is_empty() {
         return Err("teammate must be a non-empty substring of a teammate name".to_string());
     }
@@ -4310,7 +4327,6 @@ async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> 
         "result": result,
     }))
 }
-
 
 // ---------------------------------------------------------------------------
 // Peerceptiv (PCV) peer evaluation (PCV_SPEC.md §4)
@@ -4586,9 +4602,13 @@ async fn h_pcv_evals(state: &AppState, args: &Value) -> Result<Value, String> {
         // while hideRatingResults & co. are true) — a normal state that is
         // reported, never an error. A 403 with the flags off is a real
         // session problem and surfaces normally.
-        let hidden = ["hideRatingResults", "hideCommentResults", "hideGradeResults"]
-            .iter()
-            .any(|k| assignment.get(k).and_then(|v| v.as_bool()) == Some(true));
+        let hidden = [
+            "hideRatingResults",
+            "hideCommentResults",
+            "hideGradeResults",
+        ]
+        .iter()
+        .any(|k| assignment.get(k).and_then(|v| v.as_bool()) == Some(true));
         match session.evals_received(&aid, &uid).await {
             Ok(v) => v,
             Err(e) if hidden => Vec::new(),
@@ -4663,7 +4683,11 @@ async fn h_pcv_evals(state: &AppState, args: &Value) -> Result<Value, String> {
     payload.insert("assignmentId".to_string(), Value::String(aid));
     payload.insert(
         "assignmentTitle".to_string(),
-        Value::String(gs(&assignment, "assignmentName").unwrap_or("untitled").to_string()),
+        Value::String(
+            gs(&assignment, "assignmentName")
+                .unwrap_or("untitled")
+                .to_string(),
+        ),
     );
     payload.insert("direction".to_string(), Value::String(direction.clone()));
     payload.insert("teammates".to_string(), Value::from(evals.len() as u64));
@@ -4787,7 +4811,11 @@ async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
         });
 
     let upsert = match &eval_id {
-        Some(id) => Some(session.upsert_rating(id, &item.rating_id, score, dry_run).await?),
+        Some(id) => Some(
+            session
+                .upsert_rating(id, &item.rating_id, score, dry_run)
+                .await?,
+        ),
         None => None,
     };
 
@@ -4797,7 +4825,11 @@ async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
     payload.insert("assignmentId".to_string(), Value::String(aid));
     payload.insert(
         "assignmentTitle".to_string(),
-        Value::String(gs(&assignment, "assignmentName").unwrap_or("untitled").to_string()),
+        Value::String(
+            gs(&assignment, "assignmentName")
+                .unwrap_or("untitled")
+                .to_string(),
+        ),
     );
     payload.insert("teammate".to_string(), Value::String(peer_name));
     payload.insert("criterion".to_string(), Value::String(item.name.clone()));
@@ -4912,7 +4944,11 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
     payload.insert("assignmentId".to_string(), Value::String(aid));
     payload.insert(
         "assignmentTitle".to_string(),
-        Value::String(gs(&assignment, "assignmentName").unwrap_or("untitled").to_string()),
+        Value::String(
+            gs(&assignment, "assignmentName")
+                .unwrap_or("untitled")
+                .to_string(),
+        ),
     );
     payload.insert("teammate".to_string(), Value::String(peer_name));
     payload.insert("comments".to_string(), Value::Array(comment_rows));
@@ -4938,10 +4974,13 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
 // Kaltura transcripts / video downloads (kaltura.rs; KALTURA_SPEC.md)
 // ---------------------------------------------------------------------------
 
-/// Politeness pause between two Kaltura entries: transcript fetches hit
-/// Kaltura's CDN once per VTT segment, and a whole-course run walks dozens
-/// of entries back to back.
-const KALTURA_ENTRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+/// Concurrent transcript fetches across a whole course. This bound IS the
+/// politeness policy: 25 videos used to walk one at a time with a fixed
+/// pause each; now at most this many manifest/playlist/segment requests
+/// are in flight at once (VTT segments within one video add a further
+/// bound of 6, see kaltura.rs). A real browser player issues comparable
+/// bursts.
+const KALTURA_ENTRY_CONCURRENCY: usize = 12;
 
 /// `format` argument of kaltura_transcripts: which files to write per video.
 fn resolve_transcript_format(args: &Value) -> Result<String, String> {
@@ -5060,7 +5099,9 @@ async fn discover_kaltura_embeds(
         .collect();
 
     let fetched = bounded_map(nodes, fanout_limit(), |(content_id, title)| async move {
-        let res = c.get_content_item_with_body(course_id, &content_id, None).await;
+        let res = c
+            .get_content_item_with_body(course_id, &content_id, None)
+            .await;
         (content_id, title, res)
     })
     .await;
@@ -5096,9 +5137,7 @@ fn transcript_outcome_as_note(
     err: &TranscriptError,
 ) -> Value {
     let note = match err {
-        TranscriptError::NoCaptions => {
-            "no caption track — this video has no captions".to_string()
-        }
+        TranscriptError::NoCaptions => "no caption track — this video has no captions".to_string(),
         other => other.message(),
     };
     json!({
@@ -5127,11 +5166,12 @@ fn is_auth_shaped(message: &str) -> bool {
 /// request cannot be satisfied (e.g. 'original' on a re-encoded entry), the
 /// smallest available flavor is returned with an explanatory note so the
 /// download still succeeds.
-fn pick_flavor(flavors: &[FlavorAsset], quality: &str) -> Result<(FlavorAsset, Option<String>), String> {
+fn pick_flavor(
+    flavors: &[FlavorAsset],
+    quality: &str,
+) -> Result<(FlavorAsset, Option<String>), String> {
     if flavors.is_empty() {
-        return Err(
-            "Kaltura returned no downloadable flavors for this entry".to_string(),
-        );
+        return Err("Kaltura returned no downloadable flavors for this entry".to_string());
     }
     let requested: Option<&FlavorAsset> = match quality {
         "original" => flavors.iter().find(|f| f.is_original),
@@ -5152,7 +5192,9 @@ fn pick_flavor(flavors: &[FlavorAsset], quality: &str) -> Result<(FlavorAsset, O
                 .iter()
                 .min_by_key(|f| f.size_bytes)
                 .cloned()
-                .ok_or_else(|| "Kaltura returned no downloadable flavors for this entry".to_string())?;
+                .ok_or_else(|| {
+                    "Kaltura returned no downloadable flavors for this entry".to_string()
+                })?;
             Ok((
                 fallback,
                 Some(format!(
@@ -5207,7 +5249,10 @@ async fn h_kaltura_list(state: &AppState, args: &Value) -> Result<Value, String>
         );
     }
     payload.insert("videoCount".to_string(), json!(embeds.len()));
-    payload.insert("videos".to_string(), Value::Array(kaltura_video_rows(&embeds)));
+    payload.insert(
+        "videos".to_string(),
+        Value::Array(kaltura_video_rows(&embeds)),
+    );
     Ok(Value::Object(payload))
 }
 
@@ -5274,109 +5319,129 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
         ));
     }
 
-    let mut session: Option<KalturaSession> = None;
+    // Launch once, up front, through the first embed — with the on-disk
+    // session cache (kaltura.rs) this is normally a cache hit; a cold miss
+    // runs the ~7-hop LTI chain once instead of hidden inside the first
+    // entry's task. An explicit content_id the caller named must fail
+    // loudly; in whole-course mode a failed launch degrades to per-entry
+    // notes (one broken placement must not hide the others).
+    let session: Option<KalturaSession> =
+        match KalturaSession::launch(state, &course_id, &embeds[0].content_id).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                if content_id.is_some() {
+                    return Err(format!(
+                        "Kaltura launch for content_id {} failed: {e}",
+                        embeds[0].content_id
+                    ));
+                }
+                None
+            }
+        };
+
+    // Fetch every entry's transcript with bounded concurrency; bounded_map
+    // preserves input order, so rows and notes come out in course order.
+    // Failures never short-circuit the course run.
+    let outcomes: Vec<Value> = bounded_map(embeds.clone(), KALTURA_ENTRY_CONCURRENCY, |embed| {
+        let session = session.clone();
+        let course_id = course_id.clone();
+        let format = format.clone();
+        let out_dir = out_dir.clone();
+        let state = state;
+        async move {
+            // Lazy per-entry launch only when the up-front launch failed
+            // (whole-course mode): each entry tries its own placement.
+            let session = match session {
+                Some(s) => s,
+                None => match KalturaSession::launch(state, &course_id, &embed.content_id).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return transcript_outcome_as_note(
+                            &embed.content_id,
+                            &embed.title,
+                            &embed.entry_id,
+                            &TranscriptError::Network(format!("launch failed: {e}")),
+                        );
+                    }
+                },
+            };
+            let mut result = session.transcript(&embed.entry_id).await;
+            // Auth-shaped failure -> the KS died mid-run; relaunch once
+            // (relaunch_if_stale de-duplicates concurrent relaunches) and
+            // retry before reporting the video as a note.
+            if let Err(TranscriptError::Network(m)) = &result {
+                if is_auth_shaped(m) {
+                    result = match KalturaSession::relaunch_if_stale(
+                        state,
+                        &course_id,
+                        session.ks(),
+                        &embed.content_id,
+                    )
+                    .await
+                    {
+                        Ok(s) => s.transcript(&embed.entry_id).await,
+                        Err(e) => Err(TranscriptError::Network(format!(
+                            "session relaunch failed: {e}"
+                        ))),
+                    };
+                }
+            }
+            match result {
+                Ok(t) => {
+                    let title = if embed.title.trim().is_empty() {
+                        "untitled".to_string()
+                    } else {
+                        embed.title.clone()
+                    };
+                    let base = parsers::sanitize_filename(&title);
+                    let mut row = json!({
+                        "contentId": embed.content_id,
+                        "title": title,
+                        "entryId": embed.entry_id,
+                        "label": t.label,
+                        "words": t.words,
+                        "segments": t.segments,
+                    });
+                    if format != "txt" {
+                        let path = out_dir.join(format!("{base}.vtt"));
+                        if let Err(e) = tokio::fs::write(&path, &t.vtt).await {
+                            return json!({
+                                "contentId": embed.content_id,
+                                "title": embed.title,
+                                "entryId": embed.entry_id,
+                                "note": format!("cannot write {}: {e}", path.to_string_lossy()),
+                            });
+                        }
+                        row["vttFile"] = Value::String(path.to_string_lossy().to_string());
+                    }
+                    if format != "vtt" {
+                        let path = out_dir.join(format!("{base}.txt"));
+                        if let Err(e) = tokio::fs::write(&path, &t.text).await {
+                            return json!({
+                                "contentId": embed.content_id,
+                                "title": embed.title,
+                                "entryId": embed.entry_id,
+                                "note": format!("cannot write {}: {e}", path.to_string_lossy()),
+                            });
+                        }
+                        row["txtFile"] = Value::String(path.to_string_lossy().to_string());
+                    }
+                    row
+                }
+                Err(e) => {
+                    transcript_outcome_as_note(&embed.content_id, &embed.title, &embed.entry_id, &e)
+                }
+            }
+        }
+    })
+    .await;
     let mut videos: Vec<Value> = Vec::new();
     let mut notes: Vec<Value> = Vec::new();
-    for (i, embed) in embeds.iter().enumerate() {
-        if i > 0 {
-            tokio::time::sleep(KALTURA_ENTRY_PAUSE).await;
-        }
-        // Lazy launch: the first embed's content item runs the LTI chain; a
-        // failed launch in discovery mode becomes a per-video note (one
-        // broken placement must not hide the others), while an explicit
-        // content_id the caller named must fail loudly.
-        if session.is_none() {
-            match KalturaSession::launch(state, &course_id, &embed.content_id).await {
-                Ok(s) => session = Some(s),
-                Err(e) => {
-                    if content_id.is_some() {
-                        return Err(format!(
-                            "Kaltura launch for content_id {} failed: {e}",
-                            embed.content_id
-                        ));
-                    }
-                    notes.push(json!({
-                        "contentId": embed.content_id,
-                        "title": embed.title,
-                        "entryId": embed.entry_id,
-                        "note": format!("launch failed: {e}"),
-                    }));
-                    continue;
-                }
-            }
-        }
-        let mut result = match session.as_ref() {
-            Some(s) => s.transcript(&embed.entry_id).await,
-            None => continue,
-        };
-        // Auth-shaped failure -> the KS died mid-run; relaunch once and
-        // retry before reporting the video as a note.
-        if let Err(TranscriptError::Network(m)) = &result {
-            if is_auth_shaped(m) {
-                match KalturaSession::launch(state, &course_id, &embed.content_id).await {
-                    Ok(s) => {
-                        session = Some(s);
-                        result = match session.as_ref() {
-                            Some(s) => s.transcript(&embed.entry_id).await,
-                            None => continue,
-                        };
-                    }
-                    Err(e) => {
-                        notes.push(json!({
-                            "contentId": embed.content_id,
-                            "title": embed.title,
-                            "entryId": embed.entry_id,
-                            "note": format!("session relaunch failed: {e}"),
-                        }));
-                        continue;
-                    }
-                }
-            }
-        }
-        match result {
-            Ok(t) => {
-                let title = if embed.title.trim().is_empty() {
-                    "untitled".to_string()
-                } else {
-                    embed.title.clone()
-                };
-                let base = parsers::sanitize_filename(&title);
-                let mut row = json!({
-                    "contentId": embed.content_id,
-                    "title": title,
-                    "entryId": embed.entry_id,
-                    "label": t.label,
-                    "words": t.words,
-                    "segments": t.segments,
-                });
-                if format != "txt" {
-                    let path = out_dir.join(format!("{base}.vtt"));
-                    if let Err(e) = tokio::fs::write(&path, &t.vtt).await {
-                        return Err(format!(
-                            "cannot write {}: {e}",
-                            path.to_string_lossy()
-                        ));
-                    }
-                    row["vttFile"] = Value::String(path.to_string_lossy().to_string());
-                }
-                if format != "vtt" {
-                    let path = out_dir.join(format!("{base}.txt"));
-                    if let Err(e) = tokio::fs::write(&path, &t.text).await {
-                        return Err(format!(
-                            "cannot write {}: {e}",
-                            path.to_string_lossy()
-                        ));
-                    }
-                    row["txtFile"] = Value::String(path.to_string_lossy().to_string());
-                }
-                videos.push(row);
-            }
-            Err(e) => notes.push(transcript_outcome_as_note(
-                &embed.content_id,
-                &embed.title,
-                &embed.entry_id,
-                &e,
-            )),
+    for outcome in outcomes {
+        if outcome.get("note").is_some() {
+            notes.push(outcome);
+        } else {
+            videos.push(outcome);
         }
     }
 
@@ -5731,7 +5796,6 @@ mod args_guard_tests {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Kaltura wiring tests (stub-backed: the pure arg/payload logic only —
 // network paths are exercised by the e2e script after the core merges)
@@ -5804,12 +5868,21 @@ mod kaltura_wiring_tests {
         // quality enum
         assert!(resolve_quality(&json!({"quality": "hd"})).is_err());
         assert_eq!(resolve_quality(&json!({})).unwrap(), "smallest");
-        assert_eq!(resolve_quality(&json!({"quality": "ORIGINAL"})).unwrap(), "original");
+        assert_eq!(
+            resolve_quality(&json!({"quality": "ORIGINAL"})).unwrap(),
+            "original"
+        );
         // transcript format enum
         assert!(resolve_transcript_format(&json!({"format": "srt"})).is_err());
         assert_eq!(resolve_transcript_format(&json!({})).unwrap(), "both");
-        assert_eq!(resolve_transcript_format(&json!({"format": "VTT"})).unwrap(), "vtt");
-        assert_eq!(resolve_transcript_format(&json!({"format": "txt"})).unwrap(), "txt");
+        assert_eq!(
+            resolve_transcript_format(&json!({"format": "VTT"})).unwrap(),
+            "vtt"
+        );
+        assert_eq!(
+            resolve_transcript_format(&json!({"format": "txt"})).unwrap(),
+            "txt"
+        );
         // save_dir: non-string and empty are rejected, absent falls back to
         // the state download dir
         let state = test_state();

@@ -147,7 +147,41 @@ written. Quality rules: `smallest` = fewest bytes with `height > 0` and a
 sane nonzero size (legacy `<size>` KB as fallback when `sizeInBytes` is 0);
 `best` = largest non-original; `original` = the `isOriginal` flavor.
 
-## 6. Tool surface
+## 6. Performance (whole-course transcripts)
+
+Measured on CC0006 (25 videos, 99 VTT segments), same machine, warm
+discovery cache, 2026-11-12:
+
+| run | before | after |
+|---|---|---|
+| cold (full LTI chain) | 28.2 s | 4.2 s |
+| warm (kaltura.json session hit) | 28.2 s | ~1.1 s |
+
+What changed (in order of impact):
+
+1. **Cross-run session cache** (`kaltura.json`, next to the cookie file —
+   the pcv.json pattern): the player KS lives for hours and is
+   course-wide, but every CLI invocation used to re-run the ~7-hop LTI
+   chain. Now the second run skips it. TTL 1 h (the KS is opaque); the
+   first rejection drops the entry.
+2. **Bounded entry concurrency (12)**: videos were walked one at a time
+   with a fixed 300 ms pause each; the bound replaces the pause as the
+   politeness policy.
+3. **Parallel VTT segments (6 per video)**: the segments of one video are
+   independent CDN files fetched concurrently, playlist order preserved.
+
+Failure-shape notes for the relaunch path:
+
+- A dead KS on playManifest is **HTTP 404 with an empty body** (not
+  401/INVALID_KS) — fetch_text maps that shape to a rejected session so
+  the run self-heals instead of reporting every video broken. Live
+  verification: a poisoned kaltura.json recovers in one relaunch (~5 s
+  for the whole course).
+- Under concurrency, eviction is conditional on the cached KS still being
+  the rejected one (`invalidate_if_ks`): a straggler's failure must never
+  evict a freshly re-launched session.
+
+## 7. Tool surface
 
 - `ntulearn_kaltura_list(course_id)` — discovery (§1) over the full content
   tree (parents + children, like `pcv_status` auto-discovery). Returns
@@ -165,7 +199,7 @@ sane nonzero size (legacy `<size>` KB as fallback when `sizeInBytes` is 0);
 
 Response formats toon (default) / json / markdown via `render.rs`.
 
-## 7. Rust module contract: `src/kaltura.rs`
+## 8. Rust module contract: `src/kaltura.rs`
 
 See PLAN.md §1 (frozen): `KalturaEmbed`, `CaptionAsset`, `FlavorAsset`,
 `Transcript`, `TranscriptError`, `KalturaSession` (`launch`, `ks`,
@@ -177,7 +211,7 @@ See PLAN.md §1 (frozen): `KalturaEmbed`, `CaptionAsset`, `FlavorAsset`,
 strings that mention `ntulearn_login` for auth-shaped failures, no unwrap
 in non-test code, fixture-driven `#[cfg(test)]` tests).
 
-## 8. Test matrix (live, post-merge — `scripts/verify-kaltura-e2e.sh`)
+## 9. Test matrix (live, post-merge — `scripts/verify-kaltura-e2e.sh`)
 
 1. `kaltura-list` on `_2707070_1` finds exactly 25 videos, including
    `0_88lztt5a` under content `_5976141_1`.
