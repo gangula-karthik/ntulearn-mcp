@@ -5444,7 +5444,26 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
             videos.push(outcome);
         }
     }
+    // Integrity: every discovered embed must produce exactly one outcome
+    // (video row or note). bounded_map guarantees it by construction; this
+    // check makes a future refactor that silently drops one LOUD instead
+    // of quiet.
+    if videos.len() + notes.len() != embeds.len() {
+        notes.push(json!({
+            "title": "incomplete extraction",
+            "note": format!(
+                "{} of {} embedded video(s) produced no result — this is a bug; \
+                 report it with the course id",
+                embeds.len() - videos.len() - notes.len(),
+                embeds.len()
+            ),
+        }));
+    }
 
+    // `total` = every embedded video: the compact CLI renders it as
+    // "# videos - 24 row(s) of 25", so a partial run can never look
+    // complete at a glance.
+    payload.insert("total".to_string(), json!(embeds.len()));
     payload.insert("videoCount".to_string(), json!(videos.len()));
     payload.insert("videos".to_string(), Value::Array(videos));
     payload.insert("notes".to_string(), Value::Array(notes));
@@ -6013,6 +6032,7 @@ mod kaltura_wiring_tests {
             "courseId": "_2707070_1",
             "format": "both",
             "outputDir": "/tmp/dl/kaltura/_2707070_1",
+            "total": 2,
             "videoCount": 1,
             "videos": [ {
                 "contentId": "_5976141_1",
@@ -6034,6 +6054,10 @@ mod kaltura_wiring_tests {
         let md = render::md_kaltura_transcripts(&transcripts);
         assert!(md.contains("3553 words"), "{md}");
         assert!(md.contains("no caption track"), "{md}");
+        assert!(
+            md.contains("_partial: 1 of 2 videos_"),
+            "partial run must be disclosed: {md}"
+        );
 
         let download = json!({
             "courseId": "_2707070_1",
