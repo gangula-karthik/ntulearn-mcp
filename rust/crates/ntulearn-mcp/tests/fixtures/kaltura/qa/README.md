@@ -3,7 +3,7 @@
 Fabricated edge cases for the `src/kaltura.rs` parsers, plus one real
 reference file. The real captured protocol fixtures live one level up in
 `tests/fixtures/kaltura/` (core pack). Protocol background: repo-root
-`KALTURA_SPEC.md`.
+`docs/KALTURA_SPEC.md`.
 
 | Fixture | Must trigger |
 |---|---|

@@ -240,7 +240,7 @@ tax'" becomes one tool call per course. A video without captions shows up as a
 per-item note, never a failed call. `kaltura_download` streams the MP4
 (`smallest` by default — a 540p lecture is ~150 MB, originals run to 1.7 GB).
 
-Protocol details and live-verification notes: [KALTURA_SPEC.md](KALTURA_SPEC.md).
+Protocol details and live-verification notes: [KALTURA_SPEC.md](docs/KALTURA_SPEC.md).
 
 List-returning tools accept `limit`/`offset`. A resource URI,
 `ntulearn://courses/{course_id}`, returns a JSON course briefing, and two prompts

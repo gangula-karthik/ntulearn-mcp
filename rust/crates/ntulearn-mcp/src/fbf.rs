@@ -2,9 +2,9 @@
 //!
 //! FeedbackFruits is embedded in NTULearn as an LTI 1.3 tool: there is no
 //! direct login, the only way in is the BbRouter-authenticated launch chain
-//! (see FBF_SPEC.md §1). This module owns that chain plus the thin typed
+//! (see docs/FBF_SPEC.md §1). This module owns that chain plus the thin typed
 //! read/write surface over the JSON:API the FBF SPA itself uses
-//! (FBF_SPEC.md §2–§3).
+//! (docs/FBF_SPEC.md §2–§3).
 //!
 //! Design notes:
 //! * The workspace reqwest does NOT enable the `cookies` feature, so the LTI
@@ -1110,7 +1110,7 @@ impl FbfSession {
         Ok((status, body))
     }
 
-    // -- reads (FBF_SPEC.md §2) ---------------------------------------------
+    // -- reads (docs/FBF_SPEC.md §2) ---------------------------------------------
 
     /// The activity (title + activity-level progress relationship).
     pub async fn activity(&self, activity_id: &str) -> Result<FbfActivity, String> {
@@ -1217,7 +1217,7 @@ impl FbfSession {
         Ok(parse_release_state(&v))
     }
 
-    // -- writes (FBF_SPEC.md §3) --------------------------------------------
+    // -- writes (docs/FBF_SPEC.md §3) --------------------------------------------
 
     /// Set the rating for one (allocation, criterion): PATCH the existing
     /// rating when one is already there, else POST a new one.
@@ -1424,7 +1424,7 @@ impl FbfSession {
 
 
 // ===========================================================================
-// Tests — fixture-driven, no network (see FBF_SPEC.md fixtures)
+// Tests — fixture-driven, no network (see docs/FBF_SPEC.md fixtures)
 // ===========================================================================
 
 #[cfg(test)]

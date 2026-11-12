@@ -2,9 +2,9 @@
 //!
 //! Peerceptiv is embedded in NTULearn as an LTI 1.3 tool: there is no direct
 //! login, the only way in is the BbRouter-authenticated launch chain (see
-//! PCV_SPEC.md §1). This module owns that chain plus the thin typed
+//! docs/PCV_SPEC.md §1). This module owns that chain plus the thin typed
 //! read/write surface over the JSON API the Peerceptiv SPA itself uses
-//! (PCV_SPEC.md §2–§3). It mirrors fbf.rs in structure and style; the
+//! (docs/PCV_SPEC.md §2–§3). It mirrors fbf.rs in structure and style; the
 //! differences that matter:
 //!
 //! * The entry executor is `launchPlacement` (not `launchLink`), and the REST
@@ -58,7 +58,7 @@ const TOKEN_EXPIRY_MARGIN_SECS: i64 = 60;
 /// Cache file name inside the config dir (next to the cookie file).
 const PCV_SESSION_FILE: &str = "pcv.json";
 /// The Peerceptiv API origin (the SPA lands on asia.app, but every API call
-/// the SPA makes goes here — PCV_SPEC.md §1/§2).
+/// the SPA makes goes here — docs/PCV_SPEC.md §1/§2).
 const API_BASE: &str = "https://sg.api.peerceptiv.com";
 /// Host the API cookies are collected for (Domain=.sg.api.peerceptiv.com or
 /// host-only — the jar's pairs_for handles both).
@@ -339,7 +339,7 @@ fn is_blti_placement_content(item: &Value) -> bool {
 
 /// (pcvCourseId, assignmentId) out of the POST's 302 Location
 /// `.../course/{pcvCourseId}/assignment/{assignmentId}/dashboard` — these
-/// path segments ARE the API ids (PCV_SPEC.md §1 step 6).
+/// path segments ARE the API ids (docs/PCV_SPEC.md §1 step 6).
 fn ids_from_dashboard_url(url: &reqwest::Url) -> Option<(String, String)> {
     let segments: Vec<&str> = url.path_segments()?.collect();
     let mut course: Option<String> = None;
@@ -748,7 +748,7 @@ pub fn progress_summary(v: &Value) -> Value {
 }
 
 /// The full ratings map for a PUT after setting one rating. Full-map
-/// replace semantics (PCV_SPEC.md §3): every existing entry is kept.
+/// replace semantics (docs/PCV_SPEC.md §3): every existing entry is kept.
 fn merged_rating_map(
     existing: HashMap<String, i64>,
     rating_id: &str,
@@ -784,7 +784,7 @@ fn merged_comment_map(
 
 /// Caller identity from `GET /me`. NOTE: group member users carry
 /// `firstName` = school ("CCDS") and `lastName` = name — display as
-/// `lastName` (PCV_SPEC.md §2).
+/// `lastName` (docs/PCV_SPEC.md §2).
 #[derive(Debug, Clone)]
 pub struct PcvUser {
     pub user_id: String,
@@ -920,7 +920,7 @@ impl PcvSession {
     /// auto-submit form, then read the API ids out of the 302 Location.
     /// A fresh launch ALWAYS restarts from the placement URL — the
     /// login_hint tokens inside the chain are single-use and are never
-    /// cached (PCV_SPEC.md §1).
+    /// cached (docs/PCV_SPEC.md §1).
     ///
     /// This is also the refresh path: an expired cached session simply means
     /// the chain runs again (re-launching re-mints everything).
@@ -1174,7 +1174,7 @@ impl PcvSession {
     }
 
     /// The session-dead error for 401/403: the handler layer re-launches on
-    /// this; writes are never silently retried (PCV_SPEC.md §3).
+    /// this; writes are never silently retried (docs/PCV_SPEC.md §3).
     fn session_rejected(method: &str, url: &str, status: u16) -> String {
         format!(
             "Peerceptiv session rejected (HTTP {status} on {method} {url}). The Peerceptiv \
@@ -1276,7 +1276,7 @@ impl PcvSession {
         })
     }
 
-    // -- reads (PCV_SPEC.md §2) ---------------------------------------------
+    // -- reads (docs/PCV_SPEC.md §2) ---------------------------------------------
 
     /// Caller identity: `GET /me`. The launch chain calls this to pin the
     /// session's user id.
@@ -1355,7 +1355,7 @@ impl PcvSession {
         parse_comments_map(&v)
     }
 
-    // -- writes (PCV_SPEC.md §3) --------------------------------------------
+    // -- writes (docs/PCV_SPEC.md §3) --------------------------------------------
 
     /// Create the (currently missing) eval for one peer:
     /// `POST /assignment/{aid}/eval/user/{myUid}/peer/{peerUid}/member`.
@@ -1449,7 +1449,7 @@ impl PcvSession {
 }
 
 // ===========================================================================
-// Tests — fixture-driven, no network (see PCV_SPEC.md fixtures)
+// Tests — fixture-driven, no network (see docs/PCV_SPEC.md fixtures)
 // ===========================================================================
 
 #[cfg(test)]
@@ -1600,7 +1600,7 @@ mod tests {
     fn me_fixture_parses() {
         let me = parse_me(&fixture_json("me.json")).expect("me");
         assert_eq!(me.user_id, "644826d1-1cae-4660-b45d-e5db709475fb");
-        // firstName is the school, lastName the name (PCV_SPEC.md §2)
+        // firstName is the school, lastName the name (docs/PCV_SPEC.md §2)
         assert_eq!(me.first_name, "CCDS");
         assert_eq!(me.last_name, "GANGULA KARTHIK");
         assert_eq!(me.role, "STUDENT");
