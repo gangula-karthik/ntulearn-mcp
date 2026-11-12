@@ -1172,13 +1172,13 @@ fn relaunch_lock() -> &'static tokio::sync::Mutex<()> {
 // -- cross-run session file (kaltura.json, mirroring pcv.rs / pcv.json) ----
 
 /// The KS is an opaque "v2|..." token with no readable expiry, so a TTL
-/// bounds staleness. KAF player sessions are typically minted for many
-/// hours (the common KAF default is 24h); an expired-but-cached KS is
-/// caught by the first playManifest call, which drops the entry and
-/// relaunches (measured: ~0.3s worse than a true cold run), so a generous
-/// TTL trades a rare small penalty for skipping the whole ~2.4s LTI
-/// chain on most runs.
-const KALTURA_SESSION_TTL_SECS: i64 = 8 * 3600;
+/// bounds staleness. Measured live (hourly probes, 2026-11-13): the
+/// player KS dies between 4 and 5 hours after minting. TTL 4 h is the
+/// confirmed-valid boundary; an expired-but-cached KS is caught by the
+/// first playManifest call, which drops the entry and relaunches
+/// (measured: ~0.6s worse than a true cold run), so even an edge-case
+/// staleness costs one self-heal, never wrong output.
+const KALTURA_SESSION_TTL_SECS: i64 = 4 * 3600;
 const KALTURA_SESSION_FILE: &str = "kaltura.json";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
