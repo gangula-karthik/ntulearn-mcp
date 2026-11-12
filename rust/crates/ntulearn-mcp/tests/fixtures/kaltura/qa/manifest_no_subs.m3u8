@@ -1,0 +1,5 @@
+#EXTM3U
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=508450,RESOLUTION=960x540,FRAME-RATE=25.000,SUBTITLES="subs"
+https://cfvod.sgp2.ovp.kaltura.com/hls/p/117/sp/11700/serveFlavor/entryId/0_88lztt5a/v/12/ev/5/flavorId/0_z24etxpq/name/a.mp4/index.m3u8
+#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1295810,RESOLUTION=1920x1080,FRAME-RATE=25.000,SUBTITLES="subs"
+https://cfvod.sgp2.ovp.kaltura.com/hls/p/117/sp/11700/serveFlavor/entryId/0_88lztt5a/v/12/ev/5/flavorId/0_megq3d90/name/a.mp4/index.m3u8

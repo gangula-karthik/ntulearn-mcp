@@ -1,0 +1,18 @@
+WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+good cue one
+
+00:xx:yy --> not-a-timestamp
+malformed arrow line must not leak into text
+
+no timestamp at all
+stray text line
+
+00:00:05.000 --> 00:00:06.000
+double timestamp line
+00:00:07.000 --> 00:00:08.000
+
+00:00:09.000 --> 00:00:10.000
+duplicate line
+duplicate line

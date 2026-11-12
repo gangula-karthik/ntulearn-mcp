@@ -11,7 +11,7 @@ on disk.
 
 The shipped server is a **single small Rust binary** with a built-in minimal MCP stdio
 implementation (no heavyweight framework — see [the dependency diet](#a-single-small-binary)),
-26 tools, 2 prompt templates, and a course-resource URI. No Python, no pip, no virtualenv.
+33 tools, 2 prompt templates, and a course-resource URI. No Python, no pip, no virtualenv.
 
 **Website:** <https://ntulearn.krtk.app>
 
@@ -54,7 +54,7 @@ That's it. The same binary serves MCP with no arguments and acts as a CLI with a
 ## Why the CLI: about 64x fewer tokens
 
 MCP hosts inject every tool's JSON schema into context **every turn** — about 8.8k tokens for this
-server's 26 tools. The same binary doubles as a plain CLI, whose terse tabular output an agent reads
+server's 33 tools. The same binary doubles as a plain CLI, whose terse tabular output an agent reads
 in a few hundred tokens:
 
 ```bash
@@ -85,7 +85,7 @@ completes in ~0.10 s. Content trees walk one level per wave: a 403-node tree (13
 | 4 commands concurrently (`multi`) | 225ms sequential | 60ms (singleflight-deduped) | **3.8x** |
 
 The CLI shares the same handlers, cache, and cookie lifecycle as the MCP server. Point your agent at
-the binary and have it run `ntulearn-mcp help` (≈740 tokens, once) instead of registering 26 tools.
+the binary and have it run `ntulearn-mcp help` (≈740 tokens, once) instead of registering 33 tools.
 
 ---
 
@@ -159,7 +159,7 @@ Every MCP tool accepts `response_format: "json"` or `"markdown"` too — and as 
 
 ## Tools
 
-26 tools, most doing cross-course aggregation by default — you rarely pass course IDs by hand.
+33 tools, most doing cross-course aggregation by default — you rarely pass course IDs by hand.
 
 | Tool | What it does |
 |---|---|
@@ -188,6 +188,9 @@ Every MCP tool accepts `response_format: "json"` or `"markdown"` too — and as 
 | `ntulearn_fbf_reviews` | Read your peer-evaluation reviews. `direction='given'` (you rated teammates) or `'received'` (empty until released). |
 | `ntulearn_fbf_rate` | Set one rubric rating for one teammate (upsert, dry-run by default). |
 | `ntulearn_fbf_comment` | Write the 'Overall comments' review for one teammate (upsert, dry-run by default). |
+| `ntulearn_kaltura_list` | Enumerate Kaltura-embedded videos in a course (content id, title, Kaltura entry id). Omit `content_id` to walk the whole content tree. |
+| `ntulearn_kaltura_transcripts` | Download caption tracks for one video or a whole course as `.vtt` + timestamp-stripped `.txt`, with word counts. Videos without captions are per-item notes, not errors. |
+| `ntulearn_kaltura_download` | Download one Kaltura video as MP4 from the open CDN (`quality`: `smallest`/`best`/`original`). |
 
 Read-only tools default to `response_format='toon'` (token-optimized); pass `'json'` for structured
 data or `'markdown'` for a readable summary.
@@ -220,6 +223,24 @@ when it expires. Received ratings stay hidden until the instructor publishes the
 (`grades-published-at`); the tools report `not yet released` rather than an error.
 Write tools (`fbf_rate`, `fbf_comment`) default to `dry_run=true` — pass `dry_run=false`
 to actually submit.
+
+### Kaltura lecture transcripts (LTI tools)
+
+Lecture videos embedded in course pages are Kaltura media behind an LTI launch
+(`resource/x-bb-blti-link` items whose url points at the NTU KAF). The
+`kaltura_*` tools discover every embed in a course without launching anything,
+then walk the LTI 1.3 OIDC chain once per course to mint a Kaltura session key
+and pull what the video player pulls: the HLS caption manifest, the WebVTT
+caption segments, and the MP4 flavors from Kaltura's open CDN.
+
+`kaltura_transcripts` writes `{save_dir}/kaltura/{course}/{title}.vtt` and a
+timestamp-stripped `.txt` next to it, and reports per-video word counts — so
+"give me the transcript of lecture 6" or "search every lecture for 'carbon
+tax'" becomes one tool call per course. A video without captions shows up as a
+per-item note, never a failed call. `kaltura_download` streams the MP4
+(`smallest` by default — a 540p lecture is ~150 MB, originals run to 1.7 GB).
+
+Protocol details and live-verification notes: [KALTURA_SPEC.md](KALTURA_SPEC.md).
 
 List-returning tools accept `limit`/`offset`. A resource URI,
 `ntulearn://courses/{course_id}`, returns a JSON course briefing, and two prompts
@@ -430,7 +451,7 @@ Layout (`rust/crates/ntulearn-mcp/src/`):
 
 ```
 main.rs      no args → MCP stdio server; command → CLI; setup/check/refresh
-cli.rs       the 21 commands, compact TSV renderer, `multi` concurrency
+cli.rs       command spec table, compact TSV renderer, `multi` concurrency
 handlers.rs  the 21 tool handlers (shared by MCP server and CLI)
 bench.rs     selfbench + mock Blackboard API
 client.rs    reqwest (HTTP/2, retries, parallel fan-out, singleflight dedup)
