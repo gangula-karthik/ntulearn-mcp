@@ -1,0 +1,65 @@
+{
+  "note": "Adversarial content-item bodies for extract_embeds(). Each case is a raw body HTML string plus the one-line expectation the parser must meet. The real single-embed shape lives in ../content_body_topic6_part1.json (core pack). data-bbfile values below are HTML-escaped exactly like the live captures.",
+  "cases": [
+    {
+      "name": "no_bbfile",
+      "expect": "anchor has data-bbtype=embedded-app but no data-bbfile attribute -> 0 embeds",
+      "body": "<div><p><a href=\"undefined?Kq3cZcYS15=abc\" data-bbtype=\"embedded-app\">undefined</a></p></div>"
+    },
+    {
+      "name": "malformed_json_bbfile",
+      "expect": "data-bbfile JSON is truncated (no closing brace) -> skipped, 0 embeds, no panic",
+      "body": "<p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_9_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_9m9m9m9m/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Broken JSON bbfile\">undefined</a></p>"
+    },
+    {
+      "name": "non_kaltura_blti",
+      "expect": "resource/x-bb-blti-link to a non-Kaltura url (no /browseandembed/) -> skipped, 0 embeds",
+      "body": "<p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_8_1&quot;, &quot;url&quot;: &quot;https://ntu.feedbackfruits.io/peer_review/abc123&quot;, &quot;title&quot;: &quot;FBF eval&quot;}\">undefined</a></p>"
+    },
+    {
+      "name": "browseandembed_no_entryid",
+      "expect": "KAF url missing the entryid/ path segment (trailing slash only) -> skipped, 0 embeds",
+      "body": "<p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_7_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/&quot;, &quot;title&quot;: &quot;No entry id&quot;}\">undefined</a></p>"
+    },
+    {
+      "name": "bbfile_not_an_object",
+      "expect": "data-bbfile parses as JSON but is an array, not an object -> skipped, 0 embeds",
+      "body": "<p><a href=\"undefined\" data-bbtype=\"embedded-app\" data-bbfile=\"[1,2,3]\">undefined</a></p>"
+    },
+    {
+      "name": "unicode_emoji_title",
+      "expect": "emoji + CJK + quotes + literal &amp; in title and &amp; in url query: entity-decode must happen before JSON parse; 1 embed, entry 0_3m0j1x9z, title kept verbatim (emoji intact)",
+      "body": "<div><p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_6_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_3m0j1x9z/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/?width=608&amp;height=402&quot;, &quot;title&quot;: &quot;🎬 Lecture – 过渡 (Transition) \\&quot;Part 2\\&quot; &amp; more&quot;}\">undefined</a></p></div>"
+    },
+    {
+      "name": "missing_title",
+      "expect": "bbfile has no title key -> 1 embed with title == \"\"",
+      "body": "<p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_5_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_notitle01/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;}\">undefined</a></p>"
+    },
+    {
+      "name": "duplicate_embeds",
+      "expect": "the same embed appears twice in one body -> 2 embeds returned (both)",
+      "body": "<p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_4_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_dbl0dbl0/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Same video twice&quot;}\">undefined</a></p><p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_4_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_dbl0dbl0/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Same video twice&quot;}\">undefined</a></p>"
+    },
+    {
+      "name": "three_embeds_one_hostile",
+      "expect": "3 valid Kaltura embeds + 1 malformed bbfile in one body -> exactly 3 embeds, malformed one skipped",
+      "body": "<div><p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_31_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_three0001/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Three embeds A&quot;}\">undefined</a></p><p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_32_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_three0002/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Three embeds B&quot;}\">undefined</a></p><p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_33_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_three0003/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Three embeds C&quot;}\">undefined</a></p><p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_34_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_broken999/showDescription/false/showTitle/false/playerSize/608x402/playerSkin/23448392/&quot;, &quot;title&quot;: &quot;Broken among good\">undefined</a></p></div>"
+    },
+    {
+      "name": "bbcswebdav_only",
+      "expect": "ordinary bbcswebdav file attachment body, no data-bbfile -> 0 embeds",
+      "body": "<p><a href=\"/bbcswebdav/pid-xxx-dt-content-rid-yyy/courses/_2707070_1/lecture.pdf\">lecture.pdf</a> Attachment.</p>"
+    },
+    {
+      "name": "entryid_uppercase",
+      "expect": "entryid path segment has uppercase letters; the entryid/(0_[a-z0-9]+) match is case-insensitive -> 1 embed, entry 0_UpPeRcAsE",
+      "body": "<p><a href=\"undefined?x=1\" data-bbtype=\"embedded-app\" data-bbfile=\"{&quot;linkType&quot;: &quot;resource/x-bb-blti-link&quot;, &quot;linkRefId&quot;: &quot;_2_1&quot;, &quot;url&quot;: &quot;https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/0_UpPeRcAsE/showTitle/false/&quot;, &quot;title&quot;: &quot;Uppercase entry id&quot;}\">undefined</a></p>"
+    },
+    {
+      "name": "empty_body",
+      "expect": "empty string body -> 0 embeds, no panic",
+      "body": ""
+    }
+  ]
+}
