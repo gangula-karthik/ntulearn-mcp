@@ -423,6 +423,42 @@ pub const COMMANDS: &[CmdSpec] = &[
         list_key: "",
         cols: &[],
     },
+    CmdSpec {
+        short: "kaltura_list",
+        alias: "kaltura-list",
+        summary: "Kaltura-embedded videos in a course (entry ids for transcripts/downloads)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", false, "one content item only (omit = walk whole course)"),
+        ],
+        list_key: "videos",
+        cols: &["contentId", "title", "entryId", "placementId"],
+    },
+    CmdSpec {
+        short: "kaltura_transcripts",
+        alias: "kaltura-transcripts",
+        summary: "download caption tracks as .vtt/.txt (whole course or one video)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", false, "kaltura content item id (omit = every video)"),
+            s("save_dir", false, "output dir (default NTULEARN_DOWNLOAD_DIR)"),
+            e("format", &["vtt", "txt", "both"], "files to write (default both)"),
+        ],
+        list_key: "videos",
+        cols: &["title", "entryId", "words", "segments"],
+    },
+    CmdSpec {
+        short: "kaltura_download",
+        alias: "kaltura-download",
+        summary: "download one Kaltura video's mp4 from the open CDN",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "kaltura content item id"),
+            e("quality", &["smallest", "best", "original"], "flavor to pick (default smallest)"),
+        ],
+        list_key: "",
+        cols: &[],
+    },
 ];
 
 pub fn find_cmd(name: &str) -> Option<&'static CmdSpec> {
