@@ -16,6 +16,7 @@ mod cookie;
 mod fbf;
 mod handlers;
 mod issues;
+mod kaltura;
 mod mcp;
 mod parsers;
 mod pcv;

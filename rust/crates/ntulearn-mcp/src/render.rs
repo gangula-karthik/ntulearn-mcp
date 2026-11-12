@@ -1179,3 +1179,156 @@ pub fn md_pcv_comment(payload: &Value) -> String {
     }
     lines.join("\n")
 }
+
+
+// ---------------------------------------------------------------------------
+// Kaltura transcripts / downloads (kaltura_* handlers)
+// ---------------------------------------------------------------------------
+
+/// `kaltura_list` — one line per embedded video with the ids the follow-up
+/// tools need.
+pub fn md_kaltura_list(payload: &Value) -> String {
+    let course = _gs(payload, "courseId").unwrap_or("?");
+    let mut lines = vec![format!("# Kaltura videos — {course}")];
+    if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+        lines.push(String::new());
+        lines.push(format!("_{note}_"));
+    }
+    let videos = payload
+        .get("videos")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for v in &videos {
+        let title = _gs(v, "title").unwrap_or("untitled");
+        let entry = _gs(v, "entryId").unwrap_or("?");
+        let cid = _gs(v, "contentId").unwrap_or("?");
+        let pid = _gs(v, "placementId").unwrap_or("?");
+        lines.push(format!("- **{title}** — entry `{entry}` · content `{cid}` · placement `{pid}`"));
+    }
+    if videos.is_empty() && _gs(payload, "note").is_none_or(|s| s.is_empty()) {
+        lines.push(String::new());
+        lines.push("_No Kaltura videos found._".to_string());
+    }
+    let skipped = payload
+        .get("skippedLinks")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !skipped.is_empty() {
+        lines.push(String::new());
+        let names: Vec<String> = skipped
+            .iter()
+            .map(|s| {
+                _gs(s, "title")
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| _gs(s, "contentId").unwrap_or("?"))
+                    .to_string()
+            })
+            .collect();
+        lines.push(format!(
+            "_{} unreadable content item(s) skipped: {}_",
+            skipped.len(),
+            names.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
+
+/// `kaltura_transcripts` — one line per fetched transcript (words, segments,
+/// written files) plus the per-video notes (no captions, failures).
+pub fn md_kaltura_transcripts(payload: &Value) -> String {
+    let course = _gs(payload, "courseId").unwrap_or("?");
+    let mut lines = vec![format!("# Kaltura transcripts — {course}")];
+    if let Some(dir) = _gs(payload, "outputDir").filter(|s| !s.is_empty()) {
+        let fmt = _gs(payload, "format").unwrap_or("both");
+        lines.push(String::new());
+        lines.push(format!("_format {fmt} → {dir}_"));
+    }
+    if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+        lines.push(String::new());
+        lines.push(format!("_{note}_"));
+    }
+    let videos = payload
+        .get("videos")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for v in &videos {
+        let title = _gs(v, "title").unwrap_or("untitled");
+        let words = v.get("words").and_then(|x| x.as_u64()).unwrap_or(0);
+        let segments = v.get("segments").and_then(|x| x.as_u64()).unwrap_or(0);
+        let label = _gs(v, "label").unwrap_or("?");
+        let files: Vec<String> = ["vttFile", "txtFile"]
+            .iter()
+            .filter_map(|k| _gs(v, k))
+            .map(String::from)
+            .collect();
+        lines.push(String::new());
+        lines.push(format!(
+            "## {title} — {words} words · {segments} segment(s) · track {label}"
+        ));
+        if files.is_empty() {
+            lines.push("- (no files written)".to_string());
+        } else {
+            for f in files {
+                lines.push(format!("- `{f}`"));
+            }
+        }
+    }
+    let notes = payload
+        .get("notes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if !notes.is_empty() {
+        lines.push(String::new());
+        lines.push("## Notes".to_string());
+        for n in &notes {
+            let title = _gs(n, "title").unwrap_or("untitled");
+            let note = _gs(n, "note").unwrap_or("");
+            lines.push(format!("- **{title}**: {note}"));
+        }
+    }
+    if videos.is_empty() && notes.is_empty() {
+        lines.push(String::new());
+        lines.push("_No Kaltura videos found._".to_string());
+    }
+    lines.join("\n")
+}
+
+/// `kaltura_download` — the chosen flavor, bytes written and the local path.
+pub fn md_kaltura_download(payload: &Value) -> String {
+    let title = _gs(payload, "title").unwrap_or("untitled");
+    let mut lines = vec![format!("# Kaltura download — {title}")];
+    lines.push(String::new());
+    if let Some(note) = _gs(payload, "note").filter(|s| !s.is_empty()) {
+        lines.push(format!("_{note}_"));
+        lines.push(String::new());
+    }
+    let quality = _gs(payload, "quality").unwrap_or("?");
+    let entry = _gs(payload, "entryId").unwrap_or("?");
+    lines.push(format!("- entry: `{entry}` · quality: **{quality}**"));
+    if let Some(f) = payload.get("flavor") {
+        let id = _gs(f, "id").unwrap_or("?");
+        let w = f.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
+        let h = f.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+        let bytes = f.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0);
+        let original = if f.get("isOriginal").and_then(|v| v.as_bool()) == Some(true) {
+            " (original)"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "- flavor `{id}`{original}: {w}×{h}, {:.1} MB",
+            bytes as f64 / (1024.0 * 1024.0)
+        ));
+    }
+    if let Some(path) = _gs(payload, "path") {
+        lines.push(format!("- saved: `{path}`"));
+    }
+    if let Some(bytes) = payload.get("bytes").and_then(|v| v.as_u64()) {
+        lines.push(format!("- bytes written: {bytes}"));
+    }
+    lines.join("\n")
+}
