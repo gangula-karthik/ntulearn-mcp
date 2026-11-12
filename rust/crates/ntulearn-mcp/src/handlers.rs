@@ -23,6 +23,7 @@ use serde_json::{json, Map, Value};
 
 use crate::client::{ClientError, NTULearnClient};
 use crate::fbf::{FbfCriterion, FbfOption, FbfRating, FbfReview, FbfSession, FbfTask};
+use crate::kaltura::{FlavorAsset, KalturaEmbed, KalturaSession, TranscriptError};
 use crate::{parsers, render, AppState};
 
 // ---------------------------------------------------------------------------
@@ -111,6 +112,9 @@ pub async fn dispatch_value(state: &AppState, name: &str, args: &Value) -> Resul
         "pcv_evals" => h_pcv_evals(state, args).await?,
         "pcv_rate" => h_pcv_rate(state, args).await?,
         "pcv_comment" => h_pcv_comment(state, args).await?,
+        "kaltura_list" => h_kaltura_list(state, args).await?,
+        "kaltura_transcripts" => h_kaltura_transcripts(state, args).await?,
+        "kaltura_download" => h_kaltura_download(state, args).await?,
         other => {
             return Err(format!("unknown tool: ntulearn_{other}"));
         }
@@ -4931,6 +4935,541 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
 }
 
 // ---------------------------------------------------------------------------
+// Kaltura transcripts / video downloads (kaltura.rs; KALTURA_SPEC.md)
+// ---------------------------------------------------------------------------
+
+/// Politeness pause between two Kaltura entries: transcript fetches hit
+/// Kaltura's CDN once per VTT segment, and a whole-course run walks dozens
+/// of entries back to back.
+const KALTURA_ENTRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// `format` argument of kaltura_transcripts: which files to write per video.
+fn resolve_transcript_format(args: &Value) -> Result<String, String> {
+    let fmt = args
+        .get("format")
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_else(|| "both".to_string())
+        .to_lowercase();
+    if fmt != "vtt" && fmt != "txt" && fmt != "both" {
+        return Err("format must be 'vtt', 'txt' or 'both'".to_string());
+    }
+    Ok(fmt)
+}
+
+/// `quality` argument of kaltura_download: which flavor to download.
+fn resolve_quality(args: &Value) -> Result<String, String> {
+    let q = args
+        .get("quality")
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_else(|| "smallest".to_string())
+        .to_lowercase();
+    if q != "smallest" && q != "best" && q != "original" {
+        return Err("quality must be 'smallest', 'best' or 'original'".to_string());
+    }
+    Ok(q)
+}
+
+/// `save_dir` argument of kaltura_transcripts: explicit directory or the
+/// server's download dir (resolved from NTULEARN_DOWNLOAD_DIR at startup).
+fn resolve_save_dir(args: &Value, state: &AppState) -> Result<PathBuf, String> {
+    match args.get("save_dir") {
+        None => Ok(state.download_dir.clone()),
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return Err(
+                    "save_dir cannot be empty — pass a directory path or omit it".to_string(),
+                );
+            }
+            Ok(expand_tilde(s))
+        }
+        Some(_) => Err("save_dir must be a string directory path".to_string()),
+    }
+}
+
+/// `videos` rows shared by kaltura_list and kaltura_transcripts discovery:
+/// one row per embedded video with the ids the follow-up tools need.
+fn kaltura_video_rows(embeds: &[KalturaEmbed]) -> Vec<Value> {
+    embeds
+        .iter()
+        .map(|e| {
+            json!({
+                "contentId": e.content_id,
+                "title": if e.title.trim().is_empty() { "untitled" } else { &e.title },
+                "entryId": e.entry_id,
+                "placementId": e.placement_id,
+            })
+        })
+        .collect()
+}
+
+/// Fill empty embed titles ("" in the data-bbfile) with the content item's
+/// own title, so listing rows and transcript filenames stay useful.
+fn embeds_with_title_fallback(
+    mut embeds: Vec<KalturaEmbed>,
+    item_title: &str,
+) -> Vec<KalturaEmbed> {
+    for e in &mut embeds {
+        if e.title.trim().is_empty() {
+            e.title = item_title.to_string();
+        }
+    }
+    embeds
+}
+
+/// Every Kaltura embed in one content item's body (REST + parse only — no
+/// LTI launch; the embed metadata sits in the body's data-bbfile JSON).
+async fn content_item_embeds(
+    c: &NTULearnClient,
+    course_id: &str,
+    content_id: &str,
+) -> Result<Vec<KalturaEmbed>, String> {
+    let item = c
+        .get_content_item_with_body(course_id, content_id, None)
+        .await
+        .map_err(err_str)?;
+    Ok(embeds_with_title_fallback(
+        crate::kaltura::extract_embeds(gs(&item, "body").unwrap_or("")),
+        &item_title(&item),
+    ))
+}
+
+/// Auto-discovery: walk the whole course content tree (parents + children,
+/// same primitive as pcv_status) and parse every non-folder item's body for
+/// Kaltura embeds. Body fetches run with bounded concurrency; an item whose
+/// body cannot be read is collected in `skipped`, never an error — course
+/// trees routinely contain items the REST API refuses to serve.
+async fn discover_kaltura_embeds(
+    c: &NTULearnClient,
+    course_id: &str,
+) -> (Vec<KalturaEmbed>, Vec<Value>) {
+    let nodes: Vec<(String, String)> = walk_content(c, course_id, MAX_DEPTH)
+        .await
+        .into_iter()
+        .filter(|n| !is_folder(&n.item))
+        .filter_map(|n| {
+            let id = n.item.get("id").and_then(|v| v.as_str())?.to_string();
+            Some((id, item_title(&n.item)))
+        })
+        .collect();
+
+    let fetched = bounded_map(nodes, fanout_limit(), |(content_id, title)| async move {
+        let res = c.get_content_item_with_body(course_id, &content_id, None).await;
+        (content_id, title, res)
+    })
+    .await;
+
+    let mut embeds: Vec<KalturaEmbed> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    for (content_id, title, res) in fetched {
+        match res {
+            Ok(item) => embeds.extend(embeds_with_title_fallback(
+                crate::kaltura::extract_embeds(gs(&item, "body").unwrap_or("")),
+                &title,
+            )),
+            Err(e) => skipped.push(json!({
+                "contentId": content_id,
+                "title": title,
+                "reason": err_str(e),
+            })),
+        }
+    }
+    (embeds, skipped)
+}
+
+/// One failed transcript fetch as a per-video note row. A video without
+/// captions is a NOTE, never a whole-call error: the caller asked for the
+/// course's captions and one caption-less video must not hide the rest. The
+/// no-captions wording lives here (stable); other errors pass through the
+/// core module's LLM-readable message (which mentions ntulearn_login when
+/// it smells like auth).
+fn transcript_outcome_as_note(
+    content_id: &str,
+    title: &str,
+    entry_id: &str,
+    err: &TranscriptError,
+) -> Value {
+    let note = match err {
+        TranscriptError::NoCaptions => {
+            "no caption track — this video has no captions".to_string()
+        }
+        other => other.message(),
+    };
+    json!({
+        "contentId": content_id,
+        "title": title,
+        "entryId": entry_id,
+        "note": note,
+    })
+}
+
+/// Whether a Kaltura error message smells like an expired session (the
+/// player KS minted at launch died mid-run). Those are worth one relaunch +
+/// retry; anything else (DNS, 5xx, malformed manifest) is not.
+fn is_auth_shaped(message: &str) -> bool {
+    let m = message.to_lowercase();
+    m.contains("invalid_ks")
+        || m.contains("401")
+        || m.contains("unauthorized")
+        || m.contains("expired")
+        || m.contains("ntulearn_login")
+}
+
+/// Choose the flavor to download. 'smallest' = fewest bytes among flavors
+/// with a nonzero height (audio-only flavors have height 0); 'best' = the
+/// largest non-original flavor; 'original' = the source upload. When the
+/// request cannot be satisfied (e.g. 'original' on a re-encoded entry), the
+/// smallest available flavor is returned with an explanatory note so the
+/// download still succeeds.
+fn pick_flavor(flavors: &[FlavorAsset], quality: &str) -> Result<(FlavorAsset, Option<String>), String> {
+    if flavors.is_empty() {
+        return Err(
+            "Kaltura returned no downloadable flavors for this entry".to_string(),
+        );
+    }
+    let requested: Option<&FlavorAsset> = match quality {
+        "original" => flavors.iter().find(|f| f.is_original),
+        "best" => flavors
+            .iter()
+            .filter(|f| !f.is_original)
+            .max_by_key(|f| f.size_bytes),
+        // default: 'smallest'
+        _ => flavors
+            .iter()
+            .filter(|f| f.height > 0)
+            .min_by_key(|f| f.size_bytes),
+    };
+    match requested {
+        Some(f) => Ok(((*f).clone(), None)),
+        None => {
+            let fallback = flavors
+                .iter()
+                .min_by_key(|f| f.size_bytes)
+                .cloned()
+                .ok_or_else(|| "Kaltura returned no downloadable flavors for this entry".to_string())?;
+            Ok((
+                fallback,
+                Some(format!(
+                    "no '{quality}' flavor available for this entry — downloaded the smallest flavor instead"
+                )),
+            ))
+        }
+    }
+}
+
+/// `ntulearn_kaltura_list` — every Kaltura-embedded video in a course:
+/// content id, title, Kaltura entry id and LTI placement id. Discovery is
+/// pure REST (no LTI launch): the embed metadata sits in the content body's
+/// data-bbfile JSON. Non-Kaltura LTI tools are skipped, not errors.
+async fn h_kaltura_list(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").map(|s| s.to_string());
+    if let Some(cid) = &content_id {
+        validate_bb_id(cid, "content_id")?;
+    }
+    let _fmt = response_format(args)?;
+
+    let (embeds, skipped): (Vec<KalturaEmbed>, Vec<Value>) = match &content_id {
+        Some(cid) => {
+            let embeds = content_item_embeds(&state.client, &course_id, cid).await?;
+            if embeds.is_empty() {
+                return Err(format!(
+                    "content_id {cid} contains no Kaltura video embeds — run ntulearn_kaltura_list without content_id to see every video in the course"
+                ));
+            }
+            (embeds, Vec::new())
+        }
+        None => discover_kaltura_embeds(&state.client, &course_id).await,
+    };
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    if let Some(cid) = &content_id {
+        payload.insert("contentId".to_string(), Value::String(cid.clone()));
+    }
+    if !skipped.is_empty() {
+        payload.insert("skippedLinks".to_string(), Value::Array(skipped));
+    }
+    if embeds.is_empty() {
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "no Kaltura video embeds found in this course's content tree — videos may be linked another way (direct URL, non-Kaltura tool)"
+                    .to_string(),
+            ),
+        );
+    }
+    payload.insert("videoCount".to_string(), json!(embeds.len()));
+    payload.insert("videos".to_string(), Value::Array(kaltura_video_rows(&embeds)));
+    Ok(Value::Object(payload))
+}
+
+/// `ntulearn_kaltura_transcripts` — caption tracks for one video or the
+/// whole course, written as .vtt/.txt files. The session is launched lazily
+/// once (one launch's KS covers every entry of the course, live-verified)
+/// and relaunched only when an auth-shaped error appears mid-run.
+async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").map(|s| s.to_string());
+    if let Some(cid) = &content_id {
+        validate_bb_id(cid, "content_id")?;
+    }
+    let format = resolve_transcript_format(args)?;
+    let save_dir = resolve_save_dir(args, state)?;
+    let _fmt = response_format(args)?;
+
+    let (embeds, skipped): (Vec<KalturaEmbed>, Vec<Value>) = match &content_id {
+        Some(cid) => {
+            let embeds = content_item_embeds(&state.client, &course_id, cid).await?;
+            if embeds.is_empty() {
+                return Err(format!(
+                    "content_id {cid} contains no Kaltura video embeds — run ntulearn_kaltura_list to find one"
+                ));
+            }
+            (embeds, Vec::new())
+        }
+        None => discover_kaltura_embeds(&state.client, &course_id).await,
+    };
+
+    let out_dir = save_dir.join("kaltura").join(&course_id);
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id.clone()));
+    if let Some(cid) = &content_id {
+        payload.insert("contentId".to_string(), Value::String(cid.clone()));
+    }
+    if !skipped.is_empty() {
+        payload.insert("skippedLinks".to_string(), Value::Array(skipped));
+    }
+    payload.insert("format".to_string(), Value::String(format.clone()));
+    payload.insert(
+        "outputDir".to_string(),
+        Value::String(out_dir.to_string_lossy().to_string()),
+    );
+    if embeds.is_empty() {
+        payload.insert(
+            "note".to_string(),
+            Value::String(
+                "no Kaltura video embeds found in this course's content tree — there are no transcripts to fetch"
+                    .to_string(),
+            ),
+        );
+        payload.insert("videoCount".to_string(), json!(0));
+        payload.insert("videos".to_string(), Value::Array(Vec::new()));
+        payload.insert("notes".to_string(), Value::Array(Vec::new()));
+        return Ok(Value::Object(payload));
+    }
+
+    if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+        return Err(format!(
+            "cannot create transcript directory {}: {e}",
+            out_dir.to_string_lossy()
+        ));
+    }
+
+    let mut session: Option<KalturaSession> = None;
+    let mut videos: Vec<Value> = Vec::new();
+    let mut notes: Vec<Value> = Vec::new();
+    for (i, embed) in embeds.iter().enumerate() {
+        if i > 0 {
+            tokio::time::sleep(KALTURA_ENTRY_PAUSE).await;
+        }
+        // Lazy launch: the first embed's content item runs the LTI chain; a
+        // failed launch in discovery mode becomes a per-video note (one
+        // broken placement must not hide the others), while an explicit
+        // content_id the caller named must fail loudly.
+        if session.is_none() {
+            match KalturaSession::launch(state, &course_id, &embed.content_id).await {
+                Ok(s) => session = Some(s),
+                Err(e) => {
+                    if content_id.is_some() {
+                        return Err(format!(
+                            "Kaltura launch for content_id {} failed: {e}",
+                            embed.content_id
+                        ));
+                    }
+                    notes.push(json!({
+                        "contentId": embed.content_id,
+                        "title": embed.title,
+                        "entryId": embed.entry_id,
+                        "note": format!("launch failed: {e}"),
+                    }));
+                    continue;
+                }
+            }
+        }
+        let mut result = match session.as_ref() {
+            Some(s) => s.transcript(&embed.entry_id).await,
+            None => continue,
+        };
+        // Auth-shaped failure -> the KS died mid-run; relaunch once and
+        // retry before reporting the video as a note.
+        if let Err(TranscriptError::Network(m)) = &result {
+            if is_auth_shaped(m) {
+                match KalturaSession::launch(state, &course_id, &embed.content_id).await {
+                    Ok(s) => {
+                        session = Some(s);
+                        result = match session.as_ref() {
+                            Some(s) => s.transcript(&embed.entry_id).await,
+                            None => continue,
+                        };
+                    }
+                    Err(e) => {
+                        notes.push(json!({
+                            "contentId": embed.content_id,
+                            "title": embed.title,
+                            "entryId": embed.entry_id,
+                            "note": format!("session relaunch failed: {e}"),
+                        }));
+                        continue;
+                    }
+                }
+            }
+        }
+        match result {
+            Ok(t) => {
+                let title = if embed.title.trim().is_empty() {
+                    "untitled".to_string()
+                } else {
+                    embed.title.clone()
+                };
+                let base = parsers::sanitize_filename(&title);
+                let mut row = json!({
+                    "contentId": embed.content_id,
+                    "title": title,
+                    "entryId": embed.entry_id,
+                    "label": t.label,
+                    "words": t.words,
+                    "segments": t.segments,
+                });
+                if format != "txt" {
+                    let path = out_dir.join(format!("{base}.vtt"));
+                    if let Err(e) = tokio::fs::write(&path, &t.vtt).await {
+                        return Err(format!(
+                            "cannot write {}: {e}",
+                            path.to_string_lossy()
+                        ));
+                    }
+                    row["vttFile"] = Value::String(path.to_string_lossy().to_string());
+                }
+                if format != "vtt" {
+                    let path = out_dir.join(format!("{base}.txt"));
+                    if let Err(e) = tokio::fs::write(&path, &t.text).await {
+                        return Err(format!(
+                            "cannot write {}: {e}",
+                            path.to_string_lossy()
+                        ));
+                    }
+                    row["txtFile"] = Value::String(path.to_string_lossy().to_string());
+                }
+                videos.push(row);
+            }
+            Err(e) => notes.push(transcript_outcome_as_note(
+                &embed.content_id,
+                &embed.title,
+                &embed.entry_id,
+                &e,
+            )),
+        }
+    }
+
+    payload.insert("videoCount".to_string(), json!(videos.len()));
+    payload.insert("videos".to_string(), Value::Array(videos));
+    payload.insert("notes".to_string(), Value::Array(notes));
+    Ok(Value::Object(payload))
+}
+
+/// `ntulearn_kaltura_download` — the MP4 of one Kaltura video from
+/// Kaltura's open CDN. quality 'smallest' (default) = fewest bytes with a
+/// real resolution, 'best' = largest non-original flavor, 'original' =
+/// source upload.
+async fn h_kaltura_download(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let quality = resolve_quality(args)?;
+    let _fmt = response_format(args)?;
+
+    let mut embeds = content_item_embeds(&state.client, &course_id, &content_id).await?;
+    if embeds.is_empty() {
+        return Err(format!(
+            "content_id {content_id} contains no Kaltura video embeds — run ntulearn_kaltura_list to find one"
+        ));
+    }
+    // One content item can embed several videos; the download takes the
+    // first and says so when siblings exist.
+    let mut notes: Vec<String> = Vec::new();
+    if embeds.len() > 1 {
+        notes.push(format!(
+            "content item embeds {} videos; downloading the first (entry {}). Run ntulearn_kaltura_list with this content_id to see all entries",
+            embeds.len(),
+            embeds[0].entry_id
+        ));
+    }
+    let embed = embeds.swap_remove(0);
+
+    let session = KalturaSession::launch(state, &course_id, &embed.content_id).await?;
+    let flavors = session.flavors(&embed.entry_id).await?;
+    let (flavor, fallback_note) = pick_flavor(&flavors, &quality)?;
+    if let Some(n) = fallback_note {
+        notes.push(n);
+    }
+
+    let out_dir = state.download_dir.join("kaltura").join(&course_id);
+    if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+        return Err(format!(
+            "cannot create download directory {}: {e}",
+            out_dir.to_string_lossy()
+        ));
+    }
+    let title = if embed.title.trim().is_empty() {
+        "untitled".to_string()
+    } else {
+        embed.title.clone()
+    };
+    let ext = if flavor.file_ext.is_empty() {
+        "mp4".to_string()
+    } else {
+        flavor.file_ext.clone()
+    };
+    let path = out_dir.join(format!("{}.{}", parsers::sanitize_filename(&title), ext));
+    let bytes = session
+        .download_video(&embed.entry_id, &flavor, &path)
+        .await?;
+
+    let mut payload = json!({
+        "courseId": course_id,
+        "contentId": content_id,
+        "entryId": embed.entry_id,
+        "title": title,
+        "quality": quality,
+        "flavor": {
+            "id": flavor.id,
+            "width": flavor.width,
+            "height": flavor.height,
+            "sizeBytes": flavor.size_bytes,
+            "isOriginal": flavor.is_original,
+            "version": flavor.version,
+            "fileExt": flavor.file_ext,
+        },
+        "bytes": bytes,
+        "path": path.to_string_lossy().to_string(),
+    });
+    if !notes.is_empty() {
+        payload["note"] = Value::String(notes.join(" · "));
+    }
+    Ok(payload)
+}
+
+// ---------------------------------------------------------------------------
 // render_for_tool — mirror of Python common.emit: markdown text (when
 // requested) followed by the pretty-JSON payload, or just the payload.
 // ---------------------------------------------------------------------------
@@ -5026,6 +5565,9 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
             "pcv_evals" => render::md_pcv_evals(payload),
             "pcv_rate" => render::md_pcv_rate(payload),
             "pcv_comment" => render::md_pcv_comment(payload),
+            "kaltura_list" => render::md_kaltura_list(payload),
+            "kaltura_transcripts" => render::md_kaltura_transcripts(payload),
+            "kaltura_download" => render::md_kaltura_download(payload),
             _ => String::new(),
         }
     } else {
@@ -5186,5 +5728,255 @@ mod args_guard_tests {
         let text = text.clone();
         assert!(text.starts_with("courses[2]{id,name}:"), "got: {text}");
         assert!(!text.contains("  \""), "should not be pretty JSON: {text}");
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Kaltura wiring tests (stub-backed: the pure arg/payload logic only —
+// network paths are exercised by the e2e script after the core merges)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod kaltura_wiring_tests {
+    use super::*;
+
+    fn test_state() -> AppState {
+        AppState {
+            client: NTULearnClient::new_for_test("https://ntulearn.ntu.edu.sg/"),
+            download_dir: std::env::temp_dir(),
+            update_notice: std::sync::Arc::new(crate::update::UpdateNotice::default()),
+        }
+    }
+
+    fn embed(content_id: &str, title: &str, entry_id: &str) -> KalturaEmbed {
+        KalturaEmbed {
+            content_id: content_id.to_string(),
+            title: title.to_string(),
+            entry_id: entry_id.to_string(),
+            placement_id: "_1326_1".to_string(),
+            embed_url: format!(
+                "https://ntulearnv1.ntu.edu.sg/browseandembed/index/media/entryid/{entry_id}/"
+            ),
+        }
+    }
+
+    fn flavor(id: &str, w: u32, h: u32, size: u64, original: bool) -> FlavorAsset {
+        FlavorAsset {
+            id: id.to_string(),
+            width: w,
+            height: h,
+            size_bytes: size,
+            is_original: original,
+            version: 12,
+            file_ext: "mp4".to_string(),
+        }
+    }
+
+    /// dispatch_value routes the three kaltura_* names to their handlers:
+    /// each call reaches its handler's argument validation (a missing
+    /// course_id is rejected there) instead of the "unknown tool" fallback —
+    /// and no network is touched on that path.
+    #[tokio::test]
+    async fn dispatch_routes_the_three_kaltura_tools() {
+        let state = test_state();
+        for name in ["kaltura_list", "kaltura_transcripts", "kaltura_download"] {
+            let err = dispatch_value(&state, name, &json!({}))
+                .await
+                .expect_err("missing course_id must be rejected");
+            assert!(
+                err.contains("course_id must be a valid Blackboard ID"),
+                "{name}: {err}"
+            );
+        }
+        let err = dispatch_value(&state, "kaltura_bogus", &json!({}))
+            .await
+            .expect_err("unknown tool must be rejected");
+        assert!(err.contains("unknown tool"), "{err}");
+    }
+
+    #[test]
+    fn kaltura_arg_validation() {
+        // missing / empty course_id
+        assert!(validate_bb_id("", "course_id").is_err());
+        // response_format reuses the shared guard
+        assert!(response_format(&json!({"response_format": "yaml"})).is_err());
+        // quality enum
+        assert!(resolve_quality(&json!({"quality": "hd"})).is_err());
+        assert_eq!(resolve_quality(&json!({})).unwrap(), "smallest");
+        assert_eq!(resolve_quality(&json!({"quality": "ORIGINAL"})).unwrap(), "original");
+        // transcript format enum
+        assert!(resolve_transcript_format(&json!({"format": "srt"})).is_err());
+        assert_eq!(resolve_transcript_format(&json!({})).unwrap(), "both");
+        assert_eq!(resolve_transcript_format(&json!({"format": "VTT"})).unwrap(), "vtt");
+        assert_eq!(resolve_transcript_format(&json!({"format": "txt"})).unwrap(), "txt");
+        // save_dir: non-string and empty are rejected, absent falls back to
+        // the state download dir
+        let state = test_state();
+        assert!(resolve_save_dir(&json!({"save_dir": 3}), &state).is_err());
+        assert!(resolve_save_dir(&json!({"save_dir": "  "}), &state).is_err());
+        assert_eq!(
+            resolve_save_dir(&json!({}), &state).unwrap(),
+            state.download_dir
+        );
+    }
+
+    /// A video without captions (or whose transcript fetch fails) maps to a
+    /// per-video NOTE row — never a whole-call error. The no-captions
+    /// wording is owned here so it survives the stub -> core swap.
+    #[test]
+    fn transcript_no_captions_is_a_note_not_an_error() {
+        let note = transcript_outcome_as_note(
+            "_5976141_1",
+            "Topic 6 Part 1",
+            "0_88lztt5a",
+            &TranscriptError::NoCaptions,
+        );
+        assert_eq!(note["contentId"], json!("_5976141_1"));
+        assert_eq!(note["title"], json!("Topic 6 Part 1"));
+        assert_eq!(note["entryId"], json!("0_88lztt5a"));
+        let text = note["note"].as_str().expect("note text");
+        assert!(text.contains("no caption"), "note: {text}");
+
+        // other failures pass the core module's message through verbatim
+        let err = TranscriptError::Network("INVALID_KS: bad signature; run ntulearn_login".into());
+        let note = transcript_outcome_as_note("_1_1", "Lecture", "0_x", &err);
+        assert_eq!(note["note"], json!(err.message()));
+    }
+
+    #[test]
+    fn auth_shaped_errors_are_detected_for_relaunch() {
+        assert!(is_auth_shaped("INVALID_KS: signature did not match"));
+        assert!(is_auth_shaped("HTTP 401 Unauthorized"));
+        assert!(is_auth_shaped("ks expired"));
+        assert!(is_auth_shaped("run ntulearn_login to refresh the session"));
+        assert!(!is_auth_shaped("connection reset by peer"));
+        assert!(!is_auth_shaped("malformed m3u8 playlist"));
+    }
+
+    /// kaltura_list / discovery output shape: one row per embed, ids intact,
+    /// empty data-bbfile titles replaced (fallback at discovery, "untitled"
+    /// as the final guard in the row builder).
+    #[test]
+    fn kaltura_list_output_shape() {
+        let embeds = vec![
+            embed("_5976141_1", "Topic 6: Energy Part 1", "0_88lztt5a"),
+            embed("_5976142_1", "", "0_td7lgutt"),
+        ];
+        let rows = kaltura_video_rows(&embeds);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["contentId"], json!("_5976141_1"));
+        assert_eq!(rows[0]["title"], json!("Topic 6: Energy Part 1"));
+        assert_eq!(rows[0]["entryId"], json!("0_88lztt5a"));
+        assert_eq!(rows[0]["placementId"], json!("_1326_1"));
+        // a missing embed title falls back to "untitled" in the row
+        assert_eq!(rows[1]["title"], json!("untitled"));
+
+        // at discovery time the content item's own title fills the gap
+        let filled = embeds_with_title_fallback(embeds, "Week 6 reading");
+        assert_eq!(filled[1].title, "Week 6 reading");
+        assert_eq!(filled[0].title, "Topic 6: Energy Part 1");
+    }
+
+    /// kaltura_download flavor selection: 'smallest' skips audio-only
+    /// flavors (height 0), 'best' skips the original, 'original' needs
+    /// isOriginal, and unsatisfiable requests fall back with a note.
+    #[test]
+    fn kaltura_download_picks_flavors() {
+        // real flavor_assets_two.xml shape: 1080p original + 540p rendition
+        let flavors = vec![
+            flavor("0_mzsjnuj6", 1920, 1080, 1_696_369_677, true),
+            flavor("0_8v2w0ar3", 960, 540, 123_694_567, false),
+        ];
+        let (f, note) = pick_flavor(&flavors, "smallest").expect("smallest");
+        assert_eq!(f.id, "0_8v2w0ar3");
+        assert!(note.is_none());
+
+        let (f, _) = pick_flavor(&flavors, "best").expect("best");
+        assert_eq!(f.id, "0_8v2w0ar3");
+
+        let (f, _) = pick_flavor(&flavors, "original").expect("original");
+        assert_eq!(f.id, "0_mzsjnuj6");
+
+        // audio-only flavors (height 0) never win 'smallest'
+        let with_audio = vec![
+            flavor("0_audio", 0, 0, 3_000_000, false),
+            flavor("0_540", 960, 540, 123_694_567, false),
+        ];
+        let (f, _) = pick_flavor(&with_audio, "smallest").expect("smallest");
+        assert_eq!(f.id, "0_540");
+
+        // no original flavor -> smallest fallback + explanatory note
+        let no_original = vec![flavor("0_a", 640, 360, 30_000_000, false)];
+        let (f, note) = pick_flavor(&no_original, "original").expect("fallback");
+        assert_eq!(f.id, "0_a");
+        let note = note.expect("fallback note");
+        assert!(note.contains("no 'original' flavor"), "{note}");
+
+        // nothing to choose from -> LLM-readable error
+        assert!(pick_flavor(&[], "smallest").is_err());
+    }
+
+    /// markdown renderers: list rows, transcript rows + notes, download
+    /// summary all render without the pretty JSON (and without panicking on
+    /// sparse payloads).
+    #[test]
+    fn kaltura_markdown_renderers() {
+        let list = json!({
+            "courseId": "_2707070_1",
+            "videoCount": 1,
+            "videos": [ {
+                "contentId": "_5976141_1",
+                "title": "Topic 6 Part 1",
+                "entryId": "0_88lztt5a",
+                "placementId": "_1326_1",
+            } ],
+        });
+        let md = render::md_kaltura_list(&list);
+        assert!(md.contains("Kaltura videos — _2707070_1"), "{md}");
+        assert!(md.contains("`0_88lztt5a`"), "{md}");
+
+        let transcripts = json!({
+            "courseId": "_2707070_1",
+            "format": "both",
+            "outputDir": "/tmp/dl/kaltura/_2707070_1",
+            "videoCount": 1,
+            "videos": [ {
+                "contentId": "_5976141_1",
+                "title": "Topic 6 Part 1",
+                "entryId": "0_88lztt5a",
+                "label": "Edited",
+                "words": 3553,
+                "segments": 4,
+                "vttFile": "/tmp/dl/kaltura/_2707070_1/Topic 6 Part 1.vtt",
+                "txtFile": "/tmp/dl/kaltura/_2707070_1/Topic 6 Part 1.txt",
+            } ],
+            "notes": [ {
+                "contentId": "_5976142_1",
+                "title": "Topic 6 Part 2",
+                "entryId": "0_td7lgutt",
+                "note": "no caption track — this video has no captions",
+            } ],
+        });
+        let md = render::md_kaltura_transcripts(&transcripts);
+        assert!(md.contains("3553 words"), "{md}");
+        assert!(md.contains("no caption track"), "{md}");
+
+        let download = json!({
+            "courseId": "_2707070_1",
+            "contentId": "_5976141_1",
+            "entryId": "0_88lztt5a",
+            "title": "Topic 6 Part 1",
+            "quality": "smallest",
+            "flavor": {
+                "id": "0_8v2w0ar3", "width": 960, "height": 540,
+                "sizeBytes": 123694567, "isOriginal": false, "version": 12, "fileExt": "mp4",
+            },
+            "bytes": 123694567,
+            "path": "/tmp/dl/kaltura/_2707070_1/Topic 6 Part 1.mp4",
+        });
+        let md = render::md_kaltura_download(&download);
+        assert!(md.contains("960×540"), "{md}");
+        assert!(md.contains("quality: **smallest**"), "{md}");
     }
 }
