@@ -1,0 +1,10 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:02.000
+<v Instructor>Hello <c.yellow>world</c> &amp; welcome</v>
+
+00:00:02.000 --> 00:00:04.000
+inline <00:00:02.500>timestamp tag must vanish
+
+00:00:04.000 --> 00:00:06.000
+<b>bold cue</b> and <i>italic cue</i>

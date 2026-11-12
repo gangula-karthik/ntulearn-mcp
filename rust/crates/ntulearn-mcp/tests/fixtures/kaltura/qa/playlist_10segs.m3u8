@@ -1,0 +1,27 @@
+#EXTM3U
+#EXT-X-TARGETDURATION:300
+#EXT-X-VERSION:3
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-PLAYLIST-TYPE:VOD
+# a plain comment line is legal m3u8 and must be ignored
+#EXTINF:300.0,
+segmentIndex/1.vtt
+#EXTINF:300.0,
+segmentIndex/2.vtt
+#EXTINF:300.0,
+segmentIndex/3.vtt
+#EXTINF:300.0,
+segmentIndex/4.vtt
+#EXTINF:297.4,
+segmentIndex/5.vtt
+#EXTINF:300.0,
+segmentIndex/6.vtt
+#EXTINF:300.0,
+segmentIndex/7.vtt
+#EXTINF:300.0,
+segmentIndex/8.vtt
+#EXTINF:300.0,
+segmentIndex/9.vtt
+#EXTINF:121.6,
+segmentIndex/10.vtt
+#EXT-X-ENDLIST
