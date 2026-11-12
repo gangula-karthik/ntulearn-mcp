@@ -916,6 +916,26 @@ pub fn render_compact(inv: &Invocation, payload: &Value) -> String {
 /// kaltura_transcripts emits this shape today; any tool that adopts the
 /// same convention gets the same visibility.
 fn push_notes(payload: &Value, max: usize, lines: &mut Vec<String>) {
+    // Content items the discovery walk could not read — each may hide
+    // embedded videos, so they are reported, never dropped.
+    if let Some(skipped) = payload.get("skippedLinks").and_then(|v| v.as_array()) {
+        if !skipped.is_empty() {
+            lines.push(String::new());
+            lines.push(format!(
+                "! {} content item(s) skipped during discovery (may contain videos)",
+                skipped.len()
+            ));
+            for s in skipped {
+                let title = s
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| s.get("contentId").and_then(|v| v.as_str()).unwrap_or("?"));
+                let reason = s.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+                lines.push(format!("! skipped {title}: {}", truncate(reason, max)));
+            }
+        }
+    }
     let Some(notes) = payload.get("notes").and_then(|v| v.as_array()) else {
         return;
     };
@@ -1364,6 +1384,57 @@ mod tests {
     fn ntulearn_prefixed_names_resolve() {
         let inv = parse_invocation("ntulearn_list_courses", &toks(&[])).unwrap();
         assert_eq!(inv.spec.alias, "courses");
+    }
+
+    #[test]
+    fn compact_render_shows_partial_totals_notes_and_skips() {
+        // A partial transcript run must never look complete: `total` makes
+        // the head line say "of N", and notes/skips are spelled out.
+        let inv = parse_invocation("kaltura-transcripts", &toks(&["_2707070_1"])).unwrap();
+        let payload = serde_json::json!({
+            "courseId": "_2707070_1",
+            "total": 3,
+            "videoCount": 2,
+            "videos": [
+                {"contentId": "_1_1", "title": "Lecture A", "entryId": "0_a", "words": 100, "segments": 2},
+                {"contentId": "_2_1", "title": "Lecture B", "entryId": "0_b", "words": 200, "segments": 3}
+            ],
+            "notes": [
+                {"title": "Lecture C", "note": "no caption track on this video"}
+            ],
+            "skippedLinks": [
+                {"contentId": "_9_9", "title": "Broken item", "reason": "HTTP 403"}
+            ]
+        });
+        let text = render_compact(&inv, &payload);
+        assert!(
+            text.contains("# videos - 2 row(s) of 3"),
+            "head must disclose the total: {text}"
+        );
+        assert!(text.contains("! 1 note(s)"), "notes header missing: {text}");
+        assert!(text.contains("Lecture C: no caption track"), "{text}");
+        assert!(
+            text.contains("! 1 content item(s) skipped during discovery"),
+            "{text}"
+        );
+        assert!(text.contains("skipped Broken item: HTTP 403"), "{text}");
+    }
+
+    #[test]
+    fn compact_render_all_failed_run_still_explains_itself() {
+        let inv = parse_invocation("kaltura-transcripts", &toks(&["_2707070_1"])).unwrap();
+        let payload = serde_json::json!({
+            "courseId": "_2707070_1",
+            "total": 25,
+            "videoCount": 0,
+            "videos": [],
+            "notes": [
+                {"title": "Lecture A", "note": "launch failed: session expired"}
+            ]
+        });
+        let text = render_compact(&inv, &payload);
+        assert!(text.contains("# videos - 0 row(s) of 25"), "{text}");
+        assert!(text.contains("launch failed"), "{text}");
     }
 
     #[test]

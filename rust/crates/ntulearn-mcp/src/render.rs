@@ -10,13 +10,29 @@ fn _dt(value: Option<&Value>) -> String {
     match value {
         Some(v) if !v.is_null() => {
             if let Some(s) = v.as_str() {
-                if s.is_empty() { "—".to_string() } else { s.to_string() }
+                if s.is_empty() {
+                    "—".to_string()
+                } else {
+                    s.to_string()
+                }
             } else if let Some(n) = v.as_u64() {
-                if n == 0 { "—".to_string() } else { n.to_string() }
+                if n == 0 {
+                    "—".to_string()
+                } else {
+                    n.to_string()
+                }
             } else if let Some(b) = v.as_bool() {
-                if b { "True".to_string() } else { "—".to_string() }
+                if b {
+                    "True".to_string()
+                } else {
+                    "—".to_string()
+                }
             } else if let Some(f) = v.as_f64() {
-                if f == 0.0 { "—".to_string() } else { format!("{}", f) }
+                if f == 0.0 {
+                    "—".to_string()
+                } else {
+                    format!("{}", f)
+                }
             } else {
                 serde_json::to_string(v).unwrap_or_else(|_| "—".to_string())
             }
@@ -38,18 +54,28 @@ fn _gs<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
 }
 
-
 /// render.py `md_messages`.
 pub fn md_messages(payload: &Value) -> String {
     let folder = _gs(payload, "folder").unwrap_or("inbox");
     let offset = payload.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let total = payload.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let msgs = payload.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let msgs = payload
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let hi = offset + msgs.len();
     let mut lines = vec![format!("# Messages — {folder} ({offset}-{hi} of {total})")];
     for m in &msgs {
-        let flag = if m.get("read").and_then(|v| v.as_bool()) == Some(true) { "🟡" } else { "🔴" };
-        let subject = m.get("subject").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let flag = if m.get("read").and_then(|v| v.as_bool()) == Some(true) {
+            "🟡"
+        } else {
+            "🔴"
+        };
+        let subject = m
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .unwrap_or("(no subject)");
         let from = m.get("fromUserId").and_then(|v| v.as_str()).unwrap_or("?");
         let created = _dt(m.get("created"));
@@ -65,7 +91,9 @@ pub fn md_messages(payload: &Value) -> String {
 
 /// render.py `md_message`.
 pub fn md_message(payload: &Value) -> String {
-    let subject = _gs(payload, "subject").filter(|s| !s.is_empty()).unwrap_or("(no subject)");
+    let subject = _gs(payload, "subject")
+        .filter(|s| !s.is_empty())
+        .unwrap_or("(no subject)");
     let sender = payload
         .get("senderName")
         .and_then(|v| v.as_str())
@@ -73,18 +101,28 @@ pub fn md_message(payload: &Value) -> String {
         .or_else(|| payload.get("senderId").and_then(|v| v.as_str()))
         .unwrap_or("?");
     let created = _dt(payload.get("created"));
-    let read = payload.get("read").and_then(|v| v.as_bool()).unwrap_or(false);
+    let read = payload
+        .get("read")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mut lines = vec![
         format!("# {subject}"),
         format!("- from: {sender}"),
         format!("- created: {created} · read: {read}"),
     ];
-    let recips = payload.get("recipients").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let recips = payload
+        .get("recipients")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if !recips.is_empty() {
         let names = recips
             .iter()
             .map(|r| {
-                let n = r.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+                let n = r
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
                     .or_else(|| r.get("id").and_then(|v| v.as_str()))
                     .unwrap_or("?");
                 let role = r.get("role").and_then(|v| v.as_str()).unwrap_or("?");
@@ -94,7 +132,12 @@ pub fn md_message(payload: &Value) -> String {
             .join(", ");
         lines.push(format!("- recipients: {names}"));
     }
-    let body = payload.get("body").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let body = payload
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !body.is_empty() {
         lines.push(String::new());
         lines.push("---".to_string());
@@ -108,11 +151,20 @@ pub fn md_course_users(payload: &Value) -> String {
     let course_id = _gs(payload, "courseId").unwrap_or("?");
     let offset = payload.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let total = payload.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let users = payload.get("users").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let users = payload
+        .get("users")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let hi = offset + users.len();
-    let mut lines = vec![format!("# Course roster — {course_id} ({total} users, showing {offset}-{hi})")];
+    let mut lines = vec![format!(
+        "# Course roster — {course_id} ({total} users, showing {offset}-{hi})"
+    )];
     for u in &users {
-        let name = u.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let name = u
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .or_else(|| u.get("userName").and_then(|v| v.as_str()))
             .or_else(|| u.get("id").and_then(|v| v.as_str()))
             .unwrap_or("?");
@@ -130,20 +182,35 @@ pub fn md_course_users(payload: &Value) -> String {
 pub fn md_course_groups(payload: &Value) -> String {
     let course_id = _gs(payload, "courseId").unwrap_or("?");
     let total = payload.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let groups = payload.get("groups").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let groups = payload
+        .get("groups")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut lines = vec![format!("# Groups — {course_id} ({total})")];
     for g in &groups {
-        let name = g.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let name = g
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .or_else(|| g.get("id").and_then(|v| v.as_str()))
             .unwrap_or("?");
-        let avail = if g.get("available").and_then(|v| v.as_bool()) == Some(true) { "✓" } else { "✗" };
+        let avail = if g.get("available").and_then(|v| v.as_bool()) == Some(true) {
+            "✓"
+        } else {
+            "✗"
+        };
         let id = g.get("id").and_then(|v| v.as_str()).unwrap_or("?");
         let count = match g.get("memberCount") {
             Some(Value::Number(n)) => format!(" · {n} members"),
             _ => String::new(),
         };
         lines.push(format!("- {avail} **{name}**{count} — id={id}"));
-        if let Some(desc) = g.get("description").and_then(|v| v.as_str()).filter(|d| !d.is_empty()) {
+        if let Some(desc) = g
+            .get("description")
+            .and_then(|v| v.as_str())
+            .filter(|d| !d.is_empty())
+        {
             let short: String = desc.chars().take(160).collect();
             lines.push(format!("  - {short}"));
         }
@@ -159,10 +226,19 @@ pub fn md_group_members(payload: &Value) -> String {
     let group_id = _gs(payload, "groupId").unwrap_or("?");
     let course_id = _gs(payload, "courseId").unwrap_or("?");
     let total = payload.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let users = payload.get("users").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let mut lines = vec![format!("# Group {group_id} — {course_id} ({total} members)")];
+    let users = payload
+        .get("users")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut lines = vec![format!(
+        "# Group {group_id} — {course_id} ({total} members)"
+    )];
     for u in &users {
-        let name = u.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let name = u
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .or_else(|| u.get("userName").and_then(|v| v.as_str()))
             .or_else(|| u.get("id").and_then(|v| v.as_str()))
             .unwrap_or("?");
@@ -175,16 +251,22 @@ pub fn md_group_members(payload: &Value) -> String {
     lines.join("\n")
 }
 
-
 /// render.py `md_gradebook_attempts`.
 pub fn md_gradebook_attempts(payload: &Value) -> String {
     let course_id = _gs(payload, "courseId").unwrap_or("?");
     let column_id = _gs(payload, "columnId").unwrap_or("?");
     let total = payload.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let attempts = payload.get("attempts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let attempts = payload
+        .get("attempts")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut lines = vec![format!("# Attempts — {course_id} / {column_id} ({total})")];
     for a in &attempts {
-        let status = a.get("status").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        let status = a
+            .get("status")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .unwrap_or("attempt");
         let score = a.get("score");
         let score_txt = match score {
@@ -194,7 +276,9 @@ pub fn md_gradebook_attempts(payload: &Value) -> String {
         let user = a.get("userId").and_then(|v| v.as_str()).unwrap_or("?");
         let id = a.get("id").and_then(|v| v.as_str()).unwrap_or("?");
         let created = _dt(a.get("created"));
-        lines.push(format!("- **{status}** {score_txt}— user {user} · id={id} · {created}"));
+        lines.push(format!(
+            "- **{status}** {score_txt}— user {user} · id={id} · {created}"
+        ));
         if let Some(fb) = a.get("feedback") {
             if !(fb.is_null() || (fb.as_str().map(|s| s.is_empty()).unwrap_or(false))) {
                 let s = serde_json::to_string(fb).unwrap_or_default();
@@ -210,27 +294,56 @@ pub fn md_gradebook_attempts(payload: &Value) -> String {
 }
 
 fn _fmt_match(match_: &Value) -> String {
-    let title = match_.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    let title = match_
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .or_else(|| match_.get("id").and_then(|v| v.as_str()))
         .unwrap_or("?");
     let kind = match_.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    let course_id = match_.get("courseId").and_then(|v| v.as_str()).unwrap_or("");
-    let crumb = match_.get("breadcrumb").and_then(|v| v.as_array()).cloned().unwrap_or_default()
-        .iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("/");
+    let course_id = match_
+        .get("courseId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let crumb = match_
+        .get("breadcrumb")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect::<Vec<_>>()
+        .join("/");
     format!("- **{title}** [{kind} · {course_id}] — `{crumb}`")
 }
 
 /// render.py `md_search_all_courses`.
 pub fn md_search_all_courses(payload: &Value) -> String {
     let query = _gs(payload, "query").unwrap_or("");
-    let courses = payload.get("coursesSearched").and_then(|v| v.as_u64()).unwrap_or(0);
-    let max_results = payload.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(0);
-    let mut lines = vec![format!("# Search “{query}” — {courses} course(s), {max_results} result(s)")];
-    let matches = payload.get("matches").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let courses = payload
+        .get("coursesSearched")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let max_results = payload
+        .get("maxResults")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let mut lines = vec![format!(
+        "# Search “{query}” — {courses} course(s), {max_results} result(s)"
+    )];
+    let matches = payload
+        .get("matches")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     for m in &matches {
         lines.push(_fmt_match(m));
     }
-    let errors = payload.get("courseErrors").and_then(|v| v.as_object()).map(|o| o.len()).unwrap_or(0);
+    let errors = payload
+        .get("courseErrors")
+        .and_then(|v| v.as_object())
+        .map(|o| o.len())
+        .unwrap_or(0);
     if errors > 0 {
         lines.push(String::new());
         lines.push(format!("_⚠️ {errors} course(s) could not be searched._"));
@@ -244,7 +357,10 @@ pub fn md_search_all_courses(payload: &Value) -> String {
 fn _render_tree_node(node: &Value, indent: usize) -> Vec<String> {
     let kind = node.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
     let icon = if kind == "folder" { "📁" } else { "📄" };
-    let title = node.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    let title = node
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .or_else(|| node.get("id").and_then(|v| v.as_str()))
         .unwrap_or("?");
     let pad = "  ".repeat(indent);
@@ -261,9 +377,18 @@ fn _render_tree_node(node: &Value, indent: usize) -> Vec<String> {
 pub fn md_content_tree(payload: &Value) -> String {
     let course_id = _gs(payload, "courseId").unwrap_or("?");
     let count = payload.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-    let total_nodes = payload.get("totalNodes").and_then(|v| v.as_u64()).unwrap_or(0);
-    let mut lines = vec![format!("# Content tree — {course_id} ({count} top-level, {total_nodes} nodes)")];
-    let tree = payload.get("tree").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let total_nodes = payload
+        .get("totalNodes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let mut lines = vec![format!(
+        "# Content tree — {course_id} ({count} top-level, {total_nodes} nodes)"
+    )];
+    let tree = payload
+        .get("tree")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     for node in &tree {
         lines.extend(_render_tree_node(node, 0));
     }
@@ -275,11 +400,26 @@ pub fn md_content_tree(payload: &Value) -> String {
 
 /// render.py `md_download_course`.
 pub fn md_download_course(payload: &Value) -> String {
-    let name = payload.get("courseName").and_then(|v| v.as_str()).unwrap_or("?");
-    let download_count = payload.get("downloadCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let total_bytes = payload.get("totalBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-    let skipped_count = payload.get("skippedCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let dest = payload.get("destinationDir").and_then(|v| v.as_str()).unwrap_or("?");
+    let name = payload
+        .get("courseName")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let download_count = payload
+        .get("downloadCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let total_bytes = payload
+        .get("totalBytes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let skipped_count = payload
+        .get("skippedCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let dest = payload
+        .get("destinationDir")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
     let mut lines = vec![
         format!("# Downloaded {name}"),
         format!("- files saved: **{download_count}** ({total_bytes} B)"),
@@ -311,35 +451,77 @@ pub fn md_download_course(payload: &Value) -> String {
 pub fn md_whats_new(payload: &Value) -> String {
     let since = _dt(payload.get("since"));
     let mut lines = vec![format!("# What's new since {since}")];
-    let summary = payload.get("summary").cloned().unwrap_or_else(|| serde_json::json!({}));
-    let ann = summary.get("announcements").and_then(|v| v.as_u64()).unwrap_or(0);
-    let upc = summary.get("upcoming").and_then(|v| v.as_u64()).unwrap_or(0);
-    let nf = summary.get("newFiles").and_then(|v| v.as_u64()).unwrap_or(0);
-    lines.push(format!("- announcements: **{ann}** · upcoming: **{upc}** · new files: **{nf}**"));
-    let courses = payload.get("courses").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let summary = payload
+        .get("summary")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let ann = summary
+        .get("announcements")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let upc = summary
+        .get("upcoming")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let nf = summary
+        .get("newFiles")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    lines.push(format!(
+        "- announcements: **{ann}** · upcoming: **{upc}** · new files: **{nf}**"
+    ));
+    let courses = payload
+        .get("courses")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     for entry in &courses {
-        let name = entry.get("courseName").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
-            .unwrap_or_else(|| entry.get("courseId").and_then(|v| v.as_str()).unwrap_or("?"));
+        let name = entry
+            .get("courseName")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                entry
+                    .get("courseId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+            });
         let mut labels: Vec<String> = Vec::new();
         for kind in ["announcements", "upcoming", "newFiles"] {
-            let n = entry.get(kind).and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let n = entry
+                .get(kind)
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
             if n > 0 {
                 labels.push(format!("{kind}: {n}"));
             }
         }
         if !labels.is_empty() {
             lines.push(format!("- **{name}** — {}", labels.join(", ")));
-            let anns = entry.get("announcements").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let anns = entry
+                .get("announcements")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             for a in anns.iter().take(3) {
                 let t = a.get("title").and_then(|v| v.as_str()).unwrap_or("?");
                 lines.push(format!("    - 📢 {t} ({})", _dt(a.get("created"))));
             }
-            let upcs = entry.get("upcoming").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let upcs = entry
+                .get("upcoming")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             for u in upcs.iter().take(3) {
                 let t = u.get("title").and_then(|v| v.as_str()).unwrap_or("?");
                 lines.push(format!("    - 📅 {t} ({})", _dt(u.get("start"))));
             }
-            let files = entry.get("newFiles").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let files = entry
+                .get("newFiles")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             for f in files.iter().take(3) {
                 let t = f.get("title").and_then(|v| v.as_str()).unwrap_or("?");
                 lines.push(format!("    - 📄 {t} ({})", _dt(f.get("modified"))));
@@ -351,22 +533,38 @@ pub fn md_whats_new(payload: &Value) -> String {
 
 /// render.py `md_export_calendar`.
 pub fn md_export_calendar(payload: &Value) -> String {
-    let item_count = payload.get("itemCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let course_count = payload.get("courseCount").and_then(|v| v.as_u64()).unwrap_or(0);
+    let item_count = payload
+        .get("itemCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let course_count = payload
+        .get("courseCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let since = _dt(payload.get("since"));
     let until = _dt(payload.get("until"));
-    let lines = [format!("# Calendar export (.ics) — {item_count} events from {course_count} course(s)"),
+    let lines = [
+        format!("# Calendar export (.ics) — {item_count} events from {course_count} course(s)"),
         format!("- window: {since} → {until}"),
-        "- you can import the ICS payload directly into most calendar apps.".to_string()];
+        "- you can import the ICS payload directly into most calendar apps.".to_string(),
+    ];
     lines.join("\n")
 }
 
 /// render.py `md_export_gradebook`.
 pub fn md_export_gradebook(payload: &Value) -> String {
-    let row_count = payload.get("rowCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let course_count = payload.get("courseCount").and_then(|v| v.as_u64()).unwrap_or(0);
-    let lines = [format!("# Gradebook export (.csv) — {row_count} rows across {course_count} course(s)"),
-        "You can paste the CSV payload into a file and open it in Sheets/Excel.".to_string()];
+    let row_count = payload
+        .get("rowCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let course_count = payload
+        .get("courseCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let lines = [
+        format!("# Gradebook export (.csv) — {row_count} rows across {course_count} course(s)"),
+        "You can paste the CSV payload into a file and open it in Sheets/Excel.".to_string(),
+    ];
     lines.join("\n")
 }
 
@@ -374,26 +572,53 @@ pub fn md_export_gradebook(payload: &Value) -> String {
 pub fn md_summarize_course(payload: &Value) -> String {
     let course_id = _gs(payload, "courseId").unwrap_or("?");
     let title = _gs(payload, "title").unwrap_or(course_id);
-    let errors = payload.get("courseErrors").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let errors = payload
+        .get("courseErrors")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut lines = vec![format!("# {title}")];
-    if let Some(desc) = payload.get("description").and_then(|v| v.as_str()).filter(|d| !d.is_empty()) {
+    if let Some(desc) = payload
+        .get("description")
+        .and_then(|v| v.as_str())
+        .filter(|d| !d.is_empty())
+    {
         lines.push(String::new());
         let short: String = desc.chars().take(300).collect();
         lines.push(short);
     }
     lines.push(String::new());
-    let term = payload.get("term").cloned().unwrap_or_else(|| serde_json::json!({}));
-    if let Some(term_name) = term.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    let term = payload
+        .get("term")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(term_name) = term
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
         let ts = _dt(term.get("start"));
         let te = _dt(term.get("end"));
         lines.push(format!("- term: **{term_name}** ({ts} → {te})"));
     }
-    let instructors = payload.get("instructors").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let instructors = payload
+        .get("instructors")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if !instructors.is_empty() {
-        let names = instructors.iter().take(5)
-            .map(|i| i.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
-                .or_else(|| i.get("id").and_then(|v| v.as_str())).unwrap_or("?"))
-            .collect::<Vec<_>>().join(", ");
+        let names = instructors
+            .iter()
+            .take(5)
+            .map(|i| {
+                i.get("name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| i.get("id").and_then(|v| v.as_str()))
+                    .unwrap_or("?")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         lines.push(format!("- instructors: {names}"));
     }
     if let Some(enr) = payload.get("enrollmentCount") {
@@ -401,31 +626,55 @@ pub fn md_summarize_course(payload: &Value) -> String {
             lines.push(format!("- enrolled: {n} user(s)"));
         }
     }
-    let tops = payload.get("contentTopFolders").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let tops = payload
+        .get("contentTopFolders")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if !tops.is_empty() {
         lines.push(String::new());
         lines.push("Top-level folders:".to_string());
         for f in tops.iter().take(10) {
-            let icon = if f.get("hasChildren").and_then(|v| v.as_bool()) == Some(true) { "📁" } else { "📄" };
-            let t = f.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
-                .or_else(|| f.get("id").and_then(|v| v.as_str())).unwrap_or("?");
+            let icon = if f.get("hasChildren").and_then(|v| v.as_bool()) == Some(true) {
+                "📁"
+            } else {
+                "📄"
+            };
+            let t = f
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .or_else(|| f.get("id").and_then(|v| v.as_str()))
+                .unwrap_or("?");
             lines.push(format!("  - {icon} {t}"));
         }
     }
-    let grades = payload.get("gradeSummary").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let grades = payload
+        .get("gradeSummary")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     if let Some(cc) = grades.get("columnCount").and_then(|v| v.as_u64()) {
         if cc > 0 {
-            let with = grades.get("columnsWithScore").and_then(|v| v.as_u64()).unwrap_or(0);
+            let with = grades
+                .get("columnsWithScore")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let mut avg_txt = String::new();
             if let Some(avg) = grades.get("averagePercent") {
                 if let Some(f) = avg.as_f64() {
                     avg_txt = format!(" · avg {f}%");
                 }
             }
-            lines.push(format!("- gradebook: {cc} column(s), {with} graded{avg_txt}"));
+            lines.push(format!(
+                "- gradebook: {cc} column(s), {with} graded{avg_txt}"
+            ));
         }
     }
-    let upcoming = payload.get("upcoming").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let upcoming = payload
+        .get("upcoming")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if !upcoming.is_empty() {
         lines.push(String::new());
         lines.push("Upcoming:".to_string());
@@ -435,15 +684,25 @@ pub fn md_summarize_course(payload: &Value) -> String {
         }
     }
     if !errors.is_empty() {
-        let sections = errors.iter().take(4)
-            .map(|e| e.get("section").and_then(|v| v.as_str()).unwrap_or("?").to_string())
-            .collect::<Vec<_>>().join(", ");
+        let sections = errors
+            .iter()
+            .take(4)
+            .map(|e| {
+                e.get("section")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         lines.push(String::new());
-        lines.push(format!("_⚠️ {} section(s) unavailable: {sections}_", errors.len()));
+        lines.push(format!(
+            "_⚠️ {} section(s) unavailable: {sections}_",
+            errors.len()
+        ));
     }
     lines.join("\n")
 }
-
 
 // ===========================================================================
 // server.py `_md_*` builders (used by the 8 server-local tools)
@@ -451,13 +710,21 @@ pub fn md_summarize_course(payload: &Value) -> String {
 
 /// Trailing pagination line (server `_md_pagination_footer`).
 pub fn md_pagination_footer(meta: &Value) -> String {
-    let has_more = meta.get("hasMore").and_then(|v| v.as_bool()).unwrap_or(false);
+    let has_more = meta
+        .get("hasMore")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let count = meta.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
     let total = meta.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
     if has_more {
         let offset = meta.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
-        let next = meta.get("nextOffset").and_then(|v| v.as_u64()).unwrap_or(offset);
-        format!("\n_Showing {count} of {total} (offset {offset}). Pass offset={next} for the next page._")
+        let next = meta
+            .get("nextOffset")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(offset);
+        format!(
+            "\n_Showing {count} of {total} (offset {offset}). Pass offset={next} for the next page._"
+        )
     } else {
         format!("\n_Showing all {total}._")
     }
@@ -475,8 +742,14 @@ pub fn md_courses(courses: &[Value], total: usize) -> String {
             let title = c.get("title").and_then(Value::as_str).unwrap_or("?");
             let cid = c.get("courseId").and_then(Value::as_str).unwrap_or("?");
             let available = c.get("available").and_then(Value::as_str).unwrap_or("?");
-            let last = c.get("lastAccessed").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("—");
-            lines.push(format!("- **{title}** `{cid}` · available={available} · last accessed {last}"));
+            let last = c
+                .get("lastAccessed")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("—");
+            lines.push(format!(
+                "- **{title}** `{cid}` · available={available} · last accessed {last}"
+            ));
         }
     }
     lines.join("\n")
@@ -498,10 +771,17 @@ pub fn md_content_items(items: &[Value], total: usize) -> String {
         lines.push("_No items._".to_string());
     } else {
         for it in items {
-            let arrow = if it.get("hasChildren").and_then(Value::as_bool) == Some(true) { "📁" } else { "📄" };
+            let arrow = if it.get("hasChildren").and_then(Value::as_bool) == Some(true) {
+                "📁"
+            } else {
+                "📄"
+            };
             let title = it.get("title").and_then(Value::as_str).unwrap_or("?");
             let id = it.get("id").and_then(Value::as_str).unwrap_or("?");
-            let handler = it.get("contentHandlerId").and_then(Value::as_str).unwrap_or("?");
+            let handler = it
+                .get("contentHandlerId")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
             lines.push(format!("- {arrow} **{title}** `{id}` · handler={handler}"));
         }
     }
@@ -523,7 +803,9 @@ pub fn md_upcoming(items: &[Value], meta: &Value, course_errors: &Value) -> Stri
     let n_err = course_errors.as_object().map(|o| o.len()).unwrap_or(0);
     let mut lines = vec![format!("# Upcoming ({total} total)"), String::new()];
     if n_err > 0 {
-        lines.push(format!("_Note: {n_err} course(s) returned errors and were skipped._"));
+        lines.push(format!(
+            "_Note: {n_err} course(s) returned errors and were skipped._"
+        ));
         lines.push(String::new());
     }
     if items.is_empty() {
@@ -532,8 +814,16 @@ pub fn md_upcoming(items: &[Value], meta: &Value, course_errors: &Value) -> Stri
         lines.push("| When | Title | Type | Course | Gradable |".to_string());
         lines.push("|---|---|---|---|---|".to_string());
         for it in items {
-            let start = it.get("start").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("—").to_string();
-            let end = it.get("end").and_then(Value::as_str).filter(|s| !s.is_empty());
+            let start = it
+                .get("start")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("—")
+                .to_string();
+            let end = it
+                .get("end")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty());
             let when = match end {
                 Some(e) if e != start => format!("{start} → {e}"),
                 _ => start,
@@ -564,15 +854,28 @@ pub fn md_announcements(items: &[Value], meta: &Value) -> String {
         lines.push("_No announcements._".to_string());
     } else {
         for a in items {
-            let created = a.get("created").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("—");
+            let created = a
+                .get("created")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("—");
             let title = a.get("title").and_then(Value::as_str).unwrap_or("?");
             let mut header = format!("## {title}  ·  {created}");
             if let Some(course_id) = a.get("courseId").and_then(Value::as_str) {
                 header.push_str(&format!("  ·  `{course_id}`"));
             }
             lines.push(header);
-            let body = a.get("body").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            lines.push(if body.is_empty() { "_(no body)_".to_string() } else { body });
+            let body = a
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            lines.push(if body.is_empty() {
+                "_(no body)_".to_string()
+            } else {
+                body
+            });
             lines.push(String::new());
         }
     }
@@ -581,7 +884,12 @@ pub fn md_announcements(items: &[Value], meta: &Value) -> String {
 }
 
 /// `_md_gradebook(columns, meta, grades_available, error)`.
-pub fn md_gradebook(columns: &[Value], meta: &Value, grades_available: bool, error: Option<&str>) -> String {
+pub fn md_gradebook(
+    columns: &[Value],
+    meta: &Value,
+    grades_available: bool,
+    error: Option<&str>,
+) -> String {
     let total = meta.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let mut lines = vec![format!("# Gradebook ({total} columns)"), String::new()];
     if !grades_available {
@@ -595,14 +903,19 @@ pub fn md_gradebook(columns: &[Value], meta: &Value, grades_available: bool, err
         lines.push("|---|---|---|---|---|---|".to_string());
         for c in columns {
             let course_id = c.get("courseId").and_then(Value::as_str).unwrap_or("—");
-            let col = c.get("displayName").and_then(Value::as_str).filter(|s| !s.is_empty())
+            let col = c
+                .get("displayName")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
                 .or_else(|| c.get("name").and_then(Value::as_str))
                 .unwrap_or("?");
             let possible = dt_or_dash(c.get("possible"));
             let score = dt_or_dash(c.get("score"));
             let grade = dt_or_dash(c.get("grade"));
             let status = dt_or_dash(c.get("status"));
-            lines.push(format!("| `{course_id}` | {col} | {possible} | {score} | {grade} | {status} |"));
+            lines.push(format!(
+                "| `{course_id}` | {col} | {possible} | {score} | {grade} | {status} |"
+            ));
         }
     }
     lines.push(md_pagination_footer(meta));
@@ -612,8 +925,15 @@ pub fn md_gradebook(columns: &[Value], meta: &Value, grades_available: bool, err
 fn dt_or_dash(v: Option<&Value>) -> String {
     match v {
         Some(x) if !x.is_null() => {
-            if let Some(s) = x.as_str() { if s.is_empty() { "—".to_string() } else { s.to_string() } }
-            else { serde_json::to_string(x).unwrap_or_else(|_| "—".to_string()) }
+            if let Some(s) = x.as_str() {
+                if s.is_empty() {
+                    "—".to_string()
+                } else {
+                    s.to_string()
+                }
+            } else {
+                serde_json::to_string(x).unwrap_or_else(|_| "—".to_string())
+            }
         }
         _ => "—".to_string(),
     }
@@ -621,15 +941,25 @@ fn dt_or_dash(v: Option<&Value>) -> String {
 
 /// `_md_search_results(matches)`.
 pub fn md_search_results(matches: &[Value]) -> String {
-    let mut lines = vec![format!("# Search matches ({})", matches.len()), String::new()];
+    let mut lines = vec![
+        format!("# Search matches ({})", matches.len()),
+        String::new(),
+    ];
     if matches.is_empty() {
         lines.push("_No matches._".to_string());
     } else {
         for m in matches {
             let title = m.get("title").and_then(Value::as_str).unwrap_or("?");
             let id = m.get("id").and_then(Value::as_str).unwrap_or("?");
-            let crumb = m.get("breadcrumb").and_then(|v| v.as_array()).cloned().unwrap_or_default()
-                .iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" › ");
+            let crumb = m
+                .get("breadcrumb")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(" › ");
             lines.push(format!("- **{title}** `{id}`  "));
             lines.push(format!("  _{crumb}_"));
         }
@@ -646,15 +976,26 @@ pub fn md_files(payload: &Value, heading: &str) -> String {
         format!("**Item:** {title}  "),
         String::new(),
     ];
-    let files = payload.get("files").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let skipped = payload.get("skipped").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let files = payload
+        .get("files")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let skipped = payload
+        .get("skipped")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     if !files.is_empty() {
         lines.push("## Files".to_string());
         for f in &files {
             if let Some(local) = f.get("localPath").and_then(Value::as_str) {
                 let filename = f.get("filename").and_then(Value::as_str).unwrap_or("?");
                 let size = f.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                lines.push(format!("- `{filename}` ({}) → `{local}`", crate::parsers::format_bytes(size)));
+                lines.push(format!(
+                    "- `{filename}` ({}) → `{local}`",
+                    crate::parsers::format_bytes(size)
+                ));
             } else if f.get("text").is_some() {
                 let filename = f.get("filename").and_then(Value::as_str).unwrap_or("?");
                 let kind = f.get("kind").and_then(Value::as_str).unwrap_or("?");
@@ -674,10 +1015,22 @@ pub fn md_files(payload: &Value, heading: &str) -> String {
                         count_bits.push(format!("{sc} sheets"));
                     }
                 }
-                let counts = if count_bits.is_empty() { String::new() } else { format!(" · {}", count_bits.join(", ")) };
+                let counts = if count_bits.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", count_bits.join(", "))
+                };
                 let size = f.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                lines.push(format!("### {filename} ({kind}{counts}, {})", crate::parsers::format_bytes(size)));
-                let text = f.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                lines.push(format!(
+                    "### {filename} ({kind}{counts}, {})",
+                    crate::parsers::format_bytes(size)
+                ));
+                let text = f
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
                 if text.is_empty() {
                     lines.push("_(empty)_".to_string());
                 } else if text.chars().count() > 5000 {
@@ -772,7 +1125,9 @@ pub fn md_fbf_status(payload: &Value) -> String {
                 Some(serde_json::Value::Bool(false)) => "⬜",
                 _ => "·",
             };
-            lines.push(format!("- {done} {ttitle} · due {deadline} · progress {prog}"));
+            lines.push(format!(
+                "- {done} {ttitle} · due {deadline} · progress {prog}"
+            ));
         }
     }
     if activities.is_empty() && _gs(payload, "note").is_none_or(|s| s.is_empty()) {
@@ -813,7 +1168,11 @@ pub fn md_fbf_reviews(payload: &Value) -> String {
     if dir == "received" && payload.get("released").and_then(|v| v.as_bool()) == Some(false) {
         lines.push(String::new());
         lines.push("_Teammate reviews are not yet released._".to_string());
-        for k in ["ratingsPublishedAt", "reviewsPublishedAt", "gradesPublishedAt"] {
+        for k in [
+            "ratingsPublishedAt",
+            "reviewsPublishedAt",
+            "gradesPublishedAt",
+        ] {
             let v = payload.get("releaseState").and_then(|r| r.get(k));
             lines.push(format!("- {k}: {}", _dt(v)));
         }
@@ -898,11 +1257,20 @@ pub fn md_fbf_rate(payload: &Value) -> String {
     };
     let mut lines = vec![format!("# Rating upsert — {title}")];
     lines.push(String::new());
-    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
-    lines.push(format!("- criterion: **{}**", _gs(payload, "criterion").unwrap_or("?")));
+    lines.push(format!(
+        "- teammate: **{}**",
+        _gs(payload, "teammate").unwrap_or("?")
+    ));
+    lines.push(format!(
+        "- criterion: **{}**",
+        _gs(payload, "criterion").unwrap_or("?")
+    ));
     lines.push(format!("- before: {}", fmt_opt(payload.get("before"))));
     lines.push(format!("- after: **{}**", fmt_opt(payload.get("after"))));
-    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    let dry = payload
+        .get("dryRun")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     lines.push(String::new());
     if dry {
         lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
@@ -917,7 +1285,10 @@ pub fn md_fbf_comment(payload: &Value) -> String {
     let title = _gs(payload, "activityTitle").unwrap_or("FeedbackFruits");
     let mut lines = vec![format!("# Written review upsert — {title}")];
     lines.push(String::new());
-    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
+    lines.push(format!(
+        "- teammate: **{}**",
+        _gs(payload, "teammate").unwrap_or("?")
+    ));
     lines.push(format!(
         "- task: {}",
         _gs(payload, "task").unwrap_or("Overall comments")
@@ -932,7 +1303,10 @@ pub fn md_fbf_comment(payload: &Value) -> String {
     lines.push(String::new());
     lines.push(_gs(payload, "after").unwrap_or("").to_string());
     lines.push(String::new());
-    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    let dry = payload
+        .get("dryRun")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     if dry {
         lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
     } else {
@@ -940,8 +1314,6 @@ pub fn md_fbf_comment(payload: &Value) -> String {
     }
     lines.join("\n")
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Peerceptiv peer evaluation (pcv_* handlers)
@@ -973,7 +1345,9 @@ pub fn md_pcv_status(payload: &Value) -> String {
             .and_then(|p| p.get("requiredEvaluationCount"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let deadline = _dt(a.get("deadlines").and_then(|d| d.get("peerEvaluationDeadline")));
+        let deadline = _dt(a
+            .get("deadlines")
+            .and_then(|d| d.get("peerEvaluationDeadline")));
         let all_done = a
             .get("progress")
             .and_then(|p| p.get("completedAllEvaluations"))
@@ -981,7 +1355,9 @@ pub fn md_pcv_status(payload: &Value) -> String {
             .unwrap_or(false);
         let flag = if all_done { "✅" } else { "⬜" };
         lines.push(String::new());
-        lines.push(format!("## {flag} {title} · {done}/{required} evals · due {deadline}"));
+        lines.push(format!(
+            "## {flag} {title} · {done}/{required} evals · due {deadline}"
+        ));
         if let Some(group) = _gs(a, "group").filter(|s| !s.is_empty()) {
             lines.push(format!("- group: **{group}**"));
         }
@@ -1090,7 +1466,10 @@ pub fn md_pcv_evals(payload: &Value) -> String {
         for c in &comments {
             let mate = _gs(c, "teammate").unwrap_or("?");
             match _gs(c, "prompt").filter(|s| !s.is_empty()) {
-                Some(p) => lines.push(format!("- **{mate}** ({p}): {}", _gs(c, "comment").unwrap_or(""))),
+                Some(p) => lines.push(format!(
+                    "- **{mate}** ({p}): {}",
+                    _gs(c, "comment").unwrap_or("")
+                )),
                 _ => lines.push(format!("- **{mate}**: {}", _gs(c, "comment").unwrap_or(""))),
             }
         }
@@ -1125,14 +1504,23 @@ pub fn md_pcv_rate(payload: &Value) -> String {
     };
     let mut lines = vec![format!("# Rating upsert — {title}")];
     lines.push(String::new());
-    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
-    lines.push(format!("- criterion: **{}**", _gs(payload, "criterion").unwrap_or("?")));
+    lines.push(format!(
+        "- teammate: **{}**",
+        _gs(payload, "teammate").unwrap_or("?")
+    ));
+    lines.push(format!(
+        "- criterion: **{}**",
+        _gs(payload, "criterion").unwrap_or("?")
+    ));
     lines.push(format!("- before: {}", fmt_level(payload.get("before"))));
     lines.push(format!("- after: **{}**", fmt_level(payload.get("after"))));
     if payload.get("createdEval").and_then(|v| v.as_bool()) == Some(true) {
         lines.push("- peer evaluation: none existed yet — one will be created".to_string());
     }
-    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    let dry = payload
+        .get("dryRun")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     lines.push(String::new());
     if dry {
         lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
@@ -1147,7 +1535,10 @@ pub fn md_pcv_comment(payload: &Value) -> String {
     let title = _gs(payload, "assignmentTitle").unwrap_or("Peerceptiv");
     let mut lines = vec![format!("# Written comment upsert — {title}")];
     lines.push(String::new());
-    lines.push(format!("- teammate: **{}**", _gs(payload, "teammate").unwrap_or("?")));
+    lines.push(format!(
+        "- teammate: **{}**",
+        _gs(payload, "teammate").unwrap_or("?")
+    ));
     if payload.get("createdEval").and_then(|v| v.as_bool()) == Some(true) {
         lines.push("- peer evaluation: none existed yet — one will be created".to_string());
     }
@@ -1171,7 +1562,10 @@ pub fn md_pcv_comment(payload: &Value) -> String {
     lines.push(String::new());
     lines.push(_gs(payload, "after").unwrap_or("").to_string());
     lines.push(String::new());
-    let dry = payload.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(true);
+    let dry = payload
+        .get("dryRun")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     if dry {
         lines.push("_dry run — nothing was sent. Set dry_run=false to submit._".to_string());
     } else {
@@ -1179,7 +1573,6 @@ pub fn md_pcv_comment(payload: &Value) -> String {
     }
     lines.join("\n")
 }
-
 
 // ---------------------------------------------------------------------------
 // Kaltura transcripts / downloads (kaltura_* handlers)
@@ -1204,7 +1597,9 @@ pub fn md_kaltura_list(payload: &Value) -> String {
         let entry = _gs(v, "entryId").unwrap_or("?");
         let cid = _gs(v, "contentId").unwrap_or("?");
         let pid = _gs(v, "placementId").unwrap_or("?");
-        lines.push(format!("- **{title}** — entry `{entry}` · content `{cid}` · placement `{pid}`"));
+        lines.push(format!(
+            "- **{title}** — entry `{entry}` · content `{cid}` · placement `{pid}`"
+        ));
     }
     if videos.is_empty() && _gs(payload, "note").is_none_or(|s| s.is_empty()) {
         lines.push(String::new());
@@ -1240,6 +1635,17 @@ pub fn md_kaltura_list(payload: &Value) -> String {
 pub fn md_kaltura_transcripts(payload: &Value) -> String {
     let course = _gs(payload, "courseId").unwrap_or("?");
     let mut lines = vec![format!("# Kaltura transcripts — {course}")];
+    // A partial run must be legible up top: "2 of 3 videos" beats counting
+    // section headers by hand.
+    if let Some(total) = payload.get("total").and_then(|v| v.as_u64()) {
+        let got = payload
+            .get("videoCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if got != total {
+            lines.push(format!("_partial: {got} of {total} videos_"));
+        }
+    }
     if let Some(dir) = _gs(payload, "outputDir").filter(|s| !s.is_empty()) {
         let fmt = _gs(payload, "format").unwrap_or("both");
         lines.push(String::new());
