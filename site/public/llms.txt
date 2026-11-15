@@ -1,0 +1,37 @@
+# ntulearn-mcp
+
+> MCP server + agent-first CLI for NTULearn (NTU Singapore's Blackboard Learn). A single Rust
+> binary that gives Claude, Cursor, ChatGPT, GitHub Copilot, VS Code, Zed or any MCP host read
+> access to your NTU courses: announcements, calendar and due dates, grades, gradebook attempts,
+> course messages, users/groups, content trees and file downloads.
+
+Website: https://ntulearn.krtk.app
+Repository: https://github.com/gangula-karthik/ntulearn-mcp
+License: PolyForm-Noncommercial-1.0.0 (https://polyformproject.org/licenses/noncommercial/1.0.0/)
+Language: Rust (single static binary, no Python/pip)
+
+## Quick start
+
+1. Download the latest release from https://github.com/gangula-karthik/ntulearn-mcp/releases/latest
+   (ntulearn-mcp-<target-triple>.tar.gz, or .zip on Windows) and put the binary on PATH.
+2. Run `ntulearn-mcp setup` — opens NTULearn in a browser; log in once. The session renews itself.
+3. Run `ntulearn-mcp check` — expect "Live validity : OK (200)".
+4. Register the binary as an MCP server (command: absolute path, no args) or just let an agent
+   use the CLI (`ntulearn-mcp help`).
+
+## What it can do
+
+- List enrolled courses and walk content trees (search one course or all courses).
+- Cross-course digests: announcements (newest first), upcoming calendar items and due dates,
+  gradebook columns with scores, assignment attempts.
+- Download files or whole courses to a folder hierarchy you describe; read small documents inline.
+- Export the calendar as .ics and the gradebook as .csv.
+- 21 MCP tools, 2 prompt templates, a `ntulearn://courses/{id}` resource.
+- The same binary is a token-efficient CLI (compact TSV / TOON output, ~64x fewer tokens than
+  MCP tool schemas over a 10-turn conversation).
+
+## Key links
+
+- Releases: https://github.com/gangula-karthik/ntulearn-mcp/releases/latest
+- README (full tool reference): https://github.com/gangula-karthik/ntulearn-mcp
+- Author: Karthik Gangula (https://krtk.app)

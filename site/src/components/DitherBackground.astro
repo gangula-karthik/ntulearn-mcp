@@ -1,0 +1,215 @@
+---
+// Animated dithered-waves panel — a dependency-free WebGL port of the React
+// Three Fiber <Dither /> component (same fbm wave field, 8x8 Bayer dither),
+// in one shader pass and a few KB of inline JS.
+//
+// Instead of rendering at full resolution and pixelating in a post-process,
+// the canvas is sized to one texel per dither cell and upscaled by CSS with
+// `image-rendering: pixelated` — identical look, ~pixelSize² fewer fragments.
+// The canvas fills whatever box its parent gives it.
+interface Props {
+  waveSpeed?: number;
+  waveFrequency?: number;
+  waveAmplitude?: number;
+  pixelSize?: number;
+  mouseRadius?: number;
+  /** How much the cursor brightens the waves (the original darkened them). */
+  mouseStrength?: number;
+  enableMouseInteraction?: boolean;
+  /** Pull towards the darkest palette level; lower = brighter overall. */
+  bias?: number;
+  /** Wave brightness before quantisation (the original's waveColor luminance). */
+  intensity?: number;
+  /** Colour ramp the dither quantises into, darkest first. */
+  palette?: [number, number, number][];
+}
+
+const {
+  waveSpeed = 0.05,
+  waveFrequency = 3,
+  waveAmplitude = 0.3,
+  pixelSize = 4,
+  mouseRadius = 0.35,
+  mouseStrength = 0.4,
+  enableMouseInteraction = true,
+  bias = 0.08,
+  intensity = 1.05,
+  // One hue only: charcoal → rust → terracotta → peach.
+  palette = [
+    [48, 48, 46], // popover (charcoal)
+    [176, 87, 48], // chart-1 (rust)
+    [217, 119, 87], // primary (terracotta)
+    [240, 165, 133], // peach highlight
+  ],
+} = Astro.props;
+
+const config = { waveSpeed, waveFrequency, waveAmplitude, pixelSize, mouseRadius, mouseStrength, enableMouseInteraction, bias, intensity, palette };
+---
+<canvas id="dither-bg" aria-hidden="true"></canvas>
+
+<script is:inline define:vars={{ config }}>
+  (() => {
+    const canvas = document.getElementById("dither-bg");
+    const gl = canvas.getContext("webgl", {
+      alpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+      preserveDrawingBuffer: true, // as in the original; keeps the last frame when paused
+      powerPreference: "low-power",
+    });
+    if (!gl) return; // the panel's CSS background is the fallback
+
+    const f = (n) => Number(n).toFixed(5);
+    const rgb = ([r, g, b]) => `vec3(${f(r / 255)},${f(g / 255)},${f(b / 255)})`;
+    const levels = config.palette.length;
+    let ramp = `vec3 c = ${rgb(config.palette[0])};`;
+    for (let i = 1; i < levels; i++) ramp += `c = mix(c, ${rgb(config.palette[i])}, step(${f(i - 0.5)}, idx));`;
+
+    const vert = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+    const frag = `
+precision highp float;
+uniform vec2 resolution;
+uniform float time;
+uniform vec2 mousePos;
+uniform float mouseOn;
+
+vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}
+vec4 permute(vec4 x){return mod289(((x*34.)+1.)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-.85373472095314*r;}
+vec2 fade(vec2 t){return t*t*t*(t*(t*6.-15.)+10.);}
+float cnoise(vec2 P){
+  vec4 Pi=floor(P.xyxy)+vec4(0.,0.,1.,1.);
+  vec4 Pf=fract(P.xyxy)-vec4(0.,0.,1.,1.);
+  Pi=mod289(Pi);
+  vec4 ix=Pi.xzxz,iy=Pi.yyww,fx=Pf.xzxz,fy=Pf.yyww;
+  vec4 i=permute(permute(ix)+iy);
+  vec4 gx=fract(i*(1./41.))*2.-1.;
+  vec4 gy=abs(gx)-.5;
+  vec4 tx=floor(gx+.5);
+  gx=gx-tx;
+  vec2 g00=vec2(gx.x,gy.x),g10=vec2(gx.y,gy.y),g01=vec2(gx.z,gy.z),g11=vec2(gx.w,gy.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(g00,g00),dot(g01,g01),dot(g10,g10),dot(g11,g11)));
+  g00*=norm.x;g01*=norm.y;g10*=norm.z;g11*=norm.w;
+  float n00=dot(g00,vec2(fx.x,fy.x)),n10=dot(g10,vec2(fx.y,fy.y));
+  float n01=dot(g01,vec2(fx.z,fy.z)),n11=dot(g11,vec2(fx.w,fy.w));
+  vec2 fade_xy=fade(Pf.xy);
+  vec2 n_x=mix(vec2(n00,n01),vec2(n10,n11),fade_xy.x);
+  return 2.3*mix(n_x.x,n_x.y,fade_xy.y);
+}
+float fbm(vec2 p){
+  float value=0.,amp=1.;
+  for(int i=0;i<4;i++){value+=amp*abs(cnoise(p));p*=${f(config.waveFrequency)};amp*=${f(config.waveAmplitude)};}
+  return value;
+}
+float pattern(vec2 p){vec2 p2=p-time*${f(config.waveSpeed)};return fbm(p+fbm(p2));}
+
+// 8x8 ordered-dither (Bayer) threshold, built recursively — GLSL ES 1.0 safe.
+float bayer2(vec2 a){a=floor(a);return fract(a.x/2.+a.y*a.y*.75);}
+float bayer4(vec2 a){return bayer2(.5*a)*.25+bayer2(a);}
+float bayer8(vec2 a){return bayer4(.5*a)*.25+bayer2(a);}
+
+void main(){
+  vec2 uv=gl_FragCoord.xy/resolution-.5;
+  uv.x*=resolution.x/resolution.y;
+  float f=pattern(uv);
+  if(mouseOn>.5){
+    vec2 m=(mousePos/resolution-.5)*vec2(1.,-1.);
+    m.x*=resolution.x/resolution.y;
+    f+=${f(config.mouseStrength)}*(1.-smoothstep(0.,${f(config.mouseRadius)},length(uv-m)));
+  }
+  float stepSize=1./${f(levels - 1)};
+  float v=clamp(f*${f(config.intensity)}+(bayer8(gl_FragCoord.xy)-.25)*stepSize-${f(config.bias)},0.,1.);
+  float idx=floor(v*${f(levels - 1)}+.5);
+  ${ramp}
+  gl_FragColor=vec4(c,1.);
+}`;
+
+    const compile = (type, src) => {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      return s;
+    };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, vert));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, frag));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
+    gl.useProgram(prog);
+
+    // One oversized triangle covers the viewport.
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    const u = (n) => gl.getUniformLocation(prog, n);
+    const uRes = u("resolution"), uTime = u("time"), uMouse = u("mousePos"), uMouseOn = u("mouseOn");
+
+    const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const start = performance.now();
+    const mouse = [-1e4, -1e4];
+    let mouseOn = 0, w = 0, h = 0, raf = 0;
+
+    const draw = (now) => {
+      gl.uniform1f(uTime, reduceMotion ? 0 : (now - start) / 1000);
+      gl.uniform2f(uMouse, mouse[0], mouse[1]);
+      gl.uniform1f(uMouseOn, mouseOn);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    };
+
+    // Size the drawing buffer to the canvas's CSS box, one texel per dither cell.
+    const resize = () => {
+      w = Math.max(1, Math.ceil(canvas.clientWidth / config.pixelSize));
+      h = Math.max(1, Math.ceil(canvas.clientHeight / config.pixelSize));
+      if (canvas.width === w && canvas.height === h) return;
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+      gl.uniform2f(uRes, w, h);
+      if (reduceMotion) draw(start);
+    };
+
+    if (config.enableMouseInteraction) {
+      addEventListener("pointermove", (e) => {
+        const r = canvas.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top;
+        mouseOn = x >= 0 && y >= 0 && x <= r.width && y <= r.height ? 1 : 0;
+        mouse[0] = (x / r.width) * w;
+        mouse[1] = (y / r.height) * h;
+      }, { passive: true });
+      document.documentElement.addEventListener("pointerleave", () => (mouseOn = 0));
+    }
+
+    resize();
+    new ResizeObserver(resize).observe(canvas);
+    draw(start);
+    canvas.classList.add("is-ready");
+    if (reduceMotion) return;
+
+    const loop = (now) => {
+      draw(now);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    document.addEventListener("visibilitychange", () => {
+      cancelAnimationFrame(raf);
+      if (!document.hidden) raf = requestAnimationFrame(loop);
+    });
+  })();
+</script>
+
+<style>
+  #dither-bg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+  }
+  #dither-bg.is-ready {
+    opacity: 1;
+  }
+</style>

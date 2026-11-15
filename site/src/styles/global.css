@@ -1,0 +1,625 @@
+/* Theme tokens — the `.dark` palette of the site theme (warm charcoal, not
+   pure black), applied at :root because the page is dark-only. */
+:root {
+  --background: rgb(38, 38, 36);
+  --foreground: rgb(195, 192, 182);
+  --card-foreground: rgb(250, 249, 245);
+  --popover: rgb(48, 48, 46);
+  --popover-foreground: rgb(229, 229, 226);
+  --primary: rgb(217, 119, 87);
+  --primary-foreground: rgb(255, 255, 255);
+  --muted-foreground: rgb(183, 181, 169);
+  --border: rgb(62, 62, 56);
+  --input: rgb(82, 81, 74);
+  --ring: rgb(217, 119, 87);
+  --chart-1: rgb(176, 87, 48);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --radius: 0.5rem;
+
+  --gutter: clamp(24px, 24%, 220px);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The hero fills exactly one screen; further content scrolls below it. */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.sr-only {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---- Split layout: copy on the left, dither panel on the right ---------- */
+
+.page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 46%);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "left art"
+    "credit art";
+  height: 100vh;
+  height: 100dvh; /* tracks mobile browser toolbars */
+  min-height: 560px;
+}
+
+.left {
+  grid-area: left;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 30px 32px 0 var(--gutter);
+}
+
+.nav {
+  display: flex;
+  gap: 26px;
+  font-size: 14px;
+}
+
+.nav a {
+  text-decoration: none;
+  color: var(--foreground);
+  transition: color 0.15s ease;
+}
+
+.nav a:hover {
+  color: var(--card-foreground);
+}
+
+.hero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  max-width: 470px;
+  padding: clamp(16px, 5vh, 40px) 0;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: clamp(16px, 3vh, 26px);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  color: var(--card-foreground);
+  text-decoration: none;
+}
+
+.brand img {
+  border-radius: 6px;
+}
+
+h1 {
+  margin: 0 0 clamp(20px, 4vh, 34px);
+  font-weight: 800;
+  font-size: clamp(34px, 3.6vw, 52px);
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+  color: var(--card-foreground);
+  text-wrap: balance;
+}
+
+.grad {
+  background: linear-gradient(90deg, #f0a585, var(--primary) 55%, var(--chart-1));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.actions {
+  display: grid;
+  /* minmax(0, …) so the no-wrap prompt text ellipsises instead of widening the column. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  width: min(100%, 410px);
+}
+
+/* Glossy, tactile primary button: light top → terracotta, darker rust edge,
+   inner highlight, and a press-down on :active. */
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 54px;
+  border-radius: 14px;
+  border: 1px solid var(--chart-1);
+  background: linear-gradient(180deg, #eca084 0%, #e0876a 45%, var(--primary) 100%);
+  color: var(--primary-foreground);
+  font: 600 16px/1 var(--font-sans);
+  text-decoration: none;
+  text-shadow: 0 1px 0 rgb(120 50 20 / 0.35);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.45),
+    inset 0 -2px 0 rgb(120 50 20 / 0.22),
+    0 1px 2px rgb(0 0 0 / 0.3),
+    0 8px 22px -8px rgb(217 119 87 / 0.6);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.05) saturate(1.05);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.5),
+    inset 0 -2px 0 rgb(120 50 20 / 0.22),
+    0 2px 3px rgb(0 0 0 / 0.3),
+    0 12px 28px -8px rgb(217 119 87 / 0.7);
+}
+
+.btn-primary:active {
+  transform: translateY(1px);
+  filter: brightness(0.96);
+  box-shadow:
+    inset 0 2px 4px rgb(120 50 20 / 0.35),
+    0 1px 1px rgb(0 0 0 / 0.3);
+}
+
+/* Command-style copy box (the whole box is the click target). */
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 54px;
+  padding: 0 8px 0 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font: 13.5px/1 var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.cmd:hover {
+  border-color: var(--input);
+}
+
+.cmd:active {
+  background: var(--background);
+}
+
+.cmd-glyph {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.cmd-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmd-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--border);
+  color: var(--popover-foreground);
+}
+
+.cmd .i-check,
+.cmd.is-copied .i-copy {
+  display: none;
+}
+
+.cmd.is-copied .i-check {
+  display: block;
+}
+
+.cmd.is-copied {
+  border-color: var(--primary);
+}
+
+.cmd.is-copied .cmd-icon {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* "Works with any agent" — simplified monochrome agent marks. */
+.works {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: clamp(16px, 3vh, 26px);
+}
+
+.works-label {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.logos {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--foreground);
+}
+
+.logos li {
+  display: flex;
+  align-items: center;
+  opacity: 0.62;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.logos li:hover {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.logos img {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+/* Short viewports: the marks are the first thing to go. */
+@media (max-height: 620px) {
+  .works {
+    display: none;
+  }
+}
+
+.credit {
+  grid-area: credit;
+  padding: 0 32px 26px var(--gutter);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.credit a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.credit a:hover {
+  color: #f0a585;
+}
+
+/* Right-hand dither panel, inset from the window edge. */
+.art {
+  grid-area: art;
+  min-height: 0;
+  padding: 10px 10px 10px 0;
+}
+
+.art #dither-bg {
+  border-radius: 14px;
+  background: var(--popover);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+/* Phones / narrow tablets: copy on top, dither fills the space below, credit last. */
+@media (max-width: 899px) {
+  .page {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "left"
+      "art"
+      "credit";
+  }
+
+  .left {
+    padding: 20px 20px 0;
+  }
+
+  .hero {
+    flex: none;
+    padding: 28px 0 22px;
+  }
+
+  h1 {
+    font-size: 32px;
+  }
+
+  .logos {
+    gap: 14px;
+  }
+
+  .logos img {
+    width: 20px;
+    height: 20px;
+  }
+
+  .art {
+    padding: 0 10px;
+  }
+
+  .credit {
+    padding: 14px 20px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
+
+
+/* ---- Hero subtitle ------------------------------------------------------ */
+
+.hero-sub {
+  margin: -14px 0 clamp(20px, 4vh, 34px);
+  max-width: 46ch;
+  font-size: 16.5px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+
+.hero-sub strong {
+  color: var(--card-foreground);
+  font-weight: 600;
+}
+
+/* Short viewports: subtitle condenses away before the logos do. */
+@media (max-height: 680px) {
+  .hero-sub {
+    display: none;
+  }
+}
+
+/* ---- Content below the hero (SEO surface) ------------------------------- */
+
+.content {
+  border-top: 1px solid var(--border);
+  background: var(--background);
+}
+
+.section {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: clamp(56px, 9vh, 96px) 24px 0;
+}
+
+.section:last-of-type {
+  padding-bottom: clamp(56px, 9vh, 96px);
+}
+
+.section h2 {
+  margin: 0 0 14px;
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--card-foreground);
+  text-wrap: balance;
+}
+
+.section-lede {
+  margin: 0 0 36px;
+  max-width: 64ch;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+
+.section-lede strong {
+  color: var(--card-foreground);
+  font-weight: 600;
+}
+
+.content a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.content a:hover {
+  color: #f0a585;
+}
+
+.content code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  color: var(--popover-foreground);
+}
+
+/* Feature cards */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover);
+}
+
+.card h3 {
+  margin: 0 0 10px;
+  font-size: 16.5px;
+  font-weight: 700;
+  color: var(--card-foreground);
+}
+
+.card p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+
+/* Steps */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps li {
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover);
+}
+
+.steps h3 {
+  margin: 0 0 10px;
+  font-size: 16.5px;
+  font-weight: 700;
+  color: var(--card-foreground);
+}
+
+.steps p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--muted-foreground);
+}
+
+/* FAQ */
+.faq {
+  display: grid;
+  gap: 10px;
+}
+
+.faq-item {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover);
+  overflow: hidden;
+}
+
+.faq-item summary {
+  padding: 18px 22px;
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--card-foreground);
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-item summary::after {
+  content: "+";
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  color: var(--primary);
+  transition: transform 0.15s ease;
+}
+
+.faq-item[open] summary::after {
+  transform: rotate(45deg);
+}
+
+.faq-item p {
+  margin: 0;
+  padding: 0 22px 18px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--muted-foreground);
+}
+
+/* Footer */
+.site-footer {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 24px 44px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 32px;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13.5px;
+  color: var(--muted-foreground);
+}
+
+.site-footer p {
+  margin: 0;
+  max-width: 52ch;
+  line-height: 1.6;
+}
+
+.site-footer strong {
+  color: var(--card-foreground);
+}
+
+.site-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}

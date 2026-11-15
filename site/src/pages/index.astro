@@ -1,0 +1,346 @@
+---
+import DitherBackground from "../components/DitherBackground.astro";
+import "../styles/global.css";
+
+const SITE = "https://ntulearn.krtk.app";
+const REPO = "https://github.com/gangula-karthik/ntulearn-mcp";
+const title = "ntulearn-mcp — your NTU courses, inside your agent";
+const description =
+  "Free, source-available MCP server + agent-first CLI for NTULearn (NTU Singapore's Blackboard Learn). Announcements, deadlines, grades and files — right inside Claude, Cursor, ChatGPT or any agent.";
+const keywords =
+  "NTULearn, NTU Singapore, Blackboard Learn, MCP server, Model Context Protocol, Claude, Claude Code, Cursor, ChatGPT, GitHub Copilot, VS Code, Zed, NTU assignments, NTU deadlines, NTU grades, NTU courses, LumiNUS, AI assistant, Rust";
+const ogImage = `${SITE}/og-image.png`;
+
+const onboardingPrompt = `Set up ntulearn-mcp for me (it connects NTULearn — NTU\'s Blackboard — to this agent).
+
+1. Download the latest release for my OS/arch from ${REPO}/releases/latest (ntulearn-mcp-<target-triple>.tar.gz, or .zip on Windows), verify it against checksums.txt, and put the ntulearn-mcp binary on my PATH. If no asset matches my platform, clone ${REPO} and run \`cargo build --release\` inside rust/.
+2. Run \`ntulearn-mcp setup\`. A browser window opens — wait while I log in to NTULearn.
+3. Run \`ntulearn-mcp check\` and confirm it reports "Live validity: OK".
+4. Register the binary as an MCP server in this agent (command: the absolute path to ntulearn-mcp, no arguments).
+5. Run \`ntulearn-mcp help\` once, and prefer the CLI for NTULearn questions — it uses far fewer tokens than MCP tool schemas.
+
+When you\'re done, tell me what\'s due this week.`;
+
+const faqs = [
+  {
+    q: "What is ntulearn-mcp?",
+    a: "ntulearn-mcp is a free, source-available MCP server and CLI that connects NTULearn — NTU Singapore's Blackboard Learn instance — to AI agents like Claude, Cursor, ChatGPT and GitHub Copilot. It ships as a single Rust binary with 21 tools for reading announcements, due dates, grades, course files and more.",
+  },
+  {
+    q: "Which AI agents does it work with?",
+    a: "Any MCP host: Claude Desktop, Claude Code, Cursor, ChatGPT, GitHub Copilot, VS Code, Zed, Cline and others. The same binary doubles as a plain command-line tool your agent can shell out to.",
+  },
+  {
+    q: "How do I log in to NTULearn?",
+    a: "Run `ntulearn-mcp setup`. A dedicated browser window opens NTULearn, you log in once, and the server captures and silently renews your session in the background — no copy-pasting cookies or devtools. No terminal? Ask your agent to call the ntulearn_login tool.",
+  },
+  {
+    q: "Is it free?",
+    a: "Yes — free for personal, educational and other noncommercial use under the PolyForm Noncommercial license. Prebuilt binaries for macOS, Linux and Windows are on the GitHub releases page, or build it yourself with `cargo build --release`.",
+  },
+  {
+    q: "Can it tell me what's due and what changed?",
+    a: "Yes. `whats-new` gives a one-call digest of announcements, upcoming due dates and gradebook changes since a cutoff; `upcoming` lists calendar items (including gradable assignments) across all your courses; the calendar also exports to .ics.",
+  },
+  {
+    q: "Why does it also ship a CLI?",
+    a: "MCP hosts inject every tool's JSON schema into context every turn — about 6.6k tokens for 21 tools. The CLI's compact tabular output needs a few hundred tokens, modelling out to roughly 64x fewer tokens over a 10-turn conversation. Point your agent at the binary and let it run `ntulearn-mcp help`.",
+  },
+];
+
+const softwareApp = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "ntulearn-mcp",
+  url: SITE,
+  description,
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS, Linux, Windows",
+  programmingLanguage: "Rust",
+  softwareVersion: "1.0",
+  isAccessibleForFree: true,
+  license: "https://polyformproject.org/licenses/noncommercial/1.0.0/",
+  downloadUrl: `${REPO}/releases/latest`,
+  codeRepository: REPO,
+  author: {
+    "@type": "Person",
+    name: "Karthik Gangula",
+    url: "https://krtk.app",
+  },
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+};
+
+const faqSchema = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: faqs.map((f) => ({
+    "@type": "Question",
+    name: f.q,
+    acceptedAnswer: { "@type": "Answer", text: f.a },
+  })),
+};
+
+const website = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "ntulearn-mcp",
+  url: SITE,
+  description,
+};
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="keywords" content={keywords} />
+    <meta name="author" content="Karthik Gangula" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow" />
+    <meta name="theme-color" content="#262624" />
+    <link rel="canonical" href={SITE + "/"} />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ntulearn-mcp" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={SITE + "/"} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ntulearn-mcp — your NTU courses, inside your agent" />
+    <meta property="og:locale" content="en_SG" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <script type="application/ld+json" set:html={JSON.stringify(softwareApp)} />
+    <script type="application/ld+json" set:html={JSON.stringify(faqSchema)} />
+    <script type="application/ld+json" set:html={JSON.stringify(website)} />
+  </head>
+  <body>
+    <div class="page">
+      <section class="left">
+        <nav class="nav" aria-label="Site">
+          <a href={REPO} target="_blank" rel="noopener">GitHub</a>
+          <a href={`${REPO}/releases/latest`} target="_blank" rel="noopener">Releases</a>
+          <a href="#features">Features</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+
+        <main class="hero">
+          <a class="brand" href="/">
+            <img src="/favicon.svg" width="28" height="28" alt="" />
+            ntulearn-mcp
+          </a>
+
+          <h1>Your NTU courses, <span class="grad">inside your agent.</span></h1>
+
+          <p class="hero-sub">
+            A free, source-available MCP server and CLI for <strong>NTULearn</strong> — NTU Singapore's
+            Blackboard Learn. Ask Claude, Cursor or ChatGPT about your announcements, deadlines,
+            grades and course files.
+          </p>
+
+          <div class="actions">
+            <a class="btn-primary" href={REPO} target="_blank" rel="noopener">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.85L12 16.9l-5.25 2.75 1-5.85L3.5 9.7l5.9-.9L12 3.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+              </svg>
+              Star on GitHub
+            </a>
+
+            <button class="cmd" type="button" id="copy-prompt" aria-label="Copy the agent onboarding prompt">
+              <span class="cmd-glyph" aria-hidden="true">›</span>
+              <span class="cmd-text" data-label>Set up ntulearn-mcp for me — paste into your agent</span>
+              <span class="cmd-icon" aria-hidden="true">
+                <svg class="i-copy" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <rect x="8" y="8" width="12" height="12" rx="3" stroke="currentColor" stroke-width="2" />
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" stroke="currentColor" stroke-width="2" />
+                </svg>
+                <svg class="i-check" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </span>
+            </button>
+          </div>
+
+          <div class="works">
+            <span class="works-label">Works with any agent</span>
+            <ul class="logos">
+              <li>
+                <img src="/logos/tools/claude.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="Claude / Claude Code" />
+                <span class="sr-only">Claude / Claude Code</span>
+              </li>
+              <li>
+                <img src="/logos/tools/chatgpt.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="ChatGPT" />
+                <span class="sr-only">ChatGPT</span>
+              </li>
+              <li>
+                <img src="/logos/tools/cursor.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="Cursor" />
+                <span class="sr-only">Cursor</span>
+              </li>
+              <li>
+                <img src="/logos/tools/github-copilot.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="GitHub Copilot" />
+                <span class="sr-only">GitHub Copilot</span>
+              </li>
+              <li>
+                <img src="/logos/tools/vscode.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="VS Code" />
+                <span class="sr-only">VS Code</span>
+              </li>
+              <li>
+                <img src="/logos/tools/zed.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="Zed" />
+                <span class="sr-only">Zed</span>
+              </li>
+              <li>
+                <img src="/logos/tools/mcp.svg" alt="" width="22" height="22" loading="lazy" decoding="async" title="Any MCP host" />
+                <span class="sr-only">Any MCP host</span>
+              </li>
+            </ul>
+          </div>
+        </main>
+      </section>
+
+      <aside class="art" aria-hidden="true">
+        <DitherBackground />
+      </aside>
+
+      <footer class="credit">
+        Created by <a href="https://krtk.app" target="_blank" rel="noopener">Karthik Gangula</a>
+      </footer>
+    </div>
+
+    <div class="content">
+      <section class="section" id="features">
+        <h2>Everything NTULearn, on demand</h2>
+        <p class="section-lede">
+          ntulearn-mcp is an <strong>MCP server and agent-first CLI for NTULearn</strong>, NTU
+          Singapore's Blackboard Learn instance. One Rust binary, 21 tools, no Python and no
+          virtualenv — your agent simply asks, NTULearn answers.
+        </p>
+
+        <div class="grid">
+          <article class="card">
+            <h3>Announcements, newest first</h3>
+            <p>Fans out across every enrolled course and aggregates announcements — optionally since a date — so “what happened this week?” is one question, not ten tabs.</p>
+          </article>
+          <article class="card">
+            <h3>Deadlines &amp; calendar</h3>
+            <p>Upcoming calendar items across all courses, including gradable assignments. Export everything to an <code>.ics</code> file for your own calendar.</p>
+          </article>
+          <article class="card">
+            <h3>Grades &amp; attempts</h3>
+            <p>Gradebook columns with your scores across courses, submission attempts per assignment, and a one-command <code>.csv</code> export of the whole gradebook.</p>
+          </article>
+          <article class="card">
+            <h3>Course files, organised</h3>
+            <p>Walk a course's content tree, search across all courses, download single items or bulk-download a course into any folder hierarchy you describe.</p>
+          </article>
+          <article class="card">
+            <h3>One-call digests</h3>
+            <p><code>whats-new</code> returns everything since a cutoff — announcements, due dates, gradebook changes — and per-course briefings bundle staff, dates and top folders.</p>
+          </article>
+          <article class="card">
+            <h3>Token-efficient by design</h3>
+            <p>The CLI's compact TSV and TOON output uses roughly <strong>64× fewer tokens</strong> than MCP tool schemas over a 10-turn conversation. Same binary, same cache.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="how-it-works">
+        <h2>Up and running in two commands</h2>
+        <ol class="steps">
+          <li>
+            <h3>1. Get the binary</h3>
+            <p>Grab the latest release for your platform from <a href={`${REPO}/releases/latest`} target="_blank" rel="noopener">GitHub Releases</a> — macOS, Linux and Windows builds with checksums — or build from source with <code>cargo build --release</code>.</p>
+          </li>
+          <li>
+            <h3>2. Log in once</h3>
+            <p>Run <code>ntulearn-mcp setup</code>. A browser window opens NTULearn; after you log in, the server captures your session and renews it silently in the background.</p>
+          </li>
+          <li>
+            <h3>3. Point your agent at it</h3>
+            <p>Register the binary as an MCP server in Claude, Cursor, ChatGPT, Copilot, VS Code or Zed — or just tell your agent to run <code>ntulearn-mcp help</code> and use the CLI.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section" id="faq">
+        <h2>Frequently asked questions</h2>
+        <div class="faq">
+          {faqs.map((f) => (
+            <details class="faq-item">
+              <summary>{f.q}</summary>
+              <p set:html={f.a.replace(/`([^`]+)`/g, "<code>$1</code>")} />
+            </details>
+          ))}
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <p>
+          <strong>ntulearn-mcp</strong> — the MCP server &amp; CLI for NTULearn (NTU Singapore,
+          Blackboard Learn). Free for noncommercial use under the PolyForm Noncommercial license.
+        </p>
+        <nav aria-label="Footer">
+          <a href={REPO} target="_blank" rel="noopener">GitHub</a>
+          <a href={`${REPO}/releases/latest`} target="_blank" rel="noopener">Releases</a>
+          <a href={`${REPO}/blob/main/README.md`} target="_blank" rel="noopener">Documentation</a>
+          <a href={`${REPO}/issues`} target="_blank" rel="noopener">Issues</a>
+          <a href="https://krtk.app" target="_blank" rel="noopener">Karthik Gangula</a>
+        </nav>
+      </footer>
+    </div>
+
+    <p class="sr-only" id="copy-status" aria-live="polite"></p>
+    <template id="onboarding-prompt">{onboardingPrompt}</template>
+
+    <script is:inline>
+      (() => {
+        const btn = document.getElementById("copy-prompt");
+        const label = btn.querySelector("[data-label]");
+        const status = document.getElementById("copy-status");
+        const text = document.getElementById("onboarding-prompt").content.textContent;
+        const idle = label.textContent;
+        let timer;
+
+        const fallbackCopy = () => {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.cssText = "position:fixed;opacity:0";
+          document.body.appendChild(ta);
+          ta.select();
+          const ok = document.execCommand("copy");
+          ta.remove();
+          if (!ok) throw new Error("copy failed");
+        };
+
+        btn.addEventListener("click", async () => {
+          try {
+            if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+            else fallbackCopy();
+            label.textContent = "Copied — now paste it into your agent";
+            status.textContent = "Onboarding prompt copied. Paste it into Claude Code, Cursor, or any agent.";
+            btn.classList.add("is-copied");
+          } catch {
+            label.textContent = "Couldn\'t copy — try again";
+          }
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            label.textContent = idle;
+            status.textContent = "";
+            btn.classList.remove("is-copied");
+          }, 2600);
+        });
+      })();
+    </script>
+  </body>
+</html>
