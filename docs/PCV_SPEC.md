@@ -102,7 +102,14 @@ Both PUTs return the updated PeerEvaluation. On 401/403, re-launch once
   resolve the placement URL via the parent page, launch, and report. With
   content_id: straight to that item. Report: assignmentName, deadlines,
   evaluation progress (x/y complete, completedAllEvaluations), group name,
-  teammates with per-teammate done/not-done.
+  teammates with per-teammate done/not-done. done = every rubric criterion
+  rated AND every comment prompt answered (Peerceptiv counts a ratings-only
+  eval as incomplete — observed 2026-11-15: all 4 teammates fully rated,
+  progress still 0/4 until comments landed); incomplete teammates carry a
+  `missing` object (unratedCriteria, unansweredCommentPrompts).
+- rate/comment real runs (dry_run=false) return `evalComplete` and a
+  `completionWarning` naming exactly what is still missing, so a saved
+  rating or comment can never be mistaken for a completed evaluation.
 - `ntulearn_pcv_evals(course_id, content_id, direction=given|received)` —
   ratings + comments per teammate/criterion.
 - `ntulearn_pcv_rate(course_id, content_id, teammate, criterion, level, dry_run)`

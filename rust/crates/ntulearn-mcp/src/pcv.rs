@@ -896,6 +896,57 @@ pub struct PcvRubric {
     pub comment_items: Vec<PcvCommentItem>,
 }
 
+/// What one peer evaluation is still missing, measured against its rubric.
+/// Peerceptiv counts an evaluation as complete only when EVERY rating item
+/// is scored AND EVERY comment prompt has a non-empty answer — a fully
+/// rated eval with no comments stays incomplete (observed live: all four
+/// teammates fully rated, assignment progress still 0/4 complete).
+#[derive(Debug, Clone, Default)]
+pub struct PcvEvalGaps {
+    /// Rubric rating-item names with no saved score.
+    pub unrated_criteria: Vec<String>,
+    /// Comment-prompt names with no non-empty answer.
+    pub unanswered_prompts: Vec<String>,
+}
+
+impl PcvEvalGaps {
+    pub fn is_complete(&self) -> bool {
+        self.unrated_criteria.is_empty() && self.unanswered_prompts.is_empty()
+    }
+}
+
+/// Diff one eval against its rubric: which criteria are unrated and which
+/// comment prompts are unanswered. Rating presence is checked by rating_id
+/// (not by count), so duplicate or stale rows cannot fake completeness.
+pub fn eval_gaps(eval: &PcvEval, rubric: &PcvRubric) -> PcvEvalGaps {
+    let unrated_criteria = rubric
+        .rating_items
+        .iter()
+        .filter(|item| {
+            !eval
+                .review_ratings
+                .iter()
+                .any(|r| r.rating_id == item.rating_id)
+        })
+        .map(|item| item.name.clone())
+        .collect();
+    let unanswered_prompts = rubric
+        .comment_items
+        .iter()
+        .filter(|ci| {
+            !eval
+                .review_comments
+                .iter()
+                .any(|c| c.comment_id == ci.comment_id && !c.comment.trim().is_empty())
+        })
+        .map(|ci| ci.comment_name.clone())
+        .collect();
+    PcvEvalGaps {
+        unrated_criteria,
+        unanswered_prompts,
+    }
+}
+
 /// An authenticated Peerceptiv API session for one placed peer evaluation,
 /// obtained by [`PcvSession::launch`]. All read/write methods hit the JSON
 /// API with the `oidc_token`/`access_token` cookies captured at launch.
@@ -1647,6 +1698,52 @@ mod tests {
         assert_eq!(evals[0].peer.user_id, "");
         assert!(evals[0].review_ratings.is_empty());
         assert!(evals[0].review_comments.is_empty());
+    }
+
+    #[test]
+    fn eval_gaps_requires_comments_not_just_ratings() {
+        // The 2026-11-15 incident, frozen as a test: every criterion rated,
+        // no comments -> Peerceptiv says incomplete, and so must we.
+        let rubric = parse_rubric(&fixture_json("rubric_member.json")).expect("rubric");
+        let evals = parse_evals(&fixture_json("evals_given.json"));
+        let mut e = evals[0].clone();
+        e.review_comments.clear();
+        let gaps = eval_gaps(&e, &rubric);
+        assert!(!gaps.is_complete(), "ratings-only eval must not be complete");
+        assert!(gaps.unrated_criteria.is_empty());
+        assert_eq!(gaps.unanswered_prompts.len(), 1);
+        assert!(gaps.unanswered_prompts[0].contains("justification"));
+    }
+
+    #[test]
+    fn eval_gaps_complete_when_rated_and_commented() {
+        let rubric = parse_rubric(&fixture_json("rubric_member.json")).expect("rubric");
+        let evals = parse_evals(&fixture_json("evals_given.json"));
+        let gaps = eval_gaps(&evals[0], &rubric);
+        assert!(gaps.is_complete());
+    }
+
+    #[test]
+    fn eval_gaps_flags_unrated_criteria_and_empty_comments() {
+        let rubric = parse_rubric(&fixture_json("rubric_member.json")).expect("rubric");
+        let evals = parse_evals(&fixture_json("evals_given.json"));
+        let mut e = evals[0].clone();
+        e.review_ratings.truncate(1); // two of three criteria unrated
+        e.review_comments[0].comment = "   ".to_string(); // whitespace is not an answer
+        let gaps = eval_gaps(&e, &rubric);
+        assert!(!gaps.is_complete());
+        assert_eq!(gaps.unrated_criteria.len(), 2);
+        assert_eq!(gaps.unanswered_prompts.len(), 1);
+    }
+
+    #[test]
+    fn eval_gaps_ignores_comments_on_unknown_prompts() {
+        let rubric = parse_rubric(&fixture_json("rubric_member.json")).expect("rubric");
+        let evals = parse_evals(&fixture_json("evals_given.json"));
+        let mut e = evals[0].clone();
+        e.review_comments[0].comment_id = "not-a-real-prompt".to_string();
+        let gaps = eval_gaps(&e, &rubric);
+        assert!(!gaps.is_complete(), "comment on an unknown prompt id must not satisfy the rubric");
     }
 
     #[test]

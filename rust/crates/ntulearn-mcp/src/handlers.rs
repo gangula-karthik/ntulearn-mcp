@@ -4517,8 +4517,10 @@ async fn pcv_activity_report(
     let members = pcv_group_members(&group);
 
     // Per-teammate done state. progress.completedEvaluations carries full
-    // eval records when any exist; otherwise fall back to my given evals
-    // (rated on every rubric item == done).
+    // eval records when any exist; otherwise fall back to my given evals,
+    // where done = every rating item scored AND every comment prompt
+    // answered (Peerceptiv requires both — a ratings-only eval is NOT
+    // complete even though every criterion shows a score).
     let mut done_uids: HashSet<String> = progress
         .get("completedEvaluations")
         .and_then(|v| v.as_array())
@@ -4534,11 +4536,41 @@ async fn pcv_activity_report(
         .unwrap_or_default();
     let given = session.evals_given(&aid, &uid).await?;
     let rubric = session.rubric(&aid, "MEMBER").await.ok();
-    let n_rating_items = rubric.as_ref().map(|r| r.rating_items.len()).unwrap_or(0);
+    // Gap detail per teammate, computed from my given evals whatever the
+    // progress object says — it drives both the done fallback and the
+    // per-teammate "missing" rows below.
+    let mut eval_gaps_by_uid: HashMap<String, crate::pcv::PcvEvalGaps> = HashMap::new();
+    for e in &given {
+        let gaps = match &rubric {
+            Some(r) => crate::pcv::eval_gaps(e, r),
+            // No rubric -> cannot verify either side; require at least
+            // one rating and one non-empty comment before calling it done.
+            None => {
+                let mut g = crate::pcv::PcvEvalGaps::default();
+                if e.review_ratings.is_empty() {
+                    g.unrated_criteria.push("(rubric unavailable)".to_string());
+                }
+                if !e
+                    .review_comments
+                    .iter()
+                    .any(|c| !c.comment.trim().is_empty())
+                {
+                    g.unanswered_prompts.push("(rubric unavailable)".to_string());
+                }
+                g
+            }
+        };
+        eval_gaps_by_uid.insert(e.peer.user_id.clone(), gaps);
+    }
+    // Progress carries no completedEvaluations records -> derive done from
+    // the gap detail instead (ratings AND comments, never ratings alone).
     if done_uids.is_empty() && !given.is_empty() {
         for e in &given {
-            let complete = n_rating_items == 0 || e.review_ratings.len() >= n_rating_items;
-            if complete {
+            if eval_gaps_by_uid
+                .get(&e.peer.user_id)
+                .map(|g| g.is_complete())
+                .unwrap_or(false)
+            {
                 done_uids.insert(e.peer.user_id.clone());
             }
         }
@@ -4548,11 +4580,22 @@ async fn pcv_activity_report(
         .iter()
         .filter(|(muid, _, _)| muid != &uid)
         .map(|(muid, first, last)| {
-            json!({
+            let mut row = json!({
                 "userId": muid,
                 "name": pcv_display_name(first, last),
                 "done": done_uids.contains(muid),
-            })
+            });
+            // Not done + we know why -> say exactly what is missing so the
+            // caller can finish the eval instead of re-guessing.
+            if !done_uids.contains(muid) {
+                if let Some(gaps) = eval_gaps_by_uid.get(muid) {
+                    row["missing"] = json!({
+                        "unratedCriteria": gaps.unrated_criteria,
+                        "unansweredCommentPrompts": gaps.unanswered_prompts,
+                    });
+                }
+            }
+            row
         })
         .collect();
 
@@ -4707,6 +4750,58 @@ async fn h_pcv_evals(state: &AppState, args: &Value) -> Result<Value, String> {
     Ok(Value::Object(payload))
 }
 
+/// Human-readable warning for an eval that still has gaps, used by
+/// pcv_rate/pcv_comment responses so "saved" can never be mistaken for
+/// "complete": Peerceptiv requires every criterion rated AND every comment
+/// prompt answered before an evaluation counts.
+fn pcv_completion_warning(gaps: &crate::pcv::PcvEvalGaps, peer_name: &str) -> Option<String> {
+    if gaps.is_complete() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !gaps.unanswered_prompts.is_empty() {
+        parts.push(format!(
+            "comment prompts unanswered: {} (Peerceptiv requires a written comment on every prompt — call ntulearn_pcv_comment)",
+            gaps.unanswered_prompts.join(", ")
+        ));
+    }
+    if !gaps.unrated_criteria.is_empty() {
+        parts.push(format!(
+            "criteria still unrated: {} (call ntulearn_pcv_rate)",
+            gaps.unrated_criteria.join(", ")
+        ));
+    }
+    Some(format!(
+        "{peer_name}'s evaluation is NOT complete — {}",
+        parts.join("; ")
+    ))
+}
+
+/// evalComplete + completionWarning fields for a just-written eval, from a
+/// fresh read of my given evals. Best-effort: if the re-read fails (e.g. a
+/// transient API error) the fields are simply omitted rather than failing
+/// the write response that already succeeded.
+async fn pcv_completion_fields(
+    session: &crate::pcv::PcvSession,
+    rubric: &crate::pcv::PcvRubric,
+    peer_uid: &str,
+    peer_name: &str,
+) -> Vec<(&'static str, Value)> {
+    let aid = session.assignment_id();
+    let Ok(given) = session.evals_given(aid, session.user_id()).await else {
+        return Vec::new();
+    };
+    let Some(eval) = given.iter().find(|e| e.peer.user_id == peer_uid) else {
+        return Vec::new();
+    };
+    let gaps = crate::pcv::eval_gaps(eval, rubric);
+    let mut fields = vec![("evalComplete", Value::Bool(gaps.is_complete()))];
+    if let Some(w) = pcv_completion_warning(&gaps, peer_name) {
+        fields.push(("completionWarning", Value::String(w)));
+    }
+    fields
+}
+
 /// `ntulearn_pcv_rate` — upsert ONE rubric rating for ONE teammate.
 /// teammate/criterion resolve case-insensitively by substring; level is a
 /// level-description substring ("Always") or a plain score 1-10. The peer
@@ -4831,7 +4926,7 @@ async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
                 .to_string(),
         ),
     );
-    payload.insert("teammate".to_string(), Value::String(peer_name));
+    payload.insert("teammate".to_string(), Value::String(peer_name.clone()));
     payload.insert("criterion".to_string(), Value::String(item.name.clone()));
     payload.insert("before".to_string(), before.unwrap_or(Value::Null));
     payload.insert(
@@ -4850,6 +4945,13 @@ async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
     }
     payload.insert("dryRun".to_string(), Value::Bool(dry_run));
     payload.insert("result".to_string(), upsert.unwrap_or(create_result));
+    if !dry_run {
+        for (k, v) in
+            pcv_completion_fields(&session, &rubric, &peer_uid, &peer_name).await
+        {
+            payload.insert(k.to_string(), v);
+        }
+    }
     Ok(Value::Object(payload))
 }
 
@@ -4950,7 +5052,7 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
                 .to_string(),
         ),
     );
-    payload.insert("teammate".to_string(), Value::String(peer_name));
+    payload.insert("teammate".to_string(), Value::String(peer_name.clone()));
     payload.insert("comments".to_string(), Value::Array(comment_rows));
     payload.insert("after".to_string(), Value::String(text));
     payload.insert("createdEval".to_string(), Value::Bool(created));
@@ -4966,6 +5068,13 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
     payload.insert("dryRun".to_string(), Value::Bool(dry_run));
     if eval_id.is_none() {
         payload.insert("result".to_string(), create_result);
+    }
+    if !dry_run {
+        for (k, v) in
+            pcv_completion_fields(&session, &rubric, &peer_uid, &peer_name).await
+        {
+            payload.insert(k.to_string(), v);
+        }
     }
     Ok(Value::Object(payload))
 }
