@@ -489,4 +489,4 @@ endorsed by, or sponsored by NTU Singapore, Anthology Inc., or Blackboard Learn.
 - **Don't share cookie values.** Anyone with your `BbRouter` can act as you until it expires.
 - **Don't run this for someone else.** Each user should run their own instance against their own account.
 
-MIT licensed — see [LICENSE](LICENSE). All warranties are disclaimed.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, educational, and other noncommercial use, but **not** for commercial use. All warranties are disclaimed.

@@ -17,7 +17,7 @@ class NtulearnMcp < Formula
   url "https://github.com/gangula-karthik/ntulearn-mcp/releases/download/v0.7.5/ntulearn-mcp-aarch64-apple-darwin.tar.gz"
   version "0.7.5"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000" # replace on release
-  license "MIT"
+  license "PolyForm-Noncommercial-1.0.0"
 
   def install
     bin.install "ntulearn-mcp"
