@@ -504,6 +504,18 @@ pub const COMMANDS: &[CmdSpec] = &[
         cols: &[],
     },
     CmdSpec {
+        short: "pcv_autofill",
+        alias: "pcv-auto",
+        summary: "fill whole peer eval: full marks + good comments (dry-run default)",
+        args: &[
+            s("course_id", true, "course id"),
+            s("content_id", true, "pcv content item id"),
+            b("dry_run", "preview only (default true)"),
+        ],
+        list_key: "results",
+        cols: &["teammate", "ratingsSet", "commentsSet", "evalComplete"],
+    },
+    CmdSpec {
         short: "kaltura_list",
         alias: "kaltura-list",
         summary: "Kaltura-embedded videos in a course (entry ids for transcripts/downloads)",

@@ -441,6 +441,20 @@ fn build_tool_catalog() -> Vec<Tool> {
 
         ,
         Tool::new(
+            r####"ntulearn_pcv_autofill"####.to_string(),
+            r####"Fill an ENTIRE Peerceptiv peer evaluation in one call with full-marks defaults: every teammate rated at the top level of every rubric criterion and every comment prompt answered with a positive, varied comment (prompt-aware: strengths / nothing-to-improve / justification wording). Overwrites existing ratings and comments. dry_run=true (default) previews every before→after change without sending anything; dry_run=false submits and returns evalComplete + completionWarning per teammate. Get content_id from ntulearn_pcv_status. Example: ntulearn_pcv_autofill(course_id='_2707079_1', content_id='_6241854_1', dry_run=true)"####.to_string(),
+            json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":r"^[A-Za-z0-9_\-:]+$"},"content_id":{"type":"string","description":"Content item ID of the Peerceptiv activity (e.g. _67890_1). Find it with ntulearn_pcv_status.","minLength":1,"maxLength":200,"pattern":r"^[A-Za-z0-9_\-:]+$"},"dry_run":{"type":"boolean","description":"Preview every before→after change WITHOUT sending (default true). Set false to rate everyone at full marks and submit the comments.","default":true},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id","content_id"],"additionalProperties":false}),
+        )
+        .with_annotations(ToolAnnotations {
+            title: Some(r####"Peerceptiv autofill evaluation"####.to_string()),
+            read_only_hint: Some(false),
+            destructive_hint: Some(false),
+            idempotent_hint: Some(true),
+            open_world_hint: Some(true),
+        })
+
+        ,
+        Tool::new(
             r####"ntulearn_kaltura_list"####.to_string(),
             r####"List the Kaltura-embedded lecture videos of a course: for every video found anywhere in the content tree (folders are walked), its content_id, title, Kaltura entry_id and placement_id. Pure REST discovery — no video player or LTI launch is involved, and non-Kaltura LTI tools are skipped, not errors. Use this first to find the content_id for ntulearn_kaltura_transcripts or ntulearn_kaltura_download. Example: ntulearn_kaltura_list(course_id='_2707070_1')"####.to_string(),
             json!({"type":"object","properties":{"course_id":{"type":"string","description":"Blackboard course ID (e.g. _12345_1)","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"content_id":{"type":"string","description":"Content item ID of one specific page to inspect (e.g. _67890_1). Omit to walk the entire course content tree.","minLength":1,"maxLength":200,"pattern":"^[A-Za-z0-9_\\-:]+$"},"response_format":{"type":"string","description":"Return format: 'toon' (default; token-optimized, ~40% fewer tokens — best for agents), 'json' (structured) or 'markdown' (human-readable).","enum":["toon","json","markdown"],"default":"toon"}},"required":["course_id"],"additionalProperties":false}),
@@ -495,7 +509,7 @@ mod discovery_quality {
     #[test]
     fn every_tool_is_intern_test_ready() {
         let tools = all_tools();
-        assert_eq!(tools.len(), 33, "tool surface changed; update this test");
+        assert_eq!(tools.len(), 34, "tool surface changed; update this test");
         for t in &tools {
             assert!(!t.name.is_empty(), "tool name empty");
             assert!(

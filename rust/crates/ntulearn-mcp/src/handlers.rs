@@ -112,6 +112,7 @@ pub async fn dispatch_value(state: &AppState, name: &str, args: &Value) -> Resul
         "pcv_evals" => h_pcv_evals(state, args).await?,
         "pcv_rate" => h_pcv_rate(state, args).await?,
         "pcv_comment" => h_pcv_comment(state, args).await?,
+        "pcv_autofill" => h_pcv_autofill(state, args).await?,
         "kaltura_list" => h_kaltura_list(state, args).await?,
         "kaltura_transcripts" => h_kaltura_transcripts(state, args).await?,
         "kaltura_download" => h_kaltura_download(state, args).await?,
@@ -5076,6 +5077,182 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
             payload.insert(k.to_string(), v);
         }
     }
+    Ok(Value::Object(payload))
+}
+
+/// `ntulearn_pcv_autofill` — fill an entire peer evaluation in one call
+/// with full-marks defaults: every teammate rated at the top level of every
+/// rubric criterion, and every comment prompt answered with a positive,
+/// varied comment (prompt-type aware: strengths / nothing-to-improve /
+/// justification). Existing ratings and comments are overwritten; dry_run
+/// (the default) previews every before→after change without sending.
+async fn h_pcv_autofill(state: &AppState, args: &Value) -> Result<Value, String> {
+    let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
+    validate_bb_id(&course_id, "course_id")?;
+    let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
+    validate_bb_id(&content_id, "content_id")?;
+    let dry_run = bool_arg(args, "dry_run", true);
+    let _fmt = response_format(args)?;
+
+    let session = crate::pcv::PcvSession::launch(state, &course_id, &content_id).await?;
+    let aid = session.assignment_id().to_string();
+    let uid = session.user_id().to_string();
+    let assignment = session.assignment(&aid).await?;
+    let rubric = session.rubric(&aid, "MEMBER").await?;
+
+    let group = session.my_group(&aid, &uid).await?;
+    let members = pcv_group_members(&group);
+    let teammates: Vec<&(String, String, String)> = members
+        .iter()
+        .filter(|(muid, _, _)| !muid.is_empty() && muid != &uid)
+        .collect();
+    if teammates.is_empty() {
+        return Err(
+            "no teammates found in your Peerceptiv group — autofill needs at least one member besides you"
+                .to_string(),
+        );
+    }
+
+    let given = session.evals_given(&aid, &uid).await?;
+
+    let mut results: Vec<Value> = Vec::new();
+    let mut total_ratings = 0u64;
+    let mut total_comments = 0u64;
+    for (idx, (muid, first, last)) in teammates.iter().enumerate() {
+        let display = pcv_display_name(first, last);
+        let existing = given.iter().find(|e| &e.peer.user_id == muid);
+
+        // Find-or-create my eval for this teammate (same contract as
+        // rate/comment). A dry-run create mints no real peerEvalId, so the
+        // planned rows are previewed without any PUT.
+        let (eval_id, created) = match existing {
+            Some(e) => (Some(e.peer_eval_id.clone()), false),
+            None => {
+                let res = session.create_eval(&aid, muid, dry_run).await?;
+                let id = if dry_run {
+                    None
+                } else {
+                    res.get("response")
+                        .and_then(|r| r.get("peerEvalId"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                };
+                (id, true)
+            }
+        };
+
+        // Ratings: every criterion at its top level.
+        let mut rating_rows: Vec<Value> = Vec::new();
+        let mut ratings_set = 0u64;
+        let mut unratable: Vec<String> = Vec::new();
+        for item in &rubric.rating_items {
+            match crate::pcv::max_level_score(item) {
+                Some(max) => {
+                    let before = existing.and_then(|e| {
+                        e.review_ratings
+                            .iter()
+                            .find(|r| r.rating_id == item.rating_id)
+                    });
+                    if let Some(id) = &eval_id {
+                        session
+                            .upsert_rating(id, &item.rating_id, max, dry_run)
+                            .await?;
+                    }
+                    ratings_set += 1;
+                    rating_rows.push(json!({
+                        "criterion": item.name,
+                        "before": before.map(|r| r.score),
+                        "after": max,
+                    }));
+                }
+                None => unratable.push(item.name.clone()),
+            }
+        }
+
+        // Comments: a positive, prompt-aware line per comment prompt.
+        let mut comment_rows: Vec<Value> = Vec::new();
+        let mut comments_set = 0u64;
+        for ci in &rubric.comment_items {
+            let text = crate::pcv::autofill_comment(&display, idx, &ci.comment_name);
+            let before = existing
+                .and_then(|e| {
+                    e.review_comments
+                        .iter()
+                        .find(|c| c.comment_id == ci.comment_id)
+                })
+                .map(|c| c.comment.clone())
+                .filter(|s| !s.trim().is_empty());
+            if let Some(id) = &eval_id {
+                session
+                    .upsert_comment(id, &ci.comment_id, &text, dry_run)
+                    .await?;
+            }
+            comments_set += 1;
+            comment_rows.push(json!({
+                "prompt": ci.comment_name,
+                "before": before,
+                "after": text,
+            }));
+        }
+
+        total_ratings += ratings_set;
+        total_comments += comments_set;
+
+        let mut row = json!({
+            "teammate": display,
+            "userId": muid,
+            "createdEval": created,
+            "ratingsSet": ratings_set,
+            "commentsSet": comments_set,
+            "ratings": rating_rows,
+            "comments": comment_rows,
+        });
+        if !unratable.is_empty() {
+            row["unratableCriteria"] = json!(unratable);
+        }
+        if dry_run {
+            // The plan itself fills every rateable criterion and every
+            // comment prompt, so it would complete the eval.
+            row["evalCompleteAfterSubmit"] = Value::Bool(
+                unratable.is_empty() && !rubric.rating_items.is_empty() || rubric.rating_items.is_empty(),
+            );
+        } else {
+            for (k, v) in pcv_completion_fields(&session, &rubric, muid, &display).await {
+                row[k] = v;
+            }
+        }
+        results.push(row);
+    }
+
+    let mut payload = Map::new();
+    payload.insert("courseId".to_string(), Value::String(course_id));
+    payload.insert("contentId".to_string(), Value::String(content_id));
+    payload.insert("assignmentId".to_string(), Value::String(aid));
+    payload.insert(
+        "assignmentTitle".to_string(),
+        Value::String(
+            gs(&assignment, "assignmentName")
+                .unwrap_or("untitled")
+                .to_string(),
+        ),
+    );
+    payload.insert(
+        "defaults".to_string(),
+        Value::String(
+            "full marks (top rubric level) on every criterion + positive prompt-aware comments"
+                .to_string(),
+        ),
+    );
+    payload.insert(
+        "summary".to_string(),
+        json!({
+            "teammates": results.len(),
+            "ratingsSet": total_ratings,
+            "commentsSet": total_comments,
+        }),
+    );
+    payload.insert("dryRun".to_string(), Value::Bool(dry_run));
+    payload.insert("results".to_string(), Value::Array(results));
     Ok(Value::Object(payload))
 }
 

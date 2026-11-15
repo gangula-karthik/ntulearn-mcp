@@ -915,6 +915,99 @@ impl PcvEvalGaps {
     }
 }
 
+/// Title-case a Peerceptiv display name for use inside comment prose
+/// ("EMILY YANG LIZE" -> "Emily Yang Lize"); group names arrive upper-case.
+pub fn title_case_name(name: &str) -> String {
+    name.split_whitespace()
+        .map(|w| {
+            let mut cs = w.chars();
+            match cs.next() {
+                Some(c) => {
+                    let mut s: String = c.to_uppercase().collect();
+                    s.push_str(&cs.as_str().to_lowercase());
+                    s
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The highest score a rubric item offers — its "full marks" level.
+pub fn max_level_score(item: &PcvRatingItem) -> Option<i64> {
+    item.rating_levels.iter().map(|l| l.score).max()
+}
+
+/// Strengths phrasing, rotated by teammate index so teammates do not all
+/// read identically.
+fn strengths_line(name: &str, i: usize) -> String {
+    match i % 3 {
+        0 => format!(
+            "{name} was a dependable contributor throughout the project — took ownership of assigned tasks, delivered quality work, and brought useful ideas to team discussions."
+        ),
+        1 => format!(
+            "{name} consistently pulled their weight: active in meetings, reliable with deliverables, and quick to help whenever the team hit a snag."
+        ),
+        _ => format!(
+            "{name} was a strong team player — communicated clearly, met expectations on every task, and contributed ideas that made it into the final work."
+        ),
+    }
+}
+
+/// "Areas to improve" phrasing for a full-marks eval: nothing meaningful
+/// to flag, said three different ways.
+fn improve_line(name: &str, i: usize) -> String {
+    match i % 3 {
+        0 => format!(
+            "Nothing significant to improve — {name} met every agreed deadline and carried a fair share of the work without needing to be chased."
+        ),
+        1 => format!(
+            "No meaningful areas for improvement: {name}'s work was consistent and dependable from start to finish."
+        ),
+        _ => format!(
+            "I have no notable suggestions — {name} followed through on every commitment and supported the team throughout the project."
+        ),
+    }
+}
+
+/// Justification phrasing for full ratings.
+fn justification_line(name: &str, i: usize) -> String {
+    match i % 3 {
+        0 => format!(
+            "Full ratings are justified: {name} always took on a fair share of responsibilities, contributed solid effort and ideas, and submitted assigned work on time."
+        ),
+        1 => format!(
+            "{name} earned full marks — consistent effort, useful contributions in every discussion, and reliable delivery across all project milestones."
+        ),
+        _ => format!(
+            "The ratings reflect {name}'s sustained contribution: dependable, engaged, and on time throughout the project."
+        ),
+    }
+}
+
+/// A positive, full-marks-consistent comment for one comment prompt. The
+/// prompt type is inferred from its name ("improve" -> nothing-to-improve
+/// phrasing, "strength" -> strengths, anything else -> justification), and
+/// the template rotates by teammate index so no two teammates receive the
+/// same text.
+pub fn autofill_comment(display_name: &str, teammate_index: usize, prompt_name: &str) -> String {
+    let cased = title_case_name(display_name.trim());
+    let name = if cased.is_empty() {
+        "This teammate".to_string()
+    } else {
+        cased
+    };
+    let p = prompt_name.to_lowercase();
+    if p.contains("improve") {
+        improve_line(&name, teammate_index)
+    } else if p.contains("strength") {
+        strengths_line(&name, teammate_index)
+    } else {
+        justification_line(&name, teammate_index)
+    }
+}
+
 /// Diff one eval against its rubric: which criteria are unrated and which
 /// comment prompts are unanswered. Rating presence is checked by rating_id
 /// (not by count), so duplicate or stale rows cannot fake completeness.
@@ -1698,6 +1791,49 @@ mod tests {
         assert_eq!(evals[0].peer.user_id, "");
         assert!(evals[0].review_ratings.is_empty());
         assert!(evals[0].review_comments.is_empty());
+    }
+
+    #[test]
+    fn title_case_name_handles_peerceptiv_casing() {
+        assert_eq!(title_case_name("EMILY YANG LIZE"), "Emily Yang Lize");
+        assert_eq!(title_case_name("  WONG JUN RONG RANDALL "), "Wong Jun Rong Randall");
+        assert_eq!(title_case_name(""), "");
+        assert_eq!(title_case_name("   "), "");
+    }
+
+    #[test]
+    fn autofill_comment_matches_prompt_type() {
+        let s = autofill_comment("EMILY YANG LIZE", 0, "Strengths");
+        assert!(s.starts_with("Emily Yang Lize was"), "{s}");
+        let i = autofill_comment("EMILY YANG LIZE", 0, "Areas to Improve");
+        assert!(i.to_lowercase().contains("improve"), "{i}");
+        let j = autofill_comment("EMILY YANG LIZE", 0, "Justification");
+        assert!(j.to_lowercase().contains("rating") || j.to_lowercase().contains("full"), "{j}");
+        // case-insensitive prompt matching
+        assert_eq!(autofill_comment("X", 0, "AREAS TO IMPROVE"), autofill_comment("X", 0, "areas to improve"));
+    }
+
+    #[test]
+    fn autofill_comment_varies_by_teammate_index() {
+        let a = autofill_comment("EMILY YANG LIZE", 0, "Strengths");
+        let b = autofill_comment("CHONG YAO WEN", 1, "Strengths");
+        let c = autofill_comment("YADANAR AUNG", 2, "Strengths");
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+        // names are embedded, so even the same template slot reads differently
+        let d = autofill_comment("WONG JUN RONG RANDALL", 3, "Strengths");
+        assert_ne!(a, d);
+        // empty display name still yields a usable sentence
+        assert!(autofill_comment("", 0, "Strengths").starts_with("This teammate"));
+    }
+
+    #[test]
+    fn max_level_score_is_the_top_level() {
+        let rubric = parse_rubric(&fixture_json("rubric_member.json")).expect("rubric");
+        assert_eq!(max_level_score(&rubric.rating_items[0]), Some(9));
+        // an item with no levels has no full-marks score to set
+        assert_eq!(max_level_score(&PcvRatingItem::default()), None);
     }
 
     #[test]

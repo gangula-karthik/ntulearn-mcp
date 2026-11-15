@@ -117,6 +117,12 @@ Both PUTs return the updated PeerEvaluation. On 401/403, re-launch once
 - `ntulearn_pcv_comment(course_id, content_id, teammate, text, dry_run)` —
   writes the comment prompt(s); if a prompt has an existing multi-text
   list, replace index 0 and keep the rest.
+- `ntulearn_pcv_autofill(course_id, content_id, dry_run)` — one-shot
+  full-marks fill: every teammate at the top level of every criterion
+  (`max_level_score`) plus positive prompt-aware comments
+  (`autofill_comment`: strengths / nothing-to-improve / justification
+  wording, rotated per teammate so no two read identically). Overwrites
+  existing values; dry-run previews all before→after rows.
 
 Session cache `{config_dir}/ntulearn-mcp/pcv.json` mirroring fbf.json:
 per (course_id, content_id) the pcv course/assignment ids + cookie jar.
