@@ -42,7 +42,6 @@ fn mock_breakdown() -> String {
 use serde_json::{json, Value};
 
 use crate::cli::{self, Invocation};
-use crate::schemas;
 
 /// Simulated per-request RTT. Override with `NTULEARN_BENCH_RTT_MS`.
 fn mock_latency_ms() -> u64 {
@@ -357,7 +356,9 @@ pub async fn run(verbose: bool) -> i32 {
     );
 
     // ---- 1. Discovery cost: MCP schema injection vs CLI help -------------
-    let tools = schemas::all_tools();
+    let mut tools: Vec<crate::mcp::Tool> =
+        crate::registry::all().iter().map(|d| d.tool.clone()).collect();
+    tools.push(crate::tools::login_tool());
     let mcp_catalog = serde_json::to_string(&json!({
         "tools": tools.iter().map(|t| json!({
             "name": t.name,

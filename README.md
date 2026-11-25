@@ -451,8 +451,10 @@ Layout (`rust/crates/ntulearn-mcp/src/`):
 
 ```
 main.rs      no args → MCP stdio server; command → CLI; setup/check/refresh
-cli.rs       command spec table, compact TSV renderer, `multi` concurrency
-handlers.rs  the 21 tool handlers (shared by MCP server and CLI)
+registry/    THE extension point: one file per feature, each tool declared once
+             (MCP schema + CLI spec + markdown + handler) — see docs/EXTENDING.md
+cli.rs       CLI parsing, help, compact TSV renderer, `multi` concurrency
+handlers.rs  the tool handlers (shared by MCP server and CLI)
 bench.rs     selfbench + mock Blackboard API
 client.rs    reqwest (HTTP/2, retries, parallel fan-out, singleflight dedup)
 cache.rs     SQLite (WAL, persistent conn) + in-memory TTL cache
@@ -463,9 +465,12 @@ parsers.rs   HTML body → download URL extraction
 render.rs    markdown / csv / ics renderers
 resources.rs course resource template + reader
 prompts.rs   prompt templates
-schemas.rs   tool schemas
-tools.rs     tool definition registry
+tools.rs     MCP server glue (tool listing/dispatch; the login special case)
 ```
+
+**Adding a tool or a whole new feature** takes one `tool!{}` entry in one
+file under `registry/features/` — [docs/EXTENDING.md](docs/EXTENDING.md) is
+the step-by-step guide.
 
 Before pushing, check that no credential is staged or in history:
 

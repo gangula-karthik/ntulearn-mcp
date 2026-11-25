@@ -21,9 +21,9 @@ mod mcp;
 mod parsers;
 mod pcv;
 mod prompts;
+mod registry;
 mod render;
 mod resources;
-mod schemas;
 mod setup;
 mod toon;
 mod tools;
@@ -200,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
     // Pre-warm the static tool catalog before entering the stdio loop so
     // the first `tools/list` (tool discovery) is already a cache hit —
     // zero cold start on the very first client connect/reload.
-    let _ = schemas::all_tools();
+    let _ = registry::all();
 
     // Proactive cookie maintenance. NTULearn sessions are absolute ~3 h
     // (server-controlled; there is no client-side "remember me" on this SAML

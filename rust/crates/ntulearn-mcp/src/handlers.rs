@@ -24,7 +24,10 @@ use serde_json::{Map, Value, json};
 use crate::client::{ClientError, NTULearnClient};
 use crate::fbf::{FbfCriterion, FbfOption, FbfRating, FbfReview, FbfSession, FbfTask};
 use crate::kaltura::{FlavorAsset, KalturaEmbed, KalturaSession, TranscriptError};
-use crate::{AppState, parsers, render};
+use crate::{AppState, parsers};
+// Test modules below render fixtures through the shared renderers.
+#[cfg(test)]
+use crate::render;
 
 // ---------------------------------------------------------------------------
 // Constants (mirror handlers.py / server.py / common.py)
@@ -81,46 +84,10 @@ static DOWNLOAD_TIMESTAMP: AtomicU64 = AtomicU64::new(0);
 /// Route a tool name + JSON args to the right handler and return the raw
 /// payload (used by the CLI, which renders it itself).
 pub async fn dispatch_value(state: &AppState, name: &str, args: &Value) -> Result<Value, String> {
+    // All routing lives in the registry (src/registry/features/); handlers
+    // here are pure `h_*` functions bound there by short name.
     let short = name.strip_prefix("ntulearn_").unwrap_or(name);
-    let out: Value = match short {
-        "list_courses" => h_list_courses(state, args).await?,
-        "get_course_contents" => h_get_course_contents(state, args).await?,
-        "search_course_content" => h_search_course_content(state, args).await?,
-        "download_file" => h_download_file(state, args).await?,
-        "read_file_content" => h_read_file_content(state, args).await?,
-        "get_upcoming" => h_get_upcoming(state, args).await?,
-        "get_announcements" => h_get_announcements(state, args).await?,
-        "get_gradebook" => h_get_gradebook(state, args).await?,
-        "list_messages" => h_list_messages(state, args).await?,
-        "read_message" => h_read_message(state, args).await?,
-        "list_course_users" => h_list_course_users(state, args).await?,
-        "list_course_groups" => h_list_course_groups(state, args).await?,
-        "get_group_members" => h_get_group_members(state, args).await?,
-        "get_gradebook_attempts" => h_get_gradebook_attempts(state, args).await?,
-        "search_all_courses" => h_search_all_courses(state, args).await?,
-        "get_content_tree" => h_get_content_tree(state, args).await?,
-        "download_course" => h_download_course(state, args).await?,
-        "whats_new" => h_whats_new(state, args).await?,
-        "export_calendar_ics" => h_export_calendar_ics(state, args).await?,
-        "export_gradebook_csv" => h_export_gradebook_csv(state, args).await?,
-        "summarize_course" => h_summarize_course(state, args).await?,
-        "fbf_status" => h_fbf_status(state, args).await?,
-        "fbf_reviews" => h_fbf_reviews(state, args).await?,
-        "fbf_rate" => h_fbf_rate(state, args).await?,
-        "fbf_comment" => h_fbf_comment(state, args).await?,
-        "pcv_status" => h_pcv_status(state, args).await?,
-        "pcv_evals" => h_pcv_evals(state, args).await?,
-        "pcv_rate" => h_pcv_rate(state, args).await?,
-        "pcv_comment" => h_pcv_comment(state, args).await?,
-        "pcv_autofill" => h_pcv_autofill(state, args).await?,
-        "kaltura_list" => h_kaltura_list(state, args).await?,
-        "kaltura_transcripts" => h_kaltura_transcripts(state, args).await?,
-        "kaltura_download" => h_kaltura_download(state, args).await?,
-        other => {
-            return Err(format!("unknown tool: ntulearn_{other}"));
-        }
-    };
-    Ok(out)
+    crate::registry::dispatch_value(state, short, args).await
 }
 
 /// How long `ntulearn_login` blocks before handing back to the agent; many
@@ -2022,7 +1989,7 @@ fn deduplicate_filename(name: &str, used: &HashSet<String>, dest_dir: &Path) -> 
 // Server-local tools (server.py)
 // ---------------------------------------------------------------------------
 
-async fn h_list_courses(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_list_courses(state: &AppState, args: &Value) -> Result<Value, String> {
     let include_disabled = bool_arg(args, "include_disabled", false);
     let (offset, limit) = resolve_pagination_args(args)?;
     let _fmt = response_format(args)?;
@@ -2110,7 +2077,7 @@ fn merge_meta(payload: &mut Map<String, Value>, meta: Value) {
     }
 }
 
-async fn h_get_course_contents(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_course_contents(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     let parent_id = str_arg(args, "parent_id").map(|s| s.to_string());
     let (offset, limit) = resolve_pagination_args(args)?;
@@ -2128,7 +2095,7 @@ async fn h_get_course_contents(state: &AppState, args: &Value) -> Result<Value, 
     Ok(Value::Object(payload))
 }
 
-async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_search_course_content(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     let query = str_arg(args, "query").unwrap_or("").trim().to_lowercase();
     if query.is_empty() {
@@ -2345,7 +2312,7 @@ async fn resolve_content_files(
     (item, handler_id, pairs)
 }
 
-async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_download_file(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
     let _fmt = response_format(args)?;
@@ -2458,7 +2425,7 @@ async fn coerce_course_ids(args: &Value, c: &NTULearnClient) -> Result<Vec<Strin
     }
 }
 
-async fn h_read_file_content(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_read_file_content(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
     let _fmt = response_format(args)?;
@@ -2575,7 +2542,7 @@ async fn h_read_file_content(state: &AppState, args: &Value) -> Result<Value, St
     }))
 }
 
-async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String> {
     let since_val = args.get("since");
     let until_val = args.get("until");
     let since = match since_val {
@@ -2671,7 +2638,7 @@ async fn h_get_upcoming(state: &AppState, args: &Value) -> Result<Value, String>
     Ok(Value::Object(payload))
 }
 
-async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, String> {
     let since_val = args.get("since");
     let since = match since_val {
         Some(v) => Some(validate_iso8601(
@@ -2760,7 +2727,7 @@ async fn h_get_announcements(state: &AppState, args: &Value) -> Result<Value, St
     Ok(Value::Object(payload))
 }
 
-async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = coerce_course_ids(args, &state.client).await?;
     let (offset, limit) = resolve_pagination_args(args)?;
     let _fmt = response_format(args)?;
@@ -2904,7 +2871,7 @@ async fn h_get_gradebook(state: &AppState, args: &Value) -> Result<Value, String
 // Registry handlers (handlers.py)
 // ---------------------------------------------------------------------------
 
-async fn h_list_messages(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_list_messages(state: &AppState, args: &Value) -> Result<Value, String> {
     let folder = str_arg(args, "folder").unwrap_or("inbox").to_lowercase();
     let unread_only = bool_arg(args, "unread_only", false);
     let since = args
@@ -2926,7 +2893,7 @@ async fn h_list_messages(state: &AppState, args: &Value) -> Result<Value, String
     Ok(Value::Object(payload))
 }
 
-async fn h_read_message(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_read_message(state: &AppState, args: &Value) -> Result<Value, String> {
     let message_id = str_arg(args, "message_id").unwrap_or("").to_string();
     validate_bb_id(&message_id, "message_id")?;
     let _fmt = response_format(args)?;
@@ -3015,7 +2982,7 @@ async fn h_read_message(state: &AppState, args: &Value) -> Result<Value, String>
     Ok(Value::Object(payload))
 }
 
-async fn h_list_course_users(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_list_course_users(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let (offset, limit) = resolve_pagination_args(args)?;
@@ -3030,7 +2997,7 @@ async fn h_list_course_users(state: &AppState, args: &Value) -> Result<Value, St
     Ok(Value::Object(payload))
 }
 
-async fn h_list_course_groups(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_list_course_groups(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let (offset, limit) = resolve_pagination_args(args)?;
@@ -3081,7 +3048,7 @@ async fn h_list_course_groups(state: &AppState, args: &Value) -> Result<Value, S
     Ok(Value::Object(payload))
 }
 
-async fn h_get_group_members(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_group_members(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let group_id = str_arg(args, "group_id").unwrap_or("").to_string();
@@ -3099,7 +3066,7 @@ async fn h_get_group_members(state: &AppState, args: &Value) -> Result<Value, St
     Ok(Value::Object(payload))
 }
 
-async fn h_get_gradebook_attempts(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_gradebook_attempts(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let column_id = str_arg(args, "column_id").unwrap_or("").to_string();
@@ -3153,7 +3120,7 @@ async fn h_get_gradebook_attempts(state: &AppState, args: &Value) -> Result<Valu
     Ok(Value::Object(payload))
 }
 
-async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, String> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -3195,7 +3162,7 @@ async fn h_search_all_courses(state: &AppState, args: &Value) -> Result<Value, S
     Ok(Value::Object(payload))
 }
 
-async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let mut max_depth = parse_int_arg(args, "max_depth", 5);
@@ -3243,7 +3210,7 @@ async fn h_get_content_tree(state: &AppState, args: &Value) -> Result<Value, Str
     Ok(Value::Object(payload))
 }
 
-async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_download_course(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let dest_raw = args
@@ -3364,7 +3331,7 @@ fn tracker_set_last_seen(s: String) {
     }
 }
 
-async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
     // Enrollments with `expand=course` give ids and names in the same request
     // that `fan_out_course_ids` would have made anyway, removing the N extra
     // `/courses/{id}` GETs the digest used to issue just for display names.
@@ -3568,7 +3535,7 @@ async fn h_whats_new(state: &AppState, args: &Value) -> Result<Value, String> {
     Ok(Value::Object(payload))
 }
 
-async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
     let since = match args.get("since").and_then(|v| v.as_str()) {
         Some(v) => v.to_string(),
@@ -3636,7 +3603,7 @@ async fn h_export_calendar_ics(state: &AppState, args: &Value) -> Result<Value, 
     Ok(Value::Object(payload))
 }
 
-async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_ids = fan_out_course_ids(&state.client, args.get("course_ids")).await?;
     let _fmt = response_format(args)?;
     let user_id = me_user_id(&state.client).await.unwrap_or_default();
@@ -3698,7 +3665,7 @@ async fn h_export_gradebook_csv(state: &AppState, args: &Value) -> Result<Value,
     Ok(Value::Object(payload))
 }
 
-async fn h_summarize_course(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_summarize_course(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let include_contents = bool_arg(args, "include_contents", true);
@@ -3932,7 +3899,7 @@ async fn fbf_received_comments(
 /// whether grades have been released. With content_id omitted, every LTI
 /// link in the course content tree is probed; non-FeedbackFruits tools are
 /// skipped, not errors.
-async fn h_fbf_status(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_fbf_status(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").map(|s| s.to_string());
@@ -4063,7 +4030,7 @@ async fn fbf_activity_report(session: &FbfSession, content_id: &str) -> Result<V
 /// (unrated criteria show a null option). direction='received': what
 /// teammates rated me — empty until the teacher publishes, which is
 /// reported explicitly, never as an error (FBF answers data: [] until then).
-async fn h_fbf_reviews(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_fbf_reviews(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -4142,7 +4109,7 @@ async fn h_fbf_reviews(state: &AppState, args: &Value) -> Result<Value, String> 
 /// teammate/criterion/option resolve case-insensitively by substring
 /// (option also accepts its exact weight number); dry_run=true (default)
 /// resolves everything and shows the request without sending it.
-async fn h_fbf_rate(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_fbf_rate(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -4268,7 +4235,7 @@ async fn h_fbf_rate(state: &AppState, args: &Value) -> Result<Value, String> {
 /// `ntulearn_fbf_comment` — upsert the written "Overall comments" review for
 /// ONE teammate. dry_run=true (default) resolves the teammate/task and shows
 /// the text without sending it.
-async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -4415,7 +4382,7 @@ fn pcv_resolve_teammate(
 /// done/not-done. With content_id omitted, every LTI placement in the
 /// course content tree is probed; non-Peerceptiv tools are skipped, not
 /// errors.
-async fn h_pcv_status(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_pcv_status(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").map(|s| s.to_string());
@@ -4622,7 +4589,7 @@ async fn pcv_activity_report(
 /// (unrated criteria show a null score). direction='received': what
 /// teammates gave me — empty until results are released, which is reported
 /// explicitly, never as an error.
-async fn h_pcv_evals(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_pcv_evals(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -4809,7 +4776,7 @@ async fn pcv_completion_fields(
 /// evaluation is found-or-created (the create shows in dry-run too).
 /// dry_run=true (default) resolves everything and shows the request
 /// without sending it.
-async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -4961,7 +4928,7 @@ async fn h_pcv_rate(state: &AppState, args: &Value) -> Result<Value, String> {
 /// several (mirroring fbf_comment's multi-criterion behavior). Find-or-
 /// create eval, before/after shown. dry_run=true (default) resolves the
 /// teammate and shows the text without sending it.
-async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -5086,7 +5053,7 @@ async fn h_pcv_comment(state: &AppState, args: &Value) -> Result<Value, String> 
 /// varied comment (prompt-type aware: strengths / nothing-to-improve /
 /// justification). Existing ratings and comments are overwritten; dry_run
 /// (the default) previews every before→after change without sending.
-async fn h_pcv_autofill(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_pcv_autofill(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -5495,7 +5462,7 @@ fn pick_flavor(
 /// content id, title, Kaltura entry id and LTI placement id. Discovery is
 /// pure REST (no LTI launch): the embed metadata sits in the content body's
 /// data-bbfile JSON. Non-Kaltura LTI tools are skipped, not errors.
-async fn h_kaltura_list(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_kaltura_list(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").map(|s| s.to_string());
@@ -5546,7 +5513,7 @@ async fn h_kaltura_list(state: &AppState, args: &Value) -> Result<Value, String>
 /// whole course, written as .vtt/.txt files. The session is launched lazily
 /// once (one launch's KS covers every entry of the course, live-verified)
 /// and relaunched only when an auth-shaped error appears mid-run.
-async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").map(|s| s.to_string());
@@ -5788,7 +5755,7 @@ async fn h_kaltura_transcripts(state: &AppState, args: &Value) -> Result<Value, 
 /// Kaltura's open CDN. quality 'smallest' (default) = fewest bytes with a
 /// real resolution, 'best' = largest non-original flavor, 'original' =
 /// source upload.
-async fn h_kaltura_download(state: &AppState, args: &Value) -> Result<Value, String> {
+pub(crate) async fn h_kaltura_download(state: &AppState, args: &Value) -> Result<Value, String> {
     let course_id = str_arg(args, "course_id").unwrap_or("").to_string();
     validate_bb_id(&course_id, "course_id")?;
     let content_id = str_arg(args, "content_id").unwrap_or("").to_string();
@@ -5881,93 +5848,12 @@ fn render_for_tool(short: &str, args: &Value, payload: &Value) -> Vec<ToolConten
             return vec![ToolContent::text(e)];
         }
     };
+    // Per-tool markdown renderers are declared in the registry; tools without
+    // one fall back to TOON/JSON only (empty text, like the old `_` arm).
     let text = if fmt == "markdown" {
-        match short {
-            "list_courses" => {
-                let courses = payload
-                    .get("courses")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                render::md_courses_full(&courses, payload)
-            }
-            "get_course_contents" => {
-                let items = payload
-                    .get("items")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                render::md_content_items_full(&items, payload)
-            }
-            "search_course_content" => {
-                let matches = payload
-                    .get("matches")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                render::md_search_results(&matches)
-            }
-            "download_file" => render::md_files(payload, "Files downloaded"),
-            "read_file_content" => render::md_files(payload, "File contents"),
-            "get_upcoming" => {
-                let items = payload
-                    .get("items")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                let errors = payload.get("courseErrors").cloned().unwrap_or(json!({}));
-                render::md_upcoming(&items, payload, &errors)
-            }
-            "get_announcements" => {
-                let items = payload
-                    .get("announcements")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                render::md_announcements(&items, payload)
-            }
-            "get_gradebook" => {
-                let columns = payload
-                    .get("columns")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                let available = payload
-                    .get("gradesAvailable")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-                let err = payload
-                    .get("gradeFetchError")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                render::md_gradebook(&columns, payload, available, err.as_deref())
-            }
-            "list_messages" => render::md_messages(payload),
-            "read_message" => render::md_message(payload),
-            "list_course_users" => render::md_course_users(payload),
-            "list_course_groups" => render::md_course_groups(payload),
-            "get_group_members" => render::md_group_members(payload),
-            "get_gradebook_attempts" => render::md_gradebook_attempts(payload),
-            "search_all_courses" => render::md_search_all_courses(payload),
-            "get_content_tree" => render::md_content_tree(payload),
-            "download_course" => render::md_download_course(payload),
-            "whats_new" => render::md_whats_new(payload),
-            "export_calendar_ics" => render::md_export_calendar(payload),
-            "export_gradebook_csv" => render::md_export_gradebook(payload),
-            "summarize_course" => render::md_summarize_course(payload),
-            "fbf_status" => render::md_fbf_status(payload),
-            "fbf_reviews" => render::md_fbf_reviews(payload),
-            "fbf_rate" => render::md_fbf_rate(payload),
-            "fbf_comment" => render::md_fbf_comment(payload),
-            "pcv_status" => render::md_pcv_status(payload),
-            "pcv_evals" => render::md_pcv_evals(payload),
-            "pcv_rate" => render::md_pcv_rate(payload),
-            "pcv_comment" => render::md_pcv_comment(payload),
-            "kaltura_list" => render::md_kaltura_list(payload),
-            "kaltura_transcripts" => render::md_kaltura_transcripts(payload),
-            "kaltura_download" => render::md_kaltura_download(payload),
-            _ => String::new(),
-        }
+        crate::registry::markdown_for(short)
+            .map(|md| md(payload))
+            .unwrap_or_default()
     } else {
         String::new()
     };
