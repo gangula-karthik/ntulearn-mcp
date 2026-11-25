@@ -1,3 +1,5 @@
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
 # PolyForm Noncommercial License 1.0.0
 
 https://polyformproject.org/licenses/noncommercial/1.0.0
@@ -10,9 +12,10 @@ your licenses.
 
 ## Copyright License
 
-The licensor grants you a copyright license for the
-software to do everything that might otherwise infringe
-the licensor's copyright in it for any permitted purpose.
+The licensor grants you a copyright license for the software
+to do everything you might do with the software that would
+otherwise infringe the licensor's copyright in it for any
+permitted purpose.
 However, you may only distribute the software according
 to [Distribution License](#distribution-license) and make
 changes or new works based on the software according to
