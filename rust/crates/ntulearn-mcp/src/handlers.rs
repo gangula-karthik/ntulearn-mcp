@@ -3984,36 +3984,44 @@ pub(crate) async fn h_fbf_status(state: &AppState, args: &Value) -> Result<Value
 /// activity's own progress object) and the grades release state.
 async fn fbf_activity_report(session: &FbfSession, content_id: &str) -> Result<Value, String> {
     let activity_id = session.activity_id().to_string();
-    let activity = session.activity(&activity_id).await?;
-    let tasks = session.tasks(&activity_id).await?;
+    let (activity, tasks) = tokio::join!(
+        session.activity(&activity_id),
+        session.tasks(&activity_id),
+    );
+    let activity = activity?;
+    let tasks = tasks?;
 
-    // Task progress lookups run together; a task without a progress
-    // relationship (e.g. instructions) reports null, not a fabricated 0.
-    let task_rows = bounded_map(tasks, fanout_limit(), |t| async move {
-        let progress = match &t.progress_id {
-            Some(pid) => session.progress(pid).await.ok(),
-            None => None,
-        };
-        json!({
-            "title": t.title.clone().unwrap_or_else(|| t.kind.clone()),
-            "type": t.kind,
-            "deadline": t.deadline,
-            "progress": progress,
-            "done": progress.map(|p| p >= 100),
-        })
-    })
-    .await;
-
-    let completion = match &activity.progress_id {
-        Some(pid) => session.progress(pid).await.ok(),
-        None => None,
-    };
     // grades-published-at stays null until the teacher releases results; a
     // failed release-state read must not sink the whole report.
-    let release = session
-        .release_state(&activity_id)
-        .await
-        .unwrap_or_else(|_| json!({}));
+    let release_fut = session.release_state(&activity_id);
+    // Task progress lookups run together; a task without a progress
+    // relationship (e.g. instructions) reports null, not a fabricated 0.
+    // The activity-level completion lookup is independent of the per-task
+    // ones, so it rides in the same wave.
+    let completion_pid = activity.progress_id.clone();
+    let (task_rows, completion, release) = tokio::join!(
+        bounded_map(tasks, fanout_limit(), |t| async move {
+            let progress = match &t.progress_id {
+                Some(pid) => session.progress(pid).await.ok(),
+                None => None,
+            };
+            json!({
+                "title": t.title.clone().unwrap_or_else(|| t.kind.clone()),
+                "type": t.kind,
+                "deadline": t.deadline,
+                "progress": progress,
+                "done": progress.map(|p| p >= 100),
+            })
+        }),
+        async {
+            match completion_pid {
+                Some(pid) => session.progress(&pid).await.ok(),
+                None => None,
+            }
+        },
+        release_fut,
+    );
+    let release = release.unwrap_or_else(|_| json!({}));
 
     Ok(json!({
         "contentId": content_id,
@@ -4043,8 +4051,12 @@ pub(crate) async fn h_fbf_reviews(state: &AppState, args: &Value) -> Result<Valu
 
     let session = crate::fbf::FbfSession::launch(state, &course_id, &content_id).await?;
     let activity_id = session.activity_id().to_string();
-    let activity = session.activity(&activity_id).await?;
-    let tasks = session.tasks(&activity_id).await?;
+    let (activity, tasks) = tokio::join!(
+        session.activity(&activity_id),
+        session.tasks(&activity_id),
+    );
+    let activity = activity?;
+    let tasks = tasks?;
     let ratings_task = fbf_find_task(&tasks, "rating")?;
 
     let mut payload = Map::new();
@@ -4142,8 +4154,12 @@ pub(crate) async fn h_fbf_rate(state: &AppState, args: &Value) -> Result<Value, 
 
     let session = crate::fbf::FbfSession::launch(state, &course_id, &content_id).await?;
     let activity_id = session.activity_id().to_string();
-    let activity = session.activity(&activity_id).await?;
-    let tasks = session.tasks(&activity_id).await?;
+    let (activity, tasks) = tokio::join!(
+        session.activity(&activity_id),
+        session.tasks(&activity_id),
+    );
+    let activity = activity?;
+    let tasks = tasks?;
     let task = fbf_find_task(&tasks, "rating")?;
 
     let allocations = fbf_given_with_names(&session, task).await?;
@@ -4259,8 +4275,12 @@ pub(crate) async fn h_fbf_comment(state: &AppState, args: &Value) -> Result<Valu
 
     let session = crate::fbf::FbfSession::launch(state, &course_id, &content_id).await?;
     let activity_id = session.activity_id().to_string();
-    let activity = session.activity(&activity_id).await?;
-    let tasks = session.tasks(&activity_id).await?;
+    let (activity, tasks) = tokio::join!(
+        session.activity(&activity_id),
+        session.tasks(&activity_id),
+    );
+    let activity = activity?;
+    let tasks = tasks?;
     let task = fbf_find_task(&tasks, "overall comment")?;
 
     let allocations = fbf_given_with_names(&session, task).await?;
@@ -4470,8 +4490,17 @@ async fn pcv_activity_report(
 ) -> Result<Value, String> {
     let aid = session.assignment_id().to_string();
     let uid = session.user_id().to_string();
-    let assignment = session.assignment(&aid).await?;
-    let progress = session.progress(&aid, &uid).await?;
+    // assignment, progress, and given evals are independent reads — fire
+    // them together instead of paying their latencies back to back.
+    let (assignment, progress, given, rubric) = tokio::join!(
+        session.assignment(&aid),
+        session.progress(&aid, &uid),
+        session.evals_given(&aid, &uid),
+        session.rubric(&aid, "MEMBER"),
+    );
+    let assignment = assignment?;
+    let progress = progress?;
+    let given = given?;
 
     // Group members minus self = evaluation targets. The progress object's
     // own group is authoritative; fall back to the groups listing when it
@@ -4502,8 +4531,7 @@ async fn pcv_activity_report(
                 .collect()
         })
         .unwrap_or_default();
-    let given = session.evals_given(&aid, &uid).await?;
-    let rubric = session.rubric(&aid, "MEMBER").await.ok();
+    let rubric = rubric.ok();
     // Gap detail per teammate, computed from my given evals whatever the
     // progress object says — it drives both the done fallback and the
     // per-teammate "missing" rows below.

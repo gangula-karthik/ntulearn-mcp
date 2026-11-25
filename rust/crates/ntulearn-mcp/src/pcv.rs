@@ -265,6 +265,21 @@ fn save_cached(path: &Path, sessions: &CachedPcvSessions) {
     }
 }
 
+// The response cache itself lives in `apicache` (shared with fbf); these
+// wrappers pick the pcv file and the pcv key scheme.
+
+fn cached_response(key: &str, ttl_secs: i64) -> Option<Value> {
+    crate::apicache::cached("pcv-cache.json", key, ttl_secs)
+}
+
+fn cached_response_with_age(key: &str, ttl_secs: i64) -> Option<(Value, i64)> {
+    crate::apicache::cached_with_age("pcv-cache.json", key, ttl_secs)
+}
+
+fn store_response(key: &str, v: &Value) {
+    crate::apicache::store("pcv-cache.json", key, v);
+}
+
 // ===========================================================================
 // HTML / URL parsing (scraper)
 // ===========================================================================
@@ -378,6 +393,20 @@ fn launch_http_client() -> Result<reqwest::Client, String> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("Peerceptiv launch: reqwest client build failed: {e}"))
+}
+
+/// Process-lifetime API client. A per-call client throws away the connection
+/// pool with every tool call, so even a long-lived MCP server pays a cold
+/// TCP+TLS (~130ms) on each status read; a shared pool keeps the (h2)
+/// connection warm between calls. Building can only fail on a broken TLS
+/// backend, so the result is memoized once and cloned (Client is an Arc
+/// handle).
+fn shared_api_client() -> Result<reqwest::Client, String> {
+    static SHARED: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    match SHARED.get_or_init(launch_http_client) {
+        Ok(client) => Ok(client.clone()),
+        Err(e) => Err(e.clone()),
+    }
 }
 
 /// GET with browser-ish headers, following redirects manually and feeding
@@ -1043,6 +1072,7 @@ pub fn eval_gaps(eval: &PcvEval, rubric: &PcvRubric) -> PcvEvalGaps {
 /// An authenticated Peerceptiv API session for one placed peer evaluation,
 /// obtained by [`PcvSession::launch`]. All read/write methods hit the JSON
 /// API with the `oidc_token`/`access_token` cookies captured at launch.
+#[derive(Clone)]
 pub struct PcvSession {
     api_base: String,
     pcv_course_id: String,
@@ -1280,7 +1310,7 @@ impl PcvSession {
             user_id,
             cookies,
             expires_at,
-            http: launch_http_client()?,
+            http: shared_api_client()?,
         })
     }
 
@@ -1331,6 +1361,7 @@ impl PcvSession {
     /// should re-run `launch` (which re-launches the whole chain).
     async fn api_get(&self, path: &str) -> Result<Value, String> {
         let url = format!("{}{}", self.api_base, path);
+        let started = std::time::Instant::now();
         let resp = self
             .http
             .get(&url)
@@ -1341,6 +1372,13 @@ impl PcvSession {
             .await
             .map_err(|e| format!("Peerceptiv API GET {url} failed: {e}"))?;
         let status = resp.status().as_u16();
+        if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+            eprintln!(
+                "[perf] PCV GET {path} -> {status} {:?} in {:?}",
+                resp.version(),
+                started.elapsed()
+            );
+        }
         let text = resp.text().await.unwrap_or_default();
         if status == 401 || status == 403 {
             return Err(Self::session_rejected("GET", &url, status));
@@ -1430,15 +1468,56 @@ impl PcvSession {
     }
 
     /// The assignment record (name, deadlines, status flags; `user` is the
-    /// OWNER'S user object, not the caller — use `me()` for self).
+    /// OWNER'S user object, not the caller — use `me()` for self). Deadlines
+    /// and flags change at most when the teacher edits the assignment, so the
+    /// record is disk-cached for 10 minutes.
     pub async fn assignment(&self, aid: &str) -> Result<Value, String> {
-        self.api_get(&format!("/assignment/{aid}")).await
+        let key = format!("assignment/{aid}");
+        if let Some(v) = cached_response(&key, 600) {
+            return Ok(v);
+        }
+        let v = self.api_get(&format!("/assignment/{aid}")).await?;
+        store_response(&key, &v);
+        Ok(v)
     }
 
     /// Progress of one user on the assignment (counts, status flags, group).
+    ///
+    /// Stale-while-revalidate: a cached record younger than 5 minutes is
+    /// served immediately (keeping the status call sub-100ms); once it is
+    /// older than 30 seconds a background refresh updates the cache so the
+    /// NEXT call sees current data. Every write drops the entry (see
+    /// `invalidate_progress`), so a rate/comment followed by a status read
+    /// always goes live — the staleness window only ever applies to
+    /// read-after-idle, never read-after-write.
     pub async fn progress(&self, aid: &str, uid: &str) -> Result<Value, String> {
-        self.api_get(&format!("/assignment/{aid}/user/{uid}/progress"))
-            .await
+        let key = format!("progress/{aid}/{uid}");
+        if let Some((v, age)) = cached_response_with_age(&key, 300) {
+            if age >= 30 {
+                let session = self.clone();
+                let key = key.clone();
+                let path = format!("/assignment/{aid}/user/{uid}/progress");
+                tokio::spawn(async move {
+                    match session.api_get(&path).await {
+                        Ok(fresh) => store_response(&key, &fresh),
+                        Err(_) => {} // keep serving the cached record
+                    }
+                });
+            }
+            return Ok(v);
+        }
+        let v = self
+            .api_get(&format!("/assignment/{aid}/user/{uid}/progress"))
+            .await?;
+        store_response(&key, &v);
+        Ok(v)
+    }
+
+    /// Drop the cached progress row for this session's user, so the next
+    /// status read after a write goes live.
+    pub fn invalidate_progress(&self) {
+        let key = format!("progress/{}/{}", self.assignment_id, self.user_id);
+        crate::apicache::invalidate_prefix("pcv-cache.json", &key);
     }
 
     /// Evals the user has GIVEN (one per teammate; empty array when none).
@@ -1461,7 +1540,17 @@ impl PcvSession {
 
     /// All groups of the assignment.
     pub async fn groups(&self, aid: &str) -> Result<Vec<Value>, String> {
-        let v = self.api_get(&format!("/assignment/{aid}/groups")).await?;
+        // Group membership changes at most when the instructor regroups, so
+        // the listing is disk-cached for 10 minutes.
+        let key = format!("groups/{aid}");
+        let v = match cached_response(&key, 600) {
+            Some(v) => v,
+            None => {
+                let v = self.api_get(&format!("/assignment/{aid}/groups")).await?;
+                store_response(&key, &v);
+                v
+            }
+        };
         Ok(v.as_array().cloned().unwrap_or_default())
     }
 
@@ -1476,9 +1565,19 @@ impl PcvSession {
     /// The rubric for one target kind ("MEMBER" for teammate evals):
     /// rating items (with levels) + comment items.
     pub async fn rubric(&self, aid: &str, target: &str) -> Result<PcvRubric, String> {
-        let v = self
-            .api_get(&format!("/assignment/{aid}/eval/{target}/rubric"))
-            .await?;
+        // The rubric changes at most when the teacher edits the criteria, so
+        // it is disk-cached for 10 minutes.
+        let key = format!("rubric/{aid}/{target}");
+        let v = match cached_response(&key, 600) {
+            Some(v) => v,
+            None => {
+                let v = self
+                    .api_get(&format!("/assignment/{aid}/eval/{target}/rubric"))
+                    .await?;
+                store_response(&key, &v);
+                v
+            }
+        };
         parse_rubric(&v)
     }
 
@@ -1521,6 +1620,7 @@ impl PcvSession {
             return Ok(Self::dry_run_result("POST", &url, &payload));
         }
         let (status, response) = self.api_send("POST", &url, &payload).await?;
+        self.invalidate_progress();
         Ok(json!({
             "dryRun": false,
             "method": "POST",
@@ -1551,6 +1651,7 @@ impl PcvSession {
             return Ok(Self::dry_run_result("PUT", &url, &payload));
         }
         let (status, response) = self.api_send("PUT", &url, &payload).await?;
+        self.invalidate_progress();
         Ok(json!({
             "dryRun": false,
             "method": "PUT",
@@ -1581,6 +1682,7 @@ impl PcvSession {
             return Ok(Self::dry_run_result("PUT", &url, &payload));
         }
         let (status, response) = self.api_send("PUT", &url, &payload).await?;
+        self.invalidate_progress();
         Ok(json!({
             "dryRun": false,
             "method": "PUT",

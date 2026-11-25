@@ -337,6 +337,33 @@ fn launch_http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("FeedbackFruits launch: reqwest client build failed: {e}"))
 }
 
+/// Process-lifetime API client: a per-call client throws the connection
+/// pool away with every tool call, so even a long-lived MCP server pays a
+/// cold TCP+TLS on each read; a shared pool keeps the (h2) connection warm
+/// between calls. Client is an Arc handle, so cloning is free.
+fn shared_api_client() -> Result<reqwest::Client, String> {
+    static SHARED: std::sync::OnceLock<Result<reqwest::Client, String>> = std::sync::OnceLock::new();
+    match SHARED.get_or_init(launch_http_client) {
+        Ok(client) => Ok(client.clone()),
+        Err(e) => Err(e.clone()),
+    }
+}
+
+// The response cache lives in `apicache` (shared with pcv); these wrappers
+// pick the fbf file.
+
+fn cached_response(key: &str, ttl_secs: i64) -> Option<Value> {
+    crate::apicache::cached("fbf-cache.json", key, ttl_secs)
+}
+
+fn cached_response_with_age(key: &str, ttl_secs: i64) -> Option<(Value, i64)> {
+    crate::apicache::cached_with_age("fbf-cache.json", key, ttl_secs)
+}
+
+fn store_response(key: &str, v: &Value) {
+    crate::apicache::store("fbf-cache.json", key, v);
+}
+
 /// GET with browser-ish headers, following redirects manually and feeding
 /// every hop's Set-Cookie into the jar. The chain is short and linear; a loop
 /// beyond MAX_REDIRECTS is reported instead of spun forever.
@@ -831,6 +858,7 @@ pub struct FbfReview {
 /// An authenticated FeedbackFruits API session for one activity, obtained by
 /// [`FbfSession::launch`]. All read/write methods hit the JSON:API with the
 /// Bearer access_token captured at launch.
+#[derive(Clone)]
 pub struct FbfSession {
     api_base: String,
     access_token: String,
@@ -1006,7 +1034,7 @@ impl FbfSession {
             user_id,
             activity_id,
             exp,
-            http: launch_http_client()?,
+            http: shared_api_client()?,
         })
     }
 
@@ -1036,6 +1064,7 @@ impl FbfSession {
     /// should re-run `launch` (which re-launches the whole chain).
     async fn api_get(&self, path: &str) -> Result<Value, String> {
         let url = format!("{}{}", self.api_base, path);
+        let started = std::time::Instant::now();
         let mut req = self
             .http
             .get(&url)
@@ -1054,6 +1083,12 @@ impl FbfSession {
             .await
             .map_err(|e| format!("FeedbackFruits API GET {url} failed: {e}"))?;
         let status = resp.status().as_u16();
+        if std::env::var("NTULEARN_PERF_TRACE").is_ok() {
+            eprintln!(
+                "[perf] FBF GET {path} -> {status} in {:?}",
+                started.elapsed()
+            );
+        }
         let text = resp.text().await.unwrap_or_default();
         if status == 401 {
             return Err(format!(
@@ -1114,24 +1149,77 @@ impl FbfSession {
 
     /// The activity (title + activity-level progress relationship).
     pub async fn activity(&self, activity_id: &str) -> Result<FbfActivity, String> {
-        let v = self
-            .api_get(&format!("/v1/activities/{activity_id}"))
-            .await?;
+        // The activity record (title, strategy, course) is static once
+        // published, so it is disk-cached for 10 minutes.
+        let key = format!("activity/{activity_id}");
+        let v = match cached_response(&key, 600) {
+            Some(v) => v,
+            None => {
+                let v = self
+                    .api_get(&format!("/v1/activities/{activity_id}"))
+                    .await?;
+                store_response(&key, &v);
+                v
+            }
+        };
         parse_activity(&v)
     }
 
     /// All tasks of the activity, in the activity's own order.
     pub async fn tasks(&self, activity_id: &str) -> Result<Vec<FbfTask>, String> {
-        let v = self
-            .api_get(&format!("/v1/activities/{activity_id}?include=tasks"))
-            .await?;
+        // The task list (steps, deadlines, progress ids) is static once
+        // published, so it is disk-cached for 10 minutes.
+        let v = self.tasks_payload(activity_id).await?;
         Ok(parse_tasks(&v))
     }
 
+    /// The raw `/activities/{id}?include=tasks` document, disk-cached for 10
+    /// minutes and shared by `tasks` and `release_state`.
+    async fn tasks_payload(&self, activity_id: &str) -> Result<Value, String> {
+        let key = format!("tasks/{activity_id}");
+        match cached_response(&key, 600) {
+            Some(v) => Ok(v),
+            None => {
+                let v = self
+                    .api_get(&format!("/v1/activities/{activity_id}?include=tasks"))
+                    .await?;
+                store_response(&key, &v);
+                Ok(v)
+            }
+        }
+    }
+
     /// Progress percent (0..100) of a task or activity.
+    ///
+    /// Stale-while-revalidate, mirroring `PcvSession::progress`: a cached
+    /// record younger than 5 minutes is served immediately (keeping the
+    /// status call fast); once older than 30 seconds a background refresh
+    /// updates the cache. Writes drop every progress entry (see
+    /// `invalidate_progresses`), so read-after-write always goes live.
     pub async fn progress(&self, progress_id: &str) -> Result<u8, String> {
+        let key = format!("progress/{progress_id}");
+        if let Some((v, age)) = cached_response_with_age(&key, 300) {
+            if age >= 30 {
+                let session = self.clone();
+                let key = key.clone();
+                let path = format!("/v1/progresses/{progress_id}");
+                tokio::spawn(async move {
+                    if let Ok(fresh) = session.api_get(&path).await {
+                        store_response(&key, &fresh);
+                    }
+                });
+            }
+            return parse_progress(&v);
+        }
         let v = self.api_get(&format!("/v1/progresses/{progress_id}")).await?;
+        store_response(&key, &v);
         parse_progress(&v)
+    }
+
+    /// Drop every cached progress row — writes change progress, and the
+    /// write path does not know which progress id it touched.
+    pub fn invalidate_progresses(&self) {
+        crate::apicache::invalidate_prefix("fbf-cache.json", "progress/");
     }
 
     /// Allocations I have to review on a "Give ratings"/"Overall comments"
@@ -1211,9 +1299,7 @@ impl FbfSession {
     /// "ratingsPublishedAt": …, "reviewsPublishedAt": …}` (null = not yet
     /// released). One request; read off the included tasks.
     pub async fn release_state(&self, activity_id: &str) -> Result<Value, String> {
-        let v = self
-            .api_get(&format!("/v1/activities/{activity_id}?include=tasks"))
-            .await?;
+        let v = self.tasks_payload(activity_id).await?;
         Ok(parse_release_state(&v))
     }
 
@@ -1288,6 +1374,7 @@ impl FbfSession {
             }));
         }
         let (status, response) = self.api_send(method, &url, &payload).await?;
+        self.invalidate_progresses();
         Ok(json!({
             "dryRun": false,
             "method": method,
@@ -1415,6 +1502,7 @@ impl FbfSession {
                 "response": response,
             }));
         }
+        self.invalidate_progresses();
         Ok(json!({
             "dryRun": false,
             "actions": results,

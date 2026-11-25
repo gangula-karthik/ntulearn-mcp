@@ -17,9 +17,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 anyhow = "1"
 thiserror = "2"
 async-trait = "0.1"
-# http2/brotli/deflate dropped: the Blackboard REST API is plain gzip'd http1.1;
-# each pulled a C-compiled crate (brotli) or the whole h2 stack for nothing.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+# http2 on: the LTI partner APIs (Peerceptiv, FeedbackFruits) speak h2, and
+# multiplexing parallel reads over one connection is what keeps the peer-eval
+# status call fast. brotli/deflate stay dropped (C-compiled, no benefit).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "http2"] }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 scraper = "0.23"

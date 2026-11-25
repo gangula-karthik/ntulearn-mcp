@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+mod apicache;
 mod bench;
 mod cache;
 mod cli;
